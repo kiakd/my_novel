@@ -1,0 +1,4 @@
+# custom_nodes ที่ติดตั้งไว้ (clone เข้า ComfyUI/custom_nodes/)
+https://github.com/ltdrdata/ComfyUI-Manager.git
+https://github.com/pythongosssss/ComfyUI-WD14-Tagger.git
+https://github.com/Fannovel16/comfyui_controlnet_aux.git

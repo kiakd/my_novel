@@ -1,0 +1,36 @@
+# secrets
+.env
+.env.local
+*.local
+
+# deps / build
+node_modules/
+dist/
+.next/
+*.log
+
+# python / comfyui runtime
+venv/
+__pycache__/
+*.pyc
+
+# models (โหลดใหม่จาก Civitai)
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+
+# images / media (exclude ทั้งหมด)
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+*.mp4
+uploads/
+ref/
+output/
+
+# os / editor
+.DS_Store
+.claude/
