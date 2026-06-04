@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+# WAN VACE 1.3B video-to-video — วิธี B: DWPose pose-only control (เต็ม 12s, แบ่ง chunk)
+#   ต้นแบบ -> DWPreprocessor (โครงกระดูก) -> control_video
+#   => ก๊อปเฉพาะ "ท่าทาง" หน้าตา/ชุดมาจาก reference_image + prompt ล้วน -> strength 1.0
+import json, urllib.request, time, sys, os, glob, shutil, subprocess
+
+SERVER = "127.0.0.1:8188"
+COMFY  = r"D:\test\my_novel\comfyui\ComfyUI"
+CTRL_VIDEO = "source_motion.mp4"
+REF        = "character_ref.png"
+
+POS = ("1girl, solo, long pink hair, twin tails, white ornate dress, white gloves, "
+       "fair skin, large breasts, beautiful detailed eyes, gentle smile, cosplay, "
+       "dancing, dynamic motion, anime style, masterpiece, best quality, detailed")
+NEG = "bad quality, worst quality, blurry, distorted, deformed, watermark, text, extra limbs, missing fingers"
+
+SEED      = int(sys.argv[1]) if len(sys.argv) > 1 else 55012398
+W, H      = 480, 832
+TOTAL     = 368
+FPS       = 30
+CHUNK     = 33
+STRENGTH  = 1.0        # << B: pose sparse จึงดัน strength เต็มได้ ไม่ลอก appearance
+PREFIX    = "vace_pose"
+
+def chunk_wf(idx, start, length):
+    return {
+        "1": {"class_type": "UNETLoader",
+              "inputs": {"unet_name": "wan2.1_vace_1.3B_fp16.safetensors", "weight_dtype": "default"}},
+        "2": {"class_type": "CLIPLoader",
+              "inputs": {"clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors", "type": "wan"}},
+        "10":{"class_type": "VAELoader", "inputs": {"vae_name": "Wan2_1_VAE_bf16.safetensors"}},
+        "11":{"class_type": "LoraLoaderModelOnly",
+              "inputs": {"model": ["1", 0],
+                         "lora_name": "Wan21_CausVid_T2V_1_3B_lora_rank32.safetensors",
+                         "strength_model": 0.8}},
+        "12":{"class_type": "LoadImage", "inputs": {"image": REF}},
+        # โหลด -> เฟรมทั้งหมด -> ตัดช่วง -> resize -> DWPose skeleton -> resize ให้ตรง W x H
+        "20":{"class_type": "LoadVideo", "inputs": {"file": CTRL_VIDEO}},
+        "22":{"class_type": "GetVideoComponents", "inputs": {"video": ["20", 0]}},
+        "23":{"class_type": "GetImageRangeFromBatch",
+              "inputs": {"images": ["22", 0], "start_index": start, "num_frames": length}},
+        "21":{"class_type": "ImageScale",
+              "inputs": {"image": ["23", 0], "width": W, "height": H,
+                         "upscale_method": "lanczos", "crop": "center"}},
+        "24":{"class_type": "DWPreprocessor",
+              "inputs": {"image": ["21", 0], "detect_hand": "enable", "detect_body": "enable",
+                         "detect_face": "enable", "resolution": H,
+                         "bbox_detector": "yolox_l.onnx",
+                         "pose_estimator": "dw-ll_ucoco_384_bs5.torchscript.pt",
+                         "scale_stick_for_xinsr_cn": "disable"}},
+        "25":{"class_type": "ImageScale",
+              "inputs": {"image": ["24", 0], "width": W, "height": H,
+                         "upscale_method": "nearest-exact", "crop": "center"}},
+        "6": {"class_type": "CLIPTextEncode", "inputs": {"text": POS, "clip": ["2", 0]}},
+        "7": {"class_type": "CLIPTextEncode", "inputs": {"text": NEG, "clip": ["2", 0]}},
+        "13":{"class_type": "WanVaceToVideo",
+              "inputs": {"positive": ["6", 0], "negative": ["7", 0], "vae": ["10", 0],
+                         "width": W, "height": H, "length": length, "batch_size": 1,
+                         "strength": STRENGTH,
+                         "control_video": ["25", 0], "reference_image": ["12", 0]}},
+        "3": {"class_type": "KSampler",
+              "inputs": {"seed": SEED, "steps": 6, "cfg": 1.0, "sampler_name": "euler",
+                         "scheduler": "simple", "denoise": 1.0, "model": ["11", 0],
+                         "positive": ["13", 0], "negative": ["13", 1], "latent_image": ["13", 2]}},
+        "14":{"class_type": "TrimVideoLatent", "inputs": {"samples": ["3", 0], "trim_amount": ["13", 3]}},
+        "8": {"class_type": "VAEDecode", "inputs": {"samples": ["14", 0], "vae": ["10", 0]}},
+        "9": {"class_type": "SaveImage",
+              "inputs": {"images": ["8", 0], "filename_prefix": f"{PREFIX}/c{idx:02d}_"}},
+    }
+
+def queue_and_wait(wf, tag, timeout=900):
+    req = urllib.request.Request(f"http://{SERVER}/prompt",
+        data=json.dumps({"prompt": wf}).encode(), headers={"Content-Type": "application/json"})
+    pid = json.load(urllib.request.urlopen(req))["prompt_id"]
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        time.sleep(3)
+        try: h = json.load(urllib.request.urlopen(f"http://{SERVER}/history/{pid}"))
+        except Exception: continue
+        if pid in h:
+            outs = h[pid].get("outputs", {}).get("9", {}).get("images", [])
+            if outs:
+                print(f"  {tag}: DONE {int(time.time()-t0)}s ({len(outs)} frames)", flush=True); return True
+            st = h[pid].get("status", {})
+            if st.get("status_str") == "error":
+                print(f"  {tag}: ERROR", json.dumps(st)[:2000], flush=True); return False
+    print(f"  {tag}: timeout", flush=True); return False
+
+starts = list(range(0, TOTAL, CHUNK))
+print(f"[B/DWPose] {len(starts)} chunks (CHUNK={CHUNK}, strength={STRENGTH}, seed={SEED})", flush=True)
+print("หมายเหตุ: chunk แรกอาจช้า (โหลดโมเดล DWPose ครั้งแรก)", flush=True)
+for idx, start in enumerate(starts):
+    length = min(CHUNK, TOTAL - start)
+    if length < 5:
+        print(f"  chunk{idx}: skip (เหลือ {length} เฟรม)", flush=True); continue
+    print(f"chunk {idx+1}/{len(starts)}: frames [{start}:{start+length}]", flush=True)
+    if not queue_and_wait(chunk_wf(idx, start, length), f"chunk{idx:02d}"):
+        print("หยุดเพราะ chunk ล้มเหลว"); sys.exit(1)
+
+out_dir = os.path.join(COMFY, "output", PREFIX)
+pngs = sorted(glob.glob(os.path.join(out_dir, "c*_*.png")))
+print(f"\nรวม {len(pngs)} เฟรม -> mp4", flush=True)
+seq_dir = os.path.join(out_dir, "_seq")
+shutil.rmtree(seq_dir, ignore_errors=True); os.makedirs(seq_dir)
+for i, p in enumerate(pngs):
+    shutil.copy(p, os.path.join(seq_dir, f"f{i:05d}.png"))
+final = os.path.join(COMFY, "output", "vace_v2v_pose.mp4")
+subprocess.run(["ffmpeg", "-y", "-framerate", str(FPS),
+                "-i", os.path.join(seq_dir, "f%05d.png"),
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", final], check=True)
+print(f"\nDONE -> {final}  ({len(pngs)} frames @ {FPS}fps = {len(pngs)/FPS:.1f}s)", flush=True)

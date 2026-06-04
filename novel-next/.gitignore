@@ -1,0 +1,11 @@
+# deps
+/node_modules
+# next
+/.next
+/out
+# typescript build cache
+*.tsbuildinfo
+# misc
+.env*.local
+*.log
+.DS_Store

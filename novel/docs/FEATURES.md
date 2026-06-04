@@ -130,6 +130,8 @@ BASE_RULES (กฎเหล็ก 6 ข้อ)
 | GET | `/api/providers` | รายชื่อ provider ที่ใช้งานได้ |
 | POST | `/api/generate` | AI raw (system+user) |
 | POST | `/api/generate-roleplay` | AI roleplay ด้วย NovelContext |
+| POST | `/api/expand` | **ขยายงานเขียน** — draft + โหมด (scene/action/polish) + tag จากรูป (optional) → ร้อยแก้วไทย |
+| POST | `/api/ref/tag` | รูป → booru tags (WD14 โลคัล) แยกหมวด — ใช้ป้อนให้ /api/expand |
 
 ---
 

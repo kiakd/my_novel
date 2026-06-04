@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Novel Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Nunito:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          cream:'#FBF6EC', canvas:'#F4ECDE', ink:'#4A4138', muted:'#988C7C', line:'#ECE2D1',
+          grape:'#7C6FE8', coral:'#FB8C6E', mint:'#33BD8E', sun:'#F2B23E',
+          sky:'#5FA8EE', bubble:'#F07FB0', lilac:'#A98AEE', slate:'#8A93A6',
+        },
+        fontFamily:{ display:['Fredoka','sans-serif'], sans:['Nunito','sans-serif'] },
+        borderRadius:{ '4xl':'1.75rem', '5xl':'2.25rem' },
+        boxShadow:{
+          soft:'0 2px 0 0 rgba(124,100,60,.04), 0 10px 22px -14px rgba(124,100,60,.45)',
+          pop:'0 12px 34px -12px rgba(124,100,60,.5)',
+        },
+      }
+    }
+  }
+</script>
+<style>
+  body{font-family:'Nunito',sans-serif;background:#FBF6EC;color:#4A4138;-webkit-font-smoothing:antialiased}
+  .font-display{font-family:'Fredoka',sans-serif}
+  /* playful background blobs */
+  body::before{content:'';position:fixed;inset:0;z-index:0;pointer-events:none;
+    background:
+      radial-gradient(420px 420px at 12% -6%, rgba(124,111,232,.12), transparent 70%),
+      radial-gradient(460px 460px at 105% 8%, rgba(240,127,176,.10), transparent 70%),
+      radial-gradient(520px 520px at 88% 108%, rgba(95,168,238,.10), transparent 70%);}
+  #root{position:relative;z-index:1}
+  @keyframes pop{from{opacity:0;transform:scale(.95)}to{opacity:1;transform:scale(1)}}
+  @keyframes fadein{from{opacity:0}to{opacity:1}}
+  @keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+  @keyframes rise{from{transform:translateY(10px)}to{transform:translateY(0)}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .anim-pop{animation:pop .22s cubic-bezier(.34,1.56,.64,1)}
+  .anim-rise{}
+  .floaty{animation:floaty 4s ease-in-out infinite}
+  ::-webkit-scrollbar{width:11px;height:11px}
+  ::-webkit-scrollbar-thumb{background:#E2D6C2;border-radius:9px;border:3px solid #FBF6EC}
+  ::-webkit-scrollbar-thumb:hover{background:#d3c4ab}
+  [contenteditable]:focus{outline:none}
+  .prose-editor p{margin:0 0 1em}
+</style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <script type="text/babel" src="data.jsx"></script>
+  <script type="text/babel" src="ui.jsx"></script>
+  <script type="text/babel" src="screen_plot.jsx"></script>
+  <script type="text/babel" src="screen_characters.jsx"></script>
+  <script type="text/babel" src="screen_relations.jsx"></script>
+  <script type="text/babel" src="screen_chapters.jsx"></script>
+  <script type="text/babel" src="screen_more.jsx"></script>
+  <script type="text/babel" src="app.jsx"></script>
+</body>
+</html>

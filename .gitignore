@@ -2,6 +2,12 @@
 .env
 .env.local
 *.local
+# ทุก env variant (.env.atlas, .env.production ฯลฯ)
+.env.*
+# ยกเว้น template (ไฟล์ลงท้าย .example)
+!*.example
+# ไฟล์ backup (มัก copy มาจาก .env จริง)
+*.bak
 
 # deps / build
 node_modules/
@@ -13,6 +19,10 @@ dist/
 venv/
 __pycache__/
 *.pyc
+# ComfyUI = clone third-party (embedded git repo) ติดตั้ง local ลงใหม่ได้ตาม comfyui/README.md
+comfyui/ComfyUI/
+# ไฟล์ว่างพิมพ์พลาด
+comfyui/textToImagePromp
 
 # models (โหลดใหม่จาก Civitai)
 *.safetensors

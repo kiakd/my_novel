@@ -2,6 +2,7 @@ import { Elysia } from 'elysia';
 import { join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { getDb } from './db';
+import { logRequest, logActivity, logError, ensureLogIndexes, APP_LOG_COLLECTION } from './logger';
 import { assembleSystemPrompt, type NovelContext } from './prompts';
 import { pickStory, writeStoryMd, type Story } from './story-md';
 import { runWD14, categorizeTags, REF_SCENE_SYSTEM, buildRefSceneUser } from './ref-tag';
@@ -97,6 +98,15 @@ Return JSON only:
   "steps": 24,
   "cfg": 7
 }`;
+
+// ระบบช่วย "ขยายงานเขียน": ผู้เขียนให้เนื้อเรื่อง+บทพูด AI เสริมบรรยายฉาก/แอ็กชัน
+const EXPAND_SYSTEM = `คุณเป็นนักเขียนนิยายไทยมืออาชีพ หน้าที่คือ "ขยาย" ข้อความต้นฉบับของผู้เขียนให้เป็นร้อยแก้วที่เห็นภาพและมีชีวิตขึ้น
+กฎเหล็ก:
+- คงบทพูด (ข้อความในเครื่องหมายคำพูด) และใจความเดิมไว้ทั้งหมด ห้ามแต่งเหตุการณ์ใหม่หรือเปลี่ยนสิ่งที่เกิดขึ้น
+- เสริมเฉพาะรายละเอียดบรรยายตามโหมดที่สั่ง (ฉาก / แอ็กชัน-ท่าทาง / ขยายสำนวน)
+- ถ้ามี "รายละเอียดจากรูปอ้างอิง" ให้ใช้เป็นแนวทางบรรยาย (ท่าทาง เสื้อผ้า ฉาก มุมมอง สีหน้า) แต่ห้ามเอ่ยชื่อ tag ตรงๆ ให้ร้อยเป็นภาษาเล่าเรื่องธรรมชาติ
+- รักษาน้ำเสียง/บุคลิกตัวละครและสไตล์ของเรื่อง เคารพข้อห้าม (don'ts) ที่ให้มา
+- ตอบกลับเป็นร้อยแก้วภาษาไทยล้วน ไม่ต้องอธิบาย ไม่ต้องใส่หัวข้อ/มาร์กดาวน์/คำนำ`;
 
 type Provider = 'openrouter' | 'deepseek';
 
@@ -261,7 +271,25 @@ async function logCall(data: {
   }
 }
 
+// จับเวลาแต่ละ request ด้วย WeakMap keyed by Request (ปลอดภัยกับ concurrency)
+const reqStart = new WeakMap<Request, number>();
+
 const app = new Elysia()
+  // --- request log: stamp เวลาเริ่ม แล้ว log ตอนตอบเสร็จ ---
+  .onRequest(({ request }) => {
+    reqStart.set(request, Date.now());
+  })
+  .onAfterResponse(({ request, set, path }) => {
+    const start = reqStart.get(request);
+    reqStart.delete(request);
+    const status = typeof set.status === 'number' ? set.status : 200;
+    logRequest({
+      method: request.method,
+      path: path ?? new URL(request.url).pathname,
+      status,
+      ms: start ? Date.now() - start : undefined,
+    });
+  })
   // --- static HTML ---
   .get('/', () => Bun.file('./novel.html'))
   .get('/novel.html', () => Bun.file('./novel.html'))
@@ -298,12 +326,14 @@ const app = new Elysia()
     if (!existing) {
       // ยังไม่มี state — สร้างครั้งแรก
       await col.updateOne({ _id: STATE_ID as any }, { $set: { state: incoming, updatedAt: new Date(), rev: 1 } }, { upsert: true });
+      logActivity('state.create', STATE_ID, { rev: 1 });
       return { ok: true, rev: 1 };
     }
     const hasRev = existing.rev !== undefined && existing.rev !== null;
     const cur = hasRev ? existing.rev : 0;
     if (baseRev !== cur) {
       set.status = 409;
+      logActivity('state.conflict', STATE_ID, { clientRev: baseRev, serverRev: cur });
       return { ok: false, conflict: true, currentRev: cur, error: `rev mismatch (client=${baseRev}, server=${cur})` };
     }
     // doc legacy อาจไม่มี field rev → ต้อง match ด้วย $exists:false ไม่ใช่ rev:0
@@ -315,8 +345,10 @@ const app = new Elysia()
     if (r.matchedCount === 0) {
       const d = await col.findOne({ _id: STATE_ID as any }, { projection: { rev: 1 } });
       set.status = 409;
+      logActivity('state.conflict', STATE_ID, { clientRev: baseRev, serverRev: d?.rev ?? 0, phase: 'write' });
       return { ok: false, conflict: true, currentRev: d?.rev ?? 0, error: 'rev changed during write' };
     }
+    logActivity('state.save', STATE_ID, { fromRev: cur, toRev: cur + 1 });
     return { ok: true, rev: cur + 1 };
   })
 
@@ -331,6 +363,7 @@ const app = new Elysia()
       const [id, story] = pickStory(state.stories, state.activeStoryId ?? '', b.storyId);
       const dir = b.dir ?? process.cwd();
       const files = await writeStoryMd(story, dir);
+      logActivity('state.exportMd', id, { dir, files: files.length });
       return { ok: true, storyId: id, storyName: story.name ?? '', dir, files };
     } catch (e: any) {
       return { ok: false, error: e.message };
@@ -350,6 +383,7 @@ const app = new Elysia()
       { $set: { words: body, updatedAt: new Date() } },
       { upsert: true },
     );
+    logActivity('dict.save', DICT_ID, { count: Array.isArray(body) ? body.length : undefined });
     return { ok: true };
   })
 
@@ -538,6 +572,64 @@ const app = new Elysia()
     }
   })
 
+  // --- AI: ขยายงานเขียน (draft + tag จากรูป + โหมด) — รูปเข้าใจผ่าน /api/ref/tag (WD14) ---
+  .post('/api/expand', async ({ body }) => {
+    const b = (body ?? {}) as {
+      draft: string;
+      mode?: 'scene' | 'action' | 'polish';
+      tags?: string[];
+      buckets?: Record<string, string[]>;
+      style?: string;
+      characters?: string[];
+      provider?: string;
+      max_tokens?: number;
+    };
+    if (!b?.draft?.trim()) return { ok: false, error: 'missing "draft"' };
+    const mode = b.mode ?? 'scene';
+    const buckets = b.buckets ?? (b.tags ? categorizeTags(b.tags) : null);
+
+    const MODE_INSTRUCTION: Record<string, string> = {
+      scene: 'โหมด: ขยายฉาก/บรรยากาศ — เสริมสถานที่ แสง สี กลิ่น เสียง อุณหภูมิ และอารมณ์ของฉาก ให้ผู้อ่านเห็นภาพชัด',
+      action: 'โหมด: ขยายแอ็กชัน/ท่าทาง — เสริมการเคลื่อนไหว ภาษากาย สีหน้า จังหวะ และรายละเอียดร่างกายของตัวละครในช่วงนั้น',
+      polish: 'โหมด: ขยายสำนวนให้ลื่น — คงใจความเดิมทุกอย่าง เพิ่มรายละเอียดและสำนวนให้อ่านลื่นและมีชีวิตขึ้น',
+    };
+
+    const parts: string[] = [];
+    parts.push(`[ข้อความต้นฉบับของผู้เขียน]\n${b.draft.trim()}`);
+    parts.push(`\n[คำสั่ง]\n${MODE_INSTRUCTION[mode] ?? MODE_INSTRUCTION.scene}`);
+    if (buckets) {
+      const lines = Object.entries(buckets)
+        .filter(([, v]) => Array.isArray(v) && v.length)
+        .map(([k, v]) => `- ${k}: ${(v as string[]).join(', ')}`);
+      if (lines.length) {
+        parts.push(`\n[รายละเอียดจากรูปอ้างอิง (booru tags — ใช้เป็นแนวทางบรรยาย ไม่ต้องเอ่ยชื่อ tag ตรงๆ)]\n${lines.join('\n')}`);
+      }
+    }
+    if (b.characters?.length) parts.push(`\n[ตัวละครในฉากนี้] ${b.characters.join(', ')}`);
+    if (b.style?.trim()) parts.push(`\n[สไตล์/ข้อห้ามของเรื่อง]\n${b.style.trim()}`);
+    parts.push('\n[ผลลัพธ์] คืนเฉพาะร้อยแก้วภาษาไทยที่ขยายแล้ว');
+    const user = parts.join('\n');
+
+    const t0 = Date.now();
+    const max_tokens = b.max_tokens ?? 1400;
+    try {
+      const out = await callAI({ system: EXPAND_SYSTEM, user, provider: b.provider, temperature: 0.85, max_tokens });
+      logCall({
+        endpoint: 'expand', system: EXPAND_SYSTEM, user, response: out.text,
+        provider: out.provider, model: out.model ?? '', usage: out.usage,
+        temperature: 0.85, maxTokens: max_tokens, ok: true, ms: Date.now() - t0,
+      }).catch(() => {});
+      return { ok: true, text: out.text.trim(), provider: out.provider, model: out.model };
+    } catch (e: any) {
+      logCall({
+        endpoint: 'expand', system: EXPAND_SYSTEM, user, response: '',
+        provider: resolveProvider(b.provider), model: '', usage: null,
+        temperature: 0.85, maxTokens: max_tokens, ok: false, error: e.message, ms: Date.now() - t0,
+      }).catch(() => {});
+      return { ok: false, error: e.message };
+    }
+  })
+
   // --- image generation ---
   .post('/api/image/generate', async ({ body }) => {
     const b = body as ImageGenParams & { provider?: ImageProvider };
@@ -598,6 +690,7 @@ const app = new Elysia()
         { $set: { ...b, name: params.name, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
         { upsert: true },
       );
+      logActivity('character.upsert', params.name);
       return { ok: true };
     } catch (e: any) {
       return { ok: false, error: e.message };
@@ -607,6 +700,7 @@ const app = new Elysia()
     try {
       const db = await getDb();
       await db.collection(CHAR_COLLECTION).deleteOne({ _id: params.name as any });
+      logActivity('character.delete', params.name);
       return { ok: true };
     } catch (e: any) {
       return { ok: false, error: e.message };
@@ -933,17 +1027,52 @@ const app = new Elysia()
     }
   })
 
+  // --- app logs (request/activity/error) — แยกจาก ai_logs ---
+  .get('/api/app-logs', async ({ query }) => {
+    try {
+      const db = await getDb();
+      const limit = Math.min(Number(query?.limit ?? 100), 500);
+      const skip = Number(query?.skip ?? 0);
+      const filter: Record<string, unknown> = {};
+      if (query?.type) filter.type = query.type;        // request | activity | error
+      if (query?.level) filter.level = query.level;      // info | warn | error
+      const docs = await db
+        .collection(APP_LOG_COLLECTION)
+        .find(filter)
+        .sort({ ts: -1 })
+        .skip(skip)
+        .limit(limit)
+        .toArray();
+      return { ok: true, logs: docs };
+    } catch (e: any) {
+      return { ok: false, error: e.message };
+    }
+  })
+  .delete('/api/app-logs', async () => {
+    try {
+      const db = await getDb();
+      const r = await db.collection(APP_LOG_COLLECTION).deleteMany({});
+      logActivity('appLogs.clear', undefined, { deleted: r.deletedCount });
+      return { ok: true, deleted: r.deletedCount };
+    } catch (e: any) {
+      return { ok: false, error: e.message };
+    }
+  })
+
   // --- serve uploaded images ---
   .get('/uploads/*', ({ params }) => Bun.file(`./uploads/${params['*']}`))
 
-  .onError(({ error, code }) => {
+  .onError(({ error, code, request, path }) => {
     console.error(`[error ${code}]`, error);
+    logError(error, { code, method: request?.method, path: path ?? (request ? new URL(request.url).pathname : undefined) });
     return { ok: false, error: String(error) };
   })
 
   .listen(PORT);
 
-// warm up mongo connection on boot
-getDb().catch((e) => console.error('[mongo] initial connect failed:', e.message));
+// warm up mongo connection on boot + เตรียม index ของ log
+getDb()
+  .then((db) => ensureLogIndexes(db).catch((e) => console.error('[log] ensure index failed:', e.message)))
+  .catch((e) => console.error('[mongo] initial connect failed:', e.message));
 
 console.log(`\n  🚀 Novel server: http://localhost:${PORT}\n`);
