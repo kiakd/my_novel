@@ -215,9 +215,11 @@ function extractPromptMeta(system: string, user: string) {
   const locMatch = system.match(/=== สถานที่[\s\S]*?(?=\n===|$)/);
   const locationCount = locMatch ? (locMatch[0].match(/\n\[/g)?.length ?? 0) : 0;
 
-  // Count characters: find section, stop at กฎการ keep or next === header
+  // Count characters: รองรับ 2 ฟอร์แมต — roleplay XML (<char>/<sup_char>) และ legacy markdown (\n[ ... ])
+  const xmlChars = (system.match(/<(?:char|sup_char)\s+name=/g) ?? []).length; // เฉพาะ tag จริง (มี name=) ไม่ใช่ <char> ตัวอย่างใน rules
   const charMatch = system.match(/=== ตัวละคร[\s\S]*?(?:กฎการ keep|(?=\n===)|$)/);
-  const characterCount = charMatch ? (charMatch[0].match(/\n\[/g)?.length ?? 0) : 0;
+  const bracketChars = charMatch ? (charMatch[0].match(/\n\[/g)?.length ?? 0) : 0;
+  const characterCount = xmlChars || bracketChars;
 
   // Detect mode from the === Mode: ... === section header (avoid false positives from R18 mentions in dontList/worldRules)
   let mode = 'novel';
@@ -234,9 +236,11 @@ function extractPromptMeta(system: string, user: string) {
     hasLocations: has('สถานที่ในเรื่อง'),
     locationCount,
     hasStyleGuide: has('Style Guide'),
-    hasWorldRules: has('กฎของโลก'),
+    hasWorldRules: has('กฎของโลก') || /<rules>/.test(system) || has('=== โลก/setting'),
     hasDontList: has("Do / Don't"),
-    hasCharacters: has('ตัวละคร (AI ต้อง keep character'),
+    hasContinuity: has('สถานะปัจจุบัน'),
+    hasVocab: has('Vocabulary Palette'),
+    hasCharacters: has('ตัวละคร (AI ต้อง keep character') || /<(?:char|sup_char)\b/.test(system) || has('=== ตัวเอก'),
     characterCount,
     mode,
     sections,

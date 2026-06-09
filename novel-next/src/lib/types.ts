@@ -17,6 +17,7 @@ export interface Char {
   pronounOther?: string;
   speechTone?: string;
   voiceExamples?: string; // = sample lines
+  arc?: ArcBeat[];        // UI extra — จุดเปลี่ยนรายบท (timeline digest)
   // UI / image-gen extras (persist ในก้อน JSON)
   color?: ColorKey;
   promptAnchor?: string;
@@ -43,6 +44,29 @@ export interface TLEvent {
   description?: string;   // = detail
   chapterId?: string;     // = chapter
   color?: ColorKey;       // UI extra
+  importance?: EventImportance; // UI extra — เด่นแค่ไหนใน digest
+}
+
+export type EventImportance = 'minor' | 'major' | 'pivotal';
+
+// ---- Timeline "chapter digest" — สถานะตัวละครที่เปลี่ยนทีละบท ----
+export type ArcKind = 'skill' | 'mindset' | 'status' | 'look' | 'milestone';
+export type LookSub = 'hair' | 'outfit' | 'weapon' | 'item';
+
+/** จุดเปลี่ยนของตัวละคร ผูกกับ "บทที่" (1-based ตาม chapter order) */
+export interface ArcBeat {
+  ch: number;            // เลขบท (1-based)
+  kind: ArcKind;
+  label: string;
+  sub?: LookSub;         // เฉพาะ kind='look'
+  why?: string;          // เหตุผล/บริบทของการเปลี่ยน
+}
+
+/** จุดเปลี่ยนของความสัมพันธ์ ผูกกับบท */
+export interface RelBeat {
+  ch: number;
+  type: string;          // ประเภท ณ บทนี้ (allies/rivals/loves/…)
+  intensity?: number;    // -100..100 (ลบ = ขัดแย้ง)
 }
 
 export interface Loc {
@@ -61,6 +85,7 @@ export interface Relation {
   to?: string;
   type?: string;
   feeling?: string;
+  beats?: RelBeat[];      // UI extra — จุดเปลี่ยนรายบท (timeline digest)
   flags?: Record<string, unknown>;
 }
 

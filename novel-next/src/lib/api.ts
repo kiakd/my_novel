@@ -49,6 +49,11 @@ export interface GenerateResult { ok: boolean; text?: string; error?: string; pr
 export const generate = (body: { user: string; system?: string; provider?: string; temperature?: number; max_tokens?: number; prefill?: string }) =>
   jsonFetch<GenerateResult>('/api/generate', { method: 'POST', body: JSON.stringify(body) });
 
+// ---- AI: เขียนต่อบท (roleplay assembler ฝั่ง backend ประกอบ system prompt จาก context) ----
+export interface GenRoleplayResult { ok: boolean; text?: string; error?: string; provider?: string; model?: string; prompt_chars?: number }
+export const generateRoleplay = (body: { context: unknown; user_input: string; provider?: string; temperature?: number; max_tokens?: number }) =>
+  jsonFetch<GenRoleplayResult>('/api/generate-roleplay', { method: 'POST', body: JSON.stringify(body) });
+
 // ---- รูป ref → booru tags (WD14 โลคัล ผ่าน ComfyUI) ----
 export interface RefTagResult { ok: boolean; tags?: string[]; buckets?: Record<string, string[]>; error?: string }
 export const refTag = (dataBase64: string) =>

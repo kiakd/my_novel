@@ -1,7 +1,7 @@
 // ============ Seed: สร้าง AppState เริ่มต้นจาก mock-data (map → Story shape) ============
 // ใช้ตอน DB ยังว่าง เพื่อให้ first-run มีตัวอย่างให้เห็น (เซฟครั้งแรกจะลงจริง)
 import type { AppState, Story } from './types';
-import { CHARACTERS, PLOT, CHAPTERS, EVENTS, RELATIONS, NODE_POS, LOCATIONS } from './mock-data';
+import { CHARACTERS, PLOT, CHAPTERS, EVENTS, RELATIONS, NODE_POS, LOCATIONS, ARCS, REL_BEATS, EVENT_IMP } from './mock-data';
 
 const SEED_STORY_ID = 'ashfall';
 
@@ -30,6 +30,7 @@ function buildSeedStory(): Story {
       pronounOther: c.otherP,
       speechTone: c.tone,
       voiceExamples: c.sample,
+      arc: ARCS[c.id],
       promptAnchor: c.anchor,
       negativeAnchor: c.neg,
       defaultOutfit: c.outfit,
@@ -50,6 +51,7 @@ function buildSeedStory(): Story {
       description: e.detail,
       chapterId: e.chapter,
       color: e.color,
+      importance: EVENT_IMP[e.chapter],
     })),
     locations: LOCATIONS.map((l) => ({
       id: l.id,
@@ -59,7 +61,7 @@ function buildSeedStory(): Story {
       description: l.desc,
       color: l.color,
     })),
-    relations: RELATIONS.map((r) => ({ id: r.id, from: r.from, to: r.to, type: r.type, feeling: r.feeling })),
+    relations: RELATIONS.map((r) => ({ id: r.id, from: r.from, to: r.to, type: r.type, feeling: r.feeling, beats: REL_BEATS[r.id] })),
     nodePos: { ...NODE_POS },
   };
 }

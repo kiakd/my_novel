@@ -11,6 +11,9 @@ import { ChapterRow } from './ChapterRow';
 import { ChapterEditor, type ChapterEditorHandle } from './ChapterEditor';
 import { AIBar } from './AIBar';
 import { ExpandPanel } from './ExpandPanel';
+import { ContinueMenu, type ContinueKind } from './ContinueMenu';
+import { generateRoleplay } from '@/lib/api';
+import { buildNovelContext, cleanRoleplayArtifacts } from '@/lib/novel-context';
 
 const LS_LIST_OPEN = 'ns_chapterlist_open';
 
@@ -37,6 +40,7 @@ export function ChaptersScreen() {
   const editorRef = useRef<ChapterEditorHandle>(null);
   const [expandOpen, setExpandOpen] = useState(false);
   const [expandDraft, setExpandDraft] = useState('');
+  const [contOpen, setContOpen] = useState(false);
   const [listOpen, setListOpen] = useState(true);
 
   useEffect(() => { if (localStorage.getItem(LS_LIST_OPEN) === '0') setListOpen(false); }, []);
@@ -63,6 +67,57 @@ export function ChaptersScreen() {
     setBusy(true);
     toast(lbl.replace(/^[^ ]+ /, '') + '…', '✦');
     setTimeout(() => { setBusy(false); toast(t('common.done'), '✅'); }, 1300);
+  };
+
+  // เขียนต่อบทจริง: ประกอบ context จาก story + ท้ายเนื้อบท → ยิง DeepSeek → แทรกผลต่อท้าย
+  const runContinue = async (kind: ContinueKind) => {
+    if (!active || !story) return;
+    const mode = kind === 'r18' ? 'r18' : 'novel';
+    const idx = chapters.indexOf(active);
+    const chapterNum = idx + 1;
+    const INSTR: Record<ContinueKind, string> = {
+      continue: 'เขียนต่อจากเนื้อเรื่องด้านล่างอย่างต่อเนื่องลื่นไหล ไม่ทวนซ้ำของเดิม คงโทนและคาแรกเตอร์เดิม',
+      scene: 'ข้ามฉากปัจจุบันไป เริ่มฉากใหม่หรือช่วงเวลาใหม่ที่ต่อเนื่องสมเหตุผลจากเรื่องเดิม เปิดฉากใหม่ให้น่าสนใจ',
+      r18: 'เขียนต่อจากเนื้อเรื่องด้านล่าง เข้าสู่ฉากเลิฟซีนผู้ใหญ่แบบเต็มอารมณ์ (เต็มใจทั้งสองฝ่ายตาม lore lock)',
+    };
+    // อ่าน "ทั้งบท" ไม่ใช่แค่ท้าย — กันหลงทาง/ชุดหลุด. ถ้ายาวเกิน cap เก็บหัวบท (setup ชุด/ฉาก) + ท้ายบท (จุดต่อ)
+    const CTX_CAP = 14000;
+    const clip = (s: string) =>
+      s.length <= CTX_CAP ? s : `${s.slice(0, 2000)}\n…\n${s.slice(-(CTX_CAP - 2000))}`;
+    const full = htmlToText(active.content).trim();
+    const intent = active.summary?.trim() ? ` [บทนี้ตั้งใจเล่า: ${active.summary.trim()}]` : '';
+
+    let eventCurrent: string;
+    if (full) {
+      eventCurrent =
+        `${INSTR[kind]}${intent}\n\n` +
+        `[เนื้อหาบทนี้ทั้งหมด — อ่านให้เข้าใจว่าเกิดอะไรไปแล้ว ใครอยู่ที่ไหน ใส่/ถอด/ชุดเสียหายอย่างไร ก่อนเขียนต่อ ห้ามทวนซ้ำ]\n${clip(full)}`;
+    } else {
+      // บทนี้ยังว่าง → ดูบทก่อนหน้าว่าจบยังไง แล้วต่อยอด (คงชุด/สถานะ/สถานที่ล่าสุด)
+      const prev = chapters[idx - 1];
+      const prevText = prev ? htmlToText(prev.content).trim() : '';
+      const prevAnchor = prevText
+        ? `\n\n[บทก่อน "${prev?.title || ''}" จบไว้แบบนี้ — ต่อยอดให้สมเหตุผล คงชุด/สถานะ/สถานที่ล่าสุด ไม่รีเซ็ต]\n${clip(prevText)}`
+        : '';
+      eventCurrent = `${INSTR[kind]}${intent} (เปิดบท "${active.title || ''}")${prevAnchor}`;
+    }
+    setBusy(true);
+    toast(t('chapters.continue.working'), '✦');
+    try {
+      const ctx = buildNovelContext(story, { mode, eventCurrent, chapterNum });
+      const r = await generateRoleplay({ context: ctx, user_input: `เขียนต่อบท "${active.title || ''}"`, max_tokens: mode === 'r18' ? 2600 : 2200 });
+      if (r.ok && r.text) {
+        editorRef.current?.insertHtmlAtEnd(textToHtml(cleanRoleplayArtifacts(r.text)));
+        toast(t('chapters.continue.done'), '✨');
+        setContOpen(false);
+      } else {
+        toast(r.error ?? t('common.offline'), '⚠️');
+      }
+    } catch (e) {
+      toast((e as Error).message || t('common.offline'), '⚠️');
+    } finally {
+      setBusy(false);
+    }
   };
   const addChapter = () => {
     const id = 'c' + Date.now();
@@ -114,8 +169,9 @@ export function ChaptersScreen() {
           </Card>
         )}
       </div>
-      {active && <AIBar onAct={act} onExpand={openExpand} busy={busy} />}
-      <ExpandPanel open={expandOpen} onClose={() => setExpandOpen(false)} initialDraft={expandDraft} onInsert={insertExpanded} />
+      {active && <AIBar onAct={act} onExpand={openExpand} onContinue={() => setContOpen(true)} busy={busy} />}
+      <ExpandPanel open={expandOpen} onClose={() => setExpandOpen(false)} initialDraft={expandDraft} chapterNum={active ? chapters.indexOf(active) + 1 : 1} onInsert={insertExpanded} />
+      <ContinueMenu open={contOpen} onClose={() => setContOpen(false)} onPick={runContinue} busy={busy} />
     </div>
   );
 }

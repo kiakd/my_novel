@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reference 18+ — คู่มืออ้างอิงฉากผู้ใหญ่สำหรับนักเขียน</title>
+<style>
+  :root{
+    --bg:#15110f; --bg2:#1f1815; --card:#241b17; --line:#3a2c24;
+    --ink:#f3e9e1; --muted:#b7a294; --rose:#d98a7a; --gold:#cB9a5e;
+    --th:#e8c9a0; --en:#9fb6c4;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Segoe UI","Noto Sans Thai",system-ui,sans-serif;
+    background:linear-gradient(160deg,var(--bg),var(--bg2));color:var(--ink);line-height:1.7}
+  header{padding:48px 24px 28px;text-align:center;border-bottom:1px solid var(--line);
+    background:radial-gradient(120% 100% at 50% 0%,#2a1f1a,transparent)}
+  header h1{margin:0 0 6px;font-size:1.9rem;letter-spacing:.5px}
+  header .sub{color:var(--muted);font-size:.95rem;max-width:680px;margin:8px auto 0}
+  .badge{display:inline-block;border:1px solid var(--rose);color:var(--rose);
+    border-radius:999px;padding:3px 14px;font-size:.8rem;letter-spacing:2px;margin-bottom:14px}
+  .notice{max-width:880px;margin:24px auto;padding:14px 18px;border:1px solid var(--line);
+    border-left:3px solid var(--gold);border-radius:8px;background:#00000022;color:var(--muted);font-size:.88rem}
+  .toc{max-width:880px;margin:0 auto 8px;padding:0 24px}
+  .toc h3{color:var(--gold);font-size:.95rem;letter-spacing:1px;margin:18px 0 8px}
+  .toc ul{list-style:none;padding:0;margin:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px}
+  .toc a{color:var(--ink);text-decoration:none;font-size:.9rem;opacity:.85}
+  .toc a:hover{color:var(--rose);opacity:1}
+  .toc .n{color:var(--rose);font-variant-numeric:tabular-nums;margin-right:6px}
+  main{max-width:880px;margin:0 auto;padding:24px}
+  .pose{background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:22px 24px;margin:22px 0;scroll-margin-top:20px}
+  .pose .head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;border-bottom:1px dashed var(--line);padding-bottom:12px}
+  .pose .num{color:var(--rose);font-size:1.5rem;font-weight:700;font-variant-numeric:tabular-nums}
+  .pose .th-name{font-size:1.25rem;color:var(--th);font-weight:600}
+  .pose .en-name{font-size:1rem;color:var(--en);font-style:italic}
+  .pose .tags{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
+  .tag{font-size:.72rem;border:1px solid var(--line);color:var(--muted);border-radius:6px;padding:2px 8px}
+  .grid{display:grid;grid-template-columns:1.3fr 1fr;gap:20px;margin-top:16px}
+  @media(max-width:680px){.grid{grid-template-columns:1fr}}
+  .lang{margin:10px 0}
+  .lang .label{font-size:.72rem;letter-spacing:2px;text-transform:uppercase;font-weight:700}
+  .lang.th .label{color:var(--th)} .lang.en .label{color:var(--en)}
+  .lang p{margin:4px 0 0}
+  .lang.en p{color:#d7e0e6;font-size:.95rem}
+  .notes{margin-top:14px;background:#00000022;border-radius:10px;padding:12px 16px}
+  .notes h4{margin:0 0 6px;color:var(--gold);font-size:.85rem;letter-spacing:1px}
+  .notes ul{margin:0;padding-left:18px}
+  .notes li{font-size:.9rem;color:var(--muted);margin:3px 0}
+  .notes li b{color:var(--ink);font-weight:600}
+  /* image slot */
+  .slot{display:flex;flex-direction:column}
+  .frame{aspect-ratio:4/5;border:2px dashed var(--line);border-radius:12px;
+    display:flex;align-items:center;justify-content:center;text-align:center;
+    color:var(--muted);font-size:.85rem;background:#0000002e;overflow:hidden;
+    position:relative;cursor:pointer;transition:border-color .15s,background .15s}
+  .frame:hover{border-color:var(--rose)}
+  .frame.drag-over{border-color:var(--rose);background:#d98a7a26;border-style:solid}
+  .frame img{width:100%;height:100%;object-fit:cover;display:none}
+  .frame.has-img img{display:block} .frame.has-img span{display:none}
+  .frame .remove-btn{position:absolute;top:8px;right:8px;display:none;border:none;
+    background:#000000b0;color:var(--ink);border-radius:6px;padding:4px 10px;
+    font-size:.74rem;cursor:pointer;z-index:2;font-family:inherit}
+  .frame.has-img:hover .remove-btn{display:block}
+  .frame .remove-btn:hover{background:#d98a7a}
+  .prompt{margin-top:8px;font-size:.74rem;color:var(--muted);background:#0000002e;
+    border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-family:"Cascadia Code",monospace;
+    word-break:break-word;line-height:1.5}
+  .prompt b{color:var(--rose)}
+  footer{text-align:center;color:var(--muted);font-size:.8rem;padding:30px;border-top:1px solid var(--line)}
+  .howto{max-width:880px;margin:0 auto;padding:0 24px}
+  details{border:1px solid var(--line);border-radius:10px;padding:8px 14px;margin:18px 0;background:#00000022}
+  summary{cursor:pointer;color:var(--gold);font-weight:600}
+  details code{background:#0000004d;padding:1px 6px;border-radius:4px}
+</style>
+</head>
+<body>
+<header>
+  <div class="badge">18 +&nbsp;&nbsp;NSFW REFERENCE</div>
+  <h1>คู่มืออ้างอิงฉากผู้ใหญ่ — Adult Scene Reference</h1>
+  <p class="sub">เอกสารอ้างอิงสำหรับ <b>นักเขียนนิยาย</b> ใช้วางบล็อกกิ้ง มุมกล้อง อารมณ์ และประสาทสัมผัสของฉากใกล้ชิดระหว่างตัวละครผู้ใหญ่ที่ยินยอมพร้อมใจ — ไม่ใช่คู่มือทางการแพทย์</p>
+</header>
+
+<div class="notice">
+  <b>หมายเหตุการใช้งาน</b> — ทุกฉากในนิยายต้องเป็นตัวละคร <b>ผู้ใหญ่ (18+) ที่ยินยอม</b> เสมอ.
+  คำอธิบายด้านล่างเขียนเชิง "บล็อกกิ้ง" สำหรับเล่าเรื่อง (ท่าทาง–มุมมอง–อารมณ์–สัมผัส) ไม่เน้นรายละเอียดเชิงกราฟิก
+  เพื่อให้คุณหยิบไปขยายเป็นภาษาวรรณกรรมของคุณเอง. ช่องรูปเว้นว่างให้เติมภาพที่คุณเจนเอง
+  (มี prompt ตั้งต้นสำหรับ ComfyUI — ปรับใส่ตัวละคร/ฉากของคุณ).
+</div>
+
+<nav class="toc">
+  <h3>สารบัญ — 12 ท่า</h3>
+  <ul>
+    <li><a href="#p1"><span class="n">01</span>มิชชันนารี / Missionary</a></li>
+    <li><a href="#p2"><span class="n">02</span>ฝ่ายหญิงอยู่บน / Cowgirl</a></li>
+    <li><a href="#p3"><span class="n">03</span>หันหลังอยู่บน / Reverse Cowgirl</a></li>
+    <li><a href="#p4"><span class="n">04</span>เข้าจากด้านหลัง / Doggy</a></li>
+    <li><a href="#p5"><span class="n">05</span>นอนตะแคงกอด / Spooning</a></li>
+    <li><a href="#p6"><span class="n">06</span>ดอกบัว / Lotus</a></li>
+    <li><a href="#p7"><span class="n">07</span>ขอบเตียง / Edge of Bed</a></li>
+    <li><a href="#p8"><span class="n">08</span>พิงกำแพง / Against the Wall</a></li>
+    <li><a href="#p9"><span class="n">09</span>นั่งบนตัก / Lap Sit</a></li>
+    <li><a href="#p10"><span class="n">10</span>ยกขาพาดบ่า / Legs on Shoulders</a></li>
+    <li><a href="#p11"><span class="n">11</span>ตะแคงหันหน้า / Side Facing</a></li>
+    <li><a href="#p12"><span class="n">12</span>ยืนโอบ / Standing Embrace</a></li>
+  </ul>
+</nav>
+
+<main>
+
+  <!-- 01 -->
+  <section class="pose" id="p1">
+    <div class="head">
+      <span class="num">01</span>
+      <span class="th-name">ท่ามิชชันนารี</span>
+      <span class="en-name">Missionary</span>
+      <span class="tags"><span class="tag">หันหน้า</span><span class="tag">โรแมนติก</span><span class="tag">ใกล้ชิด</span></span>
+    </div>
+    <div class="grid">
+      <div>
+        <div class="lang th"><div class="label">ไทย</div>
+          <p>ฝ่ายหนึ่งนอนหงายราบ อีกฝ่ายอยู่ด้านบนในท่าหันหน้าเข้าหากัน น้ำหนักถ่ายลงแขนทั้งสองข้าง ใบหน้าอยู่ใกล้กันพอจะสบตา จูบ และกระซิบได้ เป็นท่าพื้นฐานที่เน้นความผูกพันและการสื่อสารทางสายตามากกว่าความหวือหวา</p>
+        </div>
+        <div class="lang en"><div class="label">English</div>
+          <p>One partner lies on their back while the other rests above, face to face, weight carried on the forearms. The closeness of their faces allows eye contact, kissing, and whispered words. A foundational, intimate pose that favors emotional connection over spectacle.</p>
+        </div>
+        <div class="notes"><h4>โน้ตสำหรับเขียน</h4><ul>
+          <li><b>มุมมอง:</b> เหมาะเล่าผ่านสายตา/ลมหายใจที่ปะทะกัน</li>
+          <li><b>สัมผัส:</b> ปลายผมสยาย ฝ่ามือที่ประคองแก้ม น้ำหนักตัวที่กดทับ</li>
+          <li><b>อารมณ์:</b> ความไว้ใจ การเปิดเผยตัวตน บทสนทนาเบาๆ กลางฉาก</li>
+        </ul></div>
+      </div>
+      <div class="slot">
+        <div class="frame"><img alt="pose 01"><span>วางรูปท่า 01 ที่นี่<br>(ลากไฟล์มาทับ / แก้ src ใน img)</span></div>
+        <div class="prompt"><b>ComfyUI:</b> two lovers, face to face, intimate embrace lying down, soft warm bedroom light, tasteful silhouette, cinematic, romantic mood</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 02 -->
+  <section class="pose" id="p2">
+    <div class="head">
+      <span class="num">02</span>
+      <span class="th-name">ท่าฝ่ายหญิงอยู่บน</span>
+      <span class="en-name">Cowgirl / On Top</span>
+      <span class="tags"><span class="tag">หันหน้า</span><span class="tag">ครองจังหวะ</span></span>
+    </div>
+    <div class="grid">
+      <div>
+        <div class="lang th"><div class="label">ไทย</div>
+          <p>ฝ่ายหนึ่งนอนหงาย อีกฝ่ายคร่อมอยู่ด้านบนในท่านั่ง หันหน้าเข้าหากัน ฝ่ายบนเป็นผู้กำหนดจังหวะและความเร็ว มือของฝ่ายล่างมักประคองสะโพกหรือเอว เป็นท่าที่ให้ภาพ "ผู้ครองสถานการณ์" ชัดเจน เหมาะกับฉากที่ตัวละครฝ่ายบนมั่นใจหรือกำลังนำ</p>
+        </div>
+        <div class="lang en"><div class="label">English</div>
+          <p>One partner lies back while the other straddles them upright, facing each other. The one on top sets the pace and rhythm; the partner below often guides their hips or waist. A pose that visually signals control — ideal when the upper character is confident or taking the lead.</p>
+        </div>
+        <div class="notes"><h4>โน้ตสำหรับเขียน</h4><ul>
+          <li><b>มุมมอง:</b> เล่นกับการสลับอำนาจ ใครมองขึ้น ใครมองลง</li>
+          <li><b>สัมผัส:</b> มือที่ไล่จากเอวขึ้นแผ่นหลัง การโค้งตัว</li>
+          <li><b>อารมณ์:</b> ความกล้า ความมั่นใจ การยั่วล้อ</li>
+        </ul></div>
+      </div>
+      <div class="slot">
+        <div class="frame"><img alt="pose 02"><span>วางรูปท่า 02 ที่นี่</span></div>
+        <div class="prompt"><b>ComfyUI:</b> intimate couple, one seated upright above the other, facing, dim candlelit room, sensual cinematic lighting, artistic silhouette</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 03 -->
+  <section class="pose" id="p3">
+    <div class="head">
+      <span class="num">03</span>
+      <span class="th-name">ท่าหันหลังอยู่บน</span>
+      <span class="en-name">Reverse Cowgirl</span>
+      <span class="tags"><span class="tag">หันหลัง</span><span class="tag">มุมมองแผ่นหลัง</span></span>
+    </div>
+    <div class="grid">
+      <div>
+        <div class="lang th"><div class="label">ไทย</div>
+          <p>คล้ายท่าที่ 02 แต่ฝ่ายบนหันหลังให้ฝ่ายล่าง ฝ่ายล่างจะเห็นแผ่นหลัง เส้นโค้งสะโพก และการเคลื่อนไหวจากด้านหลัง ลดการสบตาแต่เพิ่มความรู้สึก "เฝ้ามอง" เหมาะกับฉากที่ต้องการความเร้าทางสายตาโดยไม่ต้องเปิดเผยอารมณ์บนใบหน้า</p>
+        </div>
+        <div class="lang en"><div class="label">English</div>
+          <p>Like pose 02 but the upper partner faces away. The one below sees the back, the curve of the hips, and the motion from behind. Eye contact is removed in favor of a "watching" intimacy — useful for visual tension when you want to hide a character's facial emotion.</p>
+        </div>
+        <div class="notes"><h4>โน้ตสำหรับเขียน</h4><ul>
+          <li><b>มุมมอง:</b> เหมาะกับ POV ฝ่ายล่างที่จ้องแผ่นหลัง</li>
+          <li><b>สัมผัส:</b> เส้นกระดูกสันหลัง ผมที่ตกลงด้านหลัง</li>
+          <li><b>อารมณ์:</b> ความลึกลับ ระยะห่างที่ยั่วยวน</li>
+        </ul></div>
+      </div>
+      <div class="slot">
+        <div class="frame"><img alt="pose 03"><span>วางรูปท่า 03 ที่นี่</span></div>
+        <div class="prompt"><b>ComfyUI:</b> back view of seated figure, graceful spine curve, warm rim light, artistic nude silhouette, cinematic shadow</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 04 -->
+  <section class="pose" id="p4">
+    <div class="head">
+      <span class="num">04</span>
+      <span class="th-name">ท่าเข้าจากด้านหลัง</span>
+      <span class="en-name">Doggy / Rear Entry</span>
+      <span class="tags"><span class="tag">หันหลัง</span><span class="tag">เร่าร้อน</span></span>
+    </div>
+    <div class="grid">
+      <div>
+        <div class="lang th"><div class="label">ไทย</div>
+          <p>ฝ่ายหนึ่งคุกเข่าหรือก้มตัวลง อีกฝ่ายอยู่ด้านหลัง มือจับสะโพกหรือเอว เป็นท่าที่ให้พลังและจังหวะเร็ว ลดการสบตาแต่เพิ่มความดิบ มักใช้ในช่วงพีคของฉาก หรือฉากที่อารมณ์พลุ่งพล่านจนไม่เน้นความอ่อนหวาน</p>
+        </div>
+        <div class="lang en"><div class="label">English</div>
+          <p>One partner kneels or leans forward while the other takes position behind, hands on hips or waist. A powerful, fast-paced pose — less eye contact, more rawness. Often used at a scene's climax or in moments where passion overrides tenderness.</p>
+        </div>
+        <div class="notes"><h4>โน้ตสำหรับเขียน</h4><ul>
+          <li><b>มุมมอง:</b> เล่าผ่านเสียง ลมหายใจ และการเกร็งของกล้ามเนื้อ</li>
+          <li><b>สัมผัส:</b> นิ้วที่กดลงสะโพก ผ้าปูที่ขยุ้ม</li>
+          <li><b>อารมณ์:</b> ความหิวกระหาย การปลดปล่อย</li>
+        </ul></div>
+      </div>
+      <div class="slot">
+        <div class="frame"><img alt="pose 04"><span>วางรูปท่า 04 ที่นี่</span></div>
+        <div class="prompt"><b>ComfyUI:</b> couple intimate rear embrace silhouette, low warm lighting, dramatic shadow, tasteful artistic, cinematic mood</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 05 -->
+  <section class="pose" id="p5">
+    <div class="head">
+      <span class="num">05</span>
+      <span class="th-name">ท่านอนตะแคงกอด</span>
+      <span class="en-name">Spooning</span>
+      <span class="tags"><span class="tag">หันหลัง</span><span class="tag">อ่อนโยน</span><span class="tag">ขี้เกียจ</span></span>
+    </div>
+    <div class="grid">
+      <div>
+        <div class="lang th"><div class="label">ไทย</div>
+          <p>ทั้งคู่นอนตะแคงข้างเดียวกัน ฝ่ายหลังโอบกอดฝ่ายหน้าแนบชิดเหมือนช้อนซ้อนกัน เป็นท่าที่นุ่มนวล ใกล้ชิด และเชื่องช้า มือฝ่ายหลังอิสระจะลูบไล้ด้านหน้าได้ เหมาะกับฉากตื่นเช้า ฉากเอื่อยเฉื่อย หรือช่วงเริ่มต้นที่ค่อยๆ ก่อตัว</p>
+        </div>
+        <div class="lang en"><div class="label">English</div>
+          <p>Both lie on the same side, the rear partner wrapped around the front like nested spoons. A soft, close, unhurried pose; the rear partner's free hand can roam the front. Perfect for lazy mornings, drowsy scenes, or a slow build-up.</p>
+        </div>
+        <div class="notes"><h4>โน้ตสำหรับเขียน</h4><ul>
+          <li><b>มุมมอง:</b> ลมหายใจรดต้นคอ เสียงกระซิบข้างหู</li>
+          <li><b>สัมผัส:</b> ความอบอุ่นของผิวที่แนบกันทั้งแนว</li>
+          <li><b>อารมณ์:</b> ความปลอดภัย ความเป็นเจ้าของอย่างอ่อนโยน</li>
+        </ul></div>
+      </div>
+      <div class="slot">
+        <div class="frame"><img alt="pose 05"><span>วางรูปท่า 05 ที่นี่</span></div>
+        <div class="prompt"><b>ComfyUI:</b> couple spooning under sheets, morning light through curtains, tender intimate mood, soft focus, cinematic warmth</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 06 -->
+  <section class="pose" id="p6">
+    <div class="head">
+      <span class="num">06</span>
+      <span class="th-name">ท่าดอกบัว</span>
+      <span class="en-name">Lotus / Seated Facing</span>
+      <span class="tags"><span class="tag">หันหน้า</span><span class="tag">ใกล้ชิดสูง</span></span>
+    </div>
+    <div class="grid">
+      <div>
+        <div class="lang th"><div class="label">ไทย</div>
+          <p>ฝ่ายหนึ่งนั่งขัดสมาธิหรือนั่งกับพื้น/เตียง อีกฝ่ายนั่งคร่อมตักหันหน้าเข้าหากัน โอบกอดแนบแน่น เป็นท่าที่ใกล้ชิดที่สุดท่าหนึ่ง เคลื่อนไหวช้าแต่ลึก ใบหน้า หน้าอก และลำตัวแนบกันทั้งหมด เหมาะกับฉากที่เน้นความผูกพันทางใจคู่กับกาย</p>
+        </div>
+        <div class="lang en"><div class="label">English</div>
+          <p>One partner sits cross-legged on the bed or floor; the other straddles their lap, face to face, locked in a close embrace. One of the most intimate poses — slow but deep, with faces, chests, and torsos pressed together. Ideal when emotional and physical bonding merge.</p>
+        </div>
+        <div class="notes"><h4>โน้ตสำหรับเขียน</h4><ul>
+          <li><b>มุมมอง:</b> สบตาในระยะประชิด หน้าผากชนกัน</li>
+          <li><b>สัมผัส:</b> แขนโอบรอบหลัง การโยกตัวเป็นจังหวะเดียวกัน</li>
+          <li><b>อารมณ์:</b> ความเป็นหนึ่งเดียว บทกวีของฉาก</li>
+        </ul></div>
+      </div>
+      <div class="slot">
+        <div class="frame"><img alt="pose 06"><span>วางรูปท่า 06 ที่นี่</span></div>
+        <div class="prompt"><b>ComfyUI:</b> couple seated lotus embrace facing each other, foreheads touching, candlelight, intimate artistic silhouette, warm tones</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 07 -->
+  <section class="pose" id="p7">
+    <div class="head">
+      <span class="num">07</span>
+      <span class="th-name">ท่าขอบเตียง</span>
+      <span class="en-name">Edge of Bed</span>
+      <span class="tags"><span class="tag">ยืน+นอน</span><span class="tag">เปลี่ยนระดับ</span></span>
+    </div>
+    <div class="grid">
+      <div>
+        <div class="lang th"><div class="label">ไทย</div>
+          <p>ฝ่ายหนึ่งนอนหงายให้สะโพกอยู่ริมขอบเตียง อีกฝ่ายยืนหรือคุกเข่าอยู่ที่ปลายเตียง ความต่างระดับทำให้จัดมุมได้หลากหลายและมือฝ่ายยืนเป็นอิสระ เหมาะกับฉากที่เริ่มจากนอกเตียง (เพิ่งเข้าห้อง/ยังแต่งตัวครึ่งตัว) แล้วค่อยพัฒนาต่อ</p>
+        </div>
+        <div class="lang en"><div class="label">English</div>
+          <p>One partner lies back with hips at the bed's edge; the other stands or kneels at the foot. The height difference opens varied angles and frees the standing partner's hands. Great for scenes that begin off the bed — just entered the room, half-dressed — then escalate.</p>
+        </div>
+        <div class="notes"><h4>โน้ตสำหรับเขียน</h4><ul>
+          <li><b>มุมมอง:</b> สายตาที่มองลงมา/มองขึ้นไป สร้างพลวัต</li>
+          <li><b>สัมผัส:</b> ขอบเตียงที่เย็น มือที่ดึงเข้าหา</li>
+          <li><b>อารมณ์:</b> ความเร่งรีบ ความตั้งใจ การนำ</li>
+        </ul></div>
+      </div>
+      <div class="slot">
+        <div class="frame"><img alt="pose 07"><span>วางรูปท่า 07 ที่นี่</span></div>
+        <div class="prompt"><b>ComfyUI:</b> bedroom scene, figure at edge of bed, standing partner, dramatic side lighting, cinematic tasteful silhouette</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 08 -->
+  <section class="pose" id="p8">
+    <div class="head">
+      <span class="num">08</span>
+      <span class="th-name">ท่าพิงกำแพง</span>
+      <span class="en-name">Against the Wall</span>
+      <span class="tags"><span class="tag">ยืน</span><span class="tag">เร่งร้อน</span><span class="tag">ใช้พลัง</span></span>
+    </div>
+    <div class="grid">
+      <div>
+        <div class="lang th"><div class="label">ไทย</div>
+          <p>ฝ่ายหนึ่งถูกพิง/ยกให้แนบกับกำแพง อีกฝ่ายประคองด้วยแรงขาและสะโพก เป็นท่าที่ต้องใช้กำลังและสื่อถึงความปรารถนาที่อดใจไม่ไหว มักเกิดในฉาก "ยังไปไม่ถึงเตียง" เช่น หลังเปิดประตูเข้าบ้าน เหมาะกับจังหวะที่เรื่องราวพุ่งทะยาน</p>
+        </div>
+        <div class="lang en"><div class="label">English</div>
+          <p>One partner is pressed or lifted against the wall while the other supports them with legs and hips. A pose demanding strength, signaling desire too urgent to wait — it often happens "before they reach the bed," like right after the door closes. Suited to a surging, breathless beat.</p>
+        </div>
+        <div class="notes"><h4>โน้ตสำหรับเขียน</h4><ul>
+          <li><b>มุมมอง:</b> ความขรุขระของผนัง เสียงหายใจสะท้อนห้อง</li>
+          <li><b>สัมผัส:</b> ขาที่เกี่ยวรอบเอว มือที่ยันกำแพง</li>
+          <li><b>อารมณ์:</b> ความใจร้อน ความหลงใหลฉับพลัน</li>
+        </ul></div>
+      </div>
+      <div class="slot">
+        <div class="frame"><img alt="pose 08"><span>วางรูปท่า 08 ที่นี่</span></div>
+        <div class="prompt"><b>ComfyUI:</b> couple embracing against wall, one lifted, dramatic noir lighting, urgent passion, artistic silhouette, cinematic</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 09 -->
+  <section class="pose" id="p9">
+    <div class="head">
+      <span class="num">09</span>
+      <span class="th-name">ท่านั่งบนตัก</span>
+      <span class="en-name">Lap Sit / On the Chair</span>
+      <span class="tags"><span class="tag">นั่ง</span><span class="tag">ควบคุมจังหวะ</span></span>
+    </div>
+    <div class="grid">
+      <div>
+        <div class="lang th"><div class="label">ไทย</div>
+          <p>ฝ่ายหนึ่งนั่งบนเก้าอี้/ขอบโซฟา อีกฝ่ายนั่งบนตักหันหน้าหรือหันหลังก็ได้ ฝ่ายบนกำหนดจังหวะ ฝ่ายล่างมือว่างไว้โอบกอดหรือลูบไล้ เหมาะกับฉากในห้องทำงาน ห้องนั่งเล่น หรือฉากที่ยังสวมเสื้อผ้าบางส่วน เพิ่มบรรยากาศ "แอบ/ลักลอบ"</p>
+        </div>
+        <div class="lang en"><div class="label">English</div>
+          <p>One partner sits on a chair or sofa edge; the other settles onto their lap, facing toward or away. The upper partner controls the rhythm while the lower's hands are free to hold and caress. Fits office or living-room scenes, or partly-clothed moments — adding a furtive, illicit air.</p>
+        </div>
+        <div class="notes"><h4>โน้ตสำหรับเขียน</h4><ul>
+          <li><b>มุมมอง:</b> เก้าอี้ที่ส่งเสียงเอี๊ยด แสงจากจอ/หน้าต่าง</li>
+          <li><b>สัมผัส:</b> เนื้อผ้าเสื้อที่ยังไม่ถอด การโยกตัว</li>
+          <li><b>อารมณ์:</b> ความเสี่ยงที่จะถูกจับได้ ความสนุก</li>
+        </ul></div>
+      </div>
+      <div class="slot">
+        <div class="frame"><img alt="pose 09"><span>วางรูปท่า 09 ที่นี่</span></div>
+        <div class="prompt"><b>ComfyUI:</b> intimate couple on chair, one on lap, office or living room, moody window light, tasteful cinematic silhouette</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 -->
+  <section class="pose" id="p10">
+    <div class="head">
+      <span class="num">10</span>
+      <span class="th-name">ท่ายกขาพาดบ่า</span>
+      <span class="en-name">Legs on Shoulders</span>
+      <span class="tags"><span class="tag">หันหน้า</span><span class="tag">ลึก</span></span>
+    </div>
+    <div class="grid">
+      <div>
+        <div class="lang th"><div class="label">ไทย</div>
+          <p>ต่อยอดจากท่ามิชชันนารี โดยฝ่ายล่างยกขาขึ้นพาดบ่าหรือยันอกฝ่ายบน เปลี่ยนมุมให้ลึกและเข้มข้นขึ้น ยังคงสบตากันได้ เป็นท่าที่ใช้ยกระดับความเร้าจากท่าพื้นฐาน เหมาะวางไว้ช่วงกลาง-ปลายของฉากที่กำลังไต่ระดับ</p>
+        </div>
+        <div class="lang en"><div class="label">English</div>
+          <p>An escalation of missionary: the lower partner raises their legs onto the other's shoulders or braces against their chest, shifting the angle deeper and more intense while eye contact remains possible. A pose used to raise the heat from the basics — place it mid-to-late in a rising scene.</p>
+        </div>
+        <div class="notes"><h4>โน้ตสำหรับเขียน</h4><ul>
+          <li><b>มุมมอง:</b> เหมาะเป็น "จุดเปลี่ยนจังหวะ" ในฉาก</li>
+          <li><b>สัมผัส:</b> น่องที่พาดบ่า มือที่กดต้นขา</li>
+          <li><b>อารมณ์:</b> การยอมจำนน ความเข้มข้นที่ทวีขึ้น</li>
+        </ul></div>
+      </div>
+      <div class="slot">
+        <div class="frame"><img alt="pose 10"><span>วางรูปท่า 10 ที่นี่</span></div>
+        <div class="prompt"><b>ComfyUI:</b> intimate couple, deep embrace lying, raised legs, dim red-warm light, artistic silhouette, cinematic intensity</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 11 -->
+  <section class="pose" id="p11">
+    <div class="head">
+      <span class="num">11</span>
+      <span class="th-name">ท่าตะแคงหันหน้า</span>
+      <span class="en-name">Side by Side, Facing</span>
+      <span class="tags"><span class="tag">ตะแคง</span><span class="tag">เท่าเทียม</span><span class="tag">อ่อนหวาน</span></span>
+    </div>
+    <div class="grid">
+      <div>
+        <div class="lang th"><div class="label">ไทย</div>
+          <p>ทั้งคู่นอนตะแคงหันหน้าเข้าหากัน ขาสอดประสาน ระดับสายตาเท่ากัน เป็นท่าที่เท่าเทียม นุ่มนวล และเหมาะกับบทสนทนากลางฉาก เคลื่อนไหวไม่หวือหวาแต่ใกล้ชิดมาก เหมาะกับฉากหลังพีค หรือช่วงทอดอารมณ์ก่อนหลับ</p>
+        </div>
+        <div class="lang en"><div class="label">English</div>
+          <p>Both lie on their sides facing each other, legs interlaced, eyes level. An equal, gentle pose well suited to mid-scene dialogue — undramatic in motion yet very close. Lovely for the afterglow or the drift toward sleep.</p>
+        </div>
+        <div class="notes"><h4>โน้ตสำหรับเขียน</h4><ul>
+          <li><b>มุมมอง:</b> สบตาในระดับเดียวกัน เหมาะแทรกบทพูด</li>
+          <li><b>สัมผัส:</b> ขาที่เกี่ยวกัน ปลายนิ้วที่ไล่ตามใบหน้า</li>
+          <li><b>อารมณ์:</b> ความเสมอภาค ความอบอุ่นที่ผ่อนคลาย</li>
+        </ul></div>
+      </div>
+      <div class="slot">
+        <div class="frame"><img alt="pose 11"><span>วางรูปท่า 11 ที่นี่</span></div>
+        <div class="prompt"><b>ComfyUI:</b> couple lying on sides facing, legs intertwined, soft dawn light, tender mood, gentle cinematic tones</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 12 -->
+  <section class="pose" id="p12">
+    <div class="head">
+      <span class="num">12</span>
+      <span class="th-name">ท่ายืนโอบ</span>
+      <span class="en-name">Standing Embrace</span>
+      <span class="tags"><span class="tag">ยืน</span><span class="tag">เริ่มต้นฉาก</span></span>
+    </div>
+    <div class="grid">
+      <div>
+        <div class="lang th"><div class="label">ไทย</div>
+          <p>ทั้งคู่ยืนแนบชิดหันหน้าเข้าหากัน มือโอบเอว/แผ่นหลัง มักเป็นท่า "เปิดฉาก" ก่อนเคลื่อนไปเตียงหรือกำแพง การยืนทำให้ความสูงต่างกันเด่นชัด เหมาะใช้บรรยายจังหวะแรกของการสัมผัส การถอดเสื้อผ้า และการนำพากันไปยังจุดถัดไป</p>
+        </div>
+        <div class="lang en"><div class="label">English</div>
+          <p>Both stand pressed together, face to face, hands at waist and back. Often an "opening" pose before moving to bed or wall. Standing makes any height difference vivid — ideal for narrating the first touches, the undressing, and leading one another toward what comes next.</p>
+        </div>
+        <div class="notes"><h4>โน้ตสำหรับเขียน</h4><ul>
+          <li><b>มุมมอง:</b> ระยะห่างที่หดลงทีละนิ้ว การหายใจที่ถี่ขึ้น</li>
+          <li><b>สัมผัส:</b> ปลายนิ้วที่ปลดกระดุม ผิวที่เพิ่งสัมผัสครั้งแรก</li>
+          <li><b>อารมณ์:</b> ความตึงเครียดก่อนระเบิด การก่อตัวของความต้องการ</li>
+        </ul></div>
+      </div>
+      <div class="slot">
+        <div class="frame"><img alt="pose 12"><span>วางรูปท่า 12 ที่นี่</span></div>
+        <div class="prompt"><b>ComfyUI:</b> couple standing embrace face to face, backlit window, romantic tension, tasteful silhouette, cinematic golden hour</div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<div class="howto">
+  <details>
+    <summary>วิธีใส่รูปในแต่ละท่า (ลากวาง)</summary>
+    <p style="color:var(--muted);font-size:.9rem">
+      1) เจนรูปด้วย ComfyUI (ใช้ prompt ใต้แต่ละช่องเป็นตัวตั้งต้น แล้วเติมรายละเอียดตัวละคร/ฉากของคุณ)<br>
+      2) <b>ลากไฟล์รูป</b> มาวางทับช่องของท่านั้นได้เลย — หรือ <b>คลิกที่ช่อง</b> เพื่อเลือกไฟล์<br>
+      3) รูปจะถูกจำไว้ในเครื่อง (<code>localStorage</code>) เปิดไฟล์ใหม่ก็ยังอยู่ • อยากเปลี่ยนรูปคลิกวางทับใหม่ได้ • เอาออกกดปุ่ม <code>ลบรูป</code> มุมขวาบนของรูป<br>
+      <span style="opacity:.7">หมายเหตุ: รูปเก็บแบบ data URL ในเบราว์เซอร์ตัวนี้เท่านั้น ไม่ได้เขียนลงไฟล์ <code>.png</code> จริง — ถ้าจะแชร์ไฟล์ HTML พร้อมรูป ค่อยฝังเป็นไฟล์จริงทีหลังได้</span>
+    </p>
+  </details>
+</div>
+
+<footer>
+  คู่มืออ้างอิงสำหรับงานเขียนนิยายผู้ใหญ่ (18+) • ตัวละครทุกตัวเป็นผู้ใหญ่ที่ยินยอม • ใช้เพื่อการเล่าเรื่องเชิงสร้างสรรค์
+</footer>
+
+<script>
+(function(){
+  "use strict";
+  var STORE_KEY = 'ref_post18_images';
+  var saved = {};
+  try { saved = JSON.parse(localStorage.getItem(STORE_KEY) || '{}') || {}; }
+  catch(e){ saved = {}; }
+
+  function persist(){
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(saved)); }
+    catch(e){ console.warn('เก็บรูปลง localStorage ไม่ได้ (อาจเต็มโควต้า ~5MB) — ลองลดขนาดรูป', e); }
+  }
+  function keyOf(frame){
+    var sec = frame.closest('section.pose');
+    return sec ? sec.id : null;
+  }
+  function setImage(frame, dataUrl, store){
+    var img = frame.querySelector('img');
+    img.src = dataUrl;
+    frame.classList.add('has-img');
+    if (store){ var k = keyOf(frame); if (k){ saved[k] = dataUrl; persist(); } }
+  }
+  function clearImage(frame){
+    var img = frame.querySelector('img');
+    img.removeAttribute('src');
+    frame.classList.remove('has-img');
+    var k = keyOf(frame); if (k){ delete saved[k]; persist(); }
+  }
+  function loadFile(frame, file){
+    if (!file || file.type.indexOf('image/') !== 0) return;
+    var reader = new FileReader();
+    reader.onload = function(e){ setImage(frame, e.target.result, true); };
+    reader.readAsDataURL(file);
+  }
+
+  // hidden file input shared by all frames (click-to-browse)
+  var input = document.createElement('input');
+  input.type = 'file'; input.accept = 'image/*'; input.style.display = 'none';
+  document.body.appendChild(input);
+  var activeFrame = null;
+  input.addEventListener('change', function(){
+    if (activeFrame && input.files[0]) loadFile(activeFrame, input.files[0]);
+    input.value = '';
+  });
+
+  document.querySelectorAll('.frame').forEach(function(frame){
+    // restore previously saved image
+    var k = keyOf(frame);
+    if (k && saved[k]) setImage(frame, saved[k], false);
+
+    // remove button
+    var btn = document.createElement('button');
+    btn.className = 'remove-btn'; btn.type = 'button'; btn.textContent = 'ลบรูป';
+    btn.addEventListener('click', function(e){ e.stopPropagation(); clearImage(frame); });
+    frame.appendChild(btn);
+
+    // click to browse
+    frame.addEventListener('click', function(){ activeFrame = frame; input.click(); });
+
+    // drag & drop
+    frame.addEventListener('dragover', function(e){ e.preventDefault(); frame.classList.add('drag-over'); });
+    frame.addEventListener('dragleave', function(){ frame.classList.remove('drag-over'); });
+    frame.addEventListener('drop', function(e){
+      e.preventDefault();
+      frame.classList.remove('drag-over');
+      loadFile(frame, e.dataTransfer.files[0]);
+    });
+  });
+
+  // stop the browser from opening a file dropped outside a frame
+  ['dragover','drop'].forEach(function(ev){
+    document.addEventListener(ev, function(e){
+      if (!e.target.closest('.frame')) e.preventDefault();
+    });
+  });
+})();
+</script>
+</body>
+</html>

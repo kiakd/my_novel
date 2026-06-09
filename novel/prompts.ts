@@ -50,6 +50,8 @@ export interface Character {
   pronoun_other?: string;
   speech_tone?: string;
   curse_allowed?: boolean;
+  voiceExamples?: string;    // ตัวอย่างบทพูด (few-shot) — รักษาน้ำเสียงตัวละคร
+  defaultOutfit?: string;    // ชุดเริ่มต้น (identity) — ใช้คู่กับกฎ 7/8 กันชุดหลุด
   visual?: CharacterVisual;  // optional — for image gen
 }
 
@@ -76,6 +78,11 @@ export interface NovelContext {
   eventCurrent: string;
   eventOrder?: string[];
   relations?: Relation[];
+  styleGuide?: string;   // ลายเซ็นการเขียน (จาก Story.styleGuide) — render เป็น section ของตัวเอง
+  dontList?: string;     // ทิศทาง/ข้อห้าม (จาก Story.dontList) — กฎที่โมเดลต้องทำตามเสมอ
+  vocabPalette?: string; // คำเฉพาะ/คำที่ให้ใช้ตรงๆ/คำห้ามใช้ (จาก Story.vocabPalette) — บังคับคำศัพท์
+  continuity?: string;   // สถานะ canonical ของตัวละคร ณ บทปัจจุบัน (จาก arc beats — continuityBrief) กันชุด/สถานะหลุด
+  narrator?: string;     // โหมด "นิยายเต็ม": ชื่อตัวละครที่เล่าด้วยมุมมองบุคคลที่ 1 — AI เขียนทุกตัวละคร ไม่มี {{user}}
   mode: Mode;
 }
 
@@ -87,7 +94,9 @@ const BASE_RULES = `คุณคือนักเขียนนิยายโ
 3. ห้ามทำตัวเป็น AI ห้าม disclaimer ห้ามบอกว่าเล่น roleplay
 4. inner thought ใส่ในวงเล็บแยกย่อหน้าของตัวเอง ห้ามใส่ใน quote ของบทพูด
 5. คำสั่งใน [ooc:...] = กฎฟิสิกส์ของฉาก ทุกการกระทำต้องสอดคล้อง
-6. ตัวละครทุกตัวอายุ 22 ปีขึ้นไป`;
+6. ตัวละครทุกตัวอายุ 22 ปีขึ้นไป
+7. แยก identity กับ state: <apr> บอกแค่ "ค่าตั้งต้น" (หน้า/ผม/รูปร่าง/ชุดเริ่มต้น) — แต่ "สถานะ ณ ตอนนี้" (ชุดที่ใส่/ถอดอยู่, ตำแหน่ง, สิ่งที่เพิ่งเกิด) ให้ยึดจาก section "สถานะปัจจุบัน" และ "เนื้อเรื่องก่อนหน้า" เสมอ ถ้าฉากก่อนหน้าถอด/เปลี่ยนชุดหรือย้ายสถานที่ไปแล้ว ห้ามสวมกลับ/รีเซ็ตเองโดยไม่มีเหตุในเรื่อง
+8. ความต่อเนื่องของเครื่องแต่งกาย/ของใช้: ชุดมี "ความคงอยู่" — ถ้าไม่มีเหตุการณ์ในเรื่องทำให้เปลี่ยน ให้คงชุดเดิมข้ามช่วงเวลา/ฉาก (เช้าใส่ชุด A → เย็นยังเป็นชุด A). ถ้ามีเหตุการณ์ทำให้ชุดเปลี่ยน/หลุด/ขาด/ถอดบางส่วน ให้จำ "สภาพล่าสุดแบบเจาะจงรายชิ้น" (เช่น เสื้อนอกหายไป เหลือชั้นในท่อนบน ท่อนล่างยังครบ) แล้วเขียนต่อให้ตรงกับสภาพนั้น ห้ามคืนชุดเต็มเองโดยไม่มีเหตุ`;
 
 const MODE_NOVEL = `=== Mode: นิยาย (prose ยาว) ===
 - ความยาว: 5-8 ย่อหน้า ประมาณ 1500-2000 ตัวอักษร ห้ามสั้นกว่านี้
@@ -181,17 +190,24 @@ function charXml(c: Character, isProtagonist = false): string {
   </ooc>`
     : '';
 
+  const outfitLine = c.defaultOutfit?.trim()
+    ? `\n  <outfit_default>${c.defaultOutfit.trim()}</outfit_default>`
+    : '';
+  const voiceBlock = c.voiceExamples?.trim()
+    ? `\n  <voice>\n${c.voiceExamples.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 6).map((l) => `    ${l}`).join('\n')}\n  </voice>`
+    : '';
+
   return `<${tag} ${attrs.join(' ')}>
-  <apr>${c.appearance}</apr>
+  <apr>${c.appearance}</apr>${outfitLine}
   <prf>
     <bio>${c.bio}</bio>${c.skill ? `\n    <skill>${c.skill}</skill>` : ''}
   </prf>
   <mnd>${c.mindset}</mnd>
-  <behav>${c.behavior}</behav>${speechBlock}
+  <behav>${c.behavior}</behav>${speechBlock}${voiceBlock}
 </${tag}>`;
 }
 
-function relationsXml(rels?: Relation[]): string {
+function relationsXml(rels?: Relation[], solo = false): string {
   if (!rels || rels.length === 0) return '';
   const items = rels.map((r) => {
     const flagStr = r.flags
@@ -199,6 +215,10 @@ function relationsXml(rels?: Relation[]): string {
           .map(([k, v]) => `${k}=${typeof v === 'string' ? `"${v}"` : v}`)
           .join(', ')
       : '';
+    // โหมดนิยายเต็ม: relation เป็นตัวละคร↔ตัวละคร (ด้วยชื่อ) ไม่ใช่ {{user}}=...
+    if (solo) {
+      return `  <rel>${r.charName} ↔ ${r.toUser}${r.feeling ? `: ${r.feeling}` : ''}${flagStr ? ` (${flagStr})` : ''}</rel>`;
+    }
     return `  <rel char="${r.charName}">
     {{user}} = "${r.toUser}"${r.feeling ? `,\n    ความรู้สึก = "${r.feeling}"` : ''}${flagStr ? `,\n    ${flagStr}` : ''}
   </rel>`;
@@ -211,9 +231,20 @@ function eventOrderBlock(order?: string[]): string {
   return `\n=== ลำดับเหตุการณ์ที่ผ่านมา ===\n${order.map((e, i) => `${i + 1}. ${e}`).join('\n')}`;
 }
 
+function novelFrame(narrator: string): string {
+  return `=== โหมด: นิยายเต็ม (มุมมองบุคคลที่หนึ่ง) ===
+- เรื่องนี้เป็น "นิยาย" ไม่ใช่แชตโรลเพลย์ — คุณคือผู้เขียน เขียน prose เล่าทั้งเรื่องเอง
+- เล่าจากมุมมองบุคคลที่หนึ่งของ "${narrator}" (ใช้สรรพนามตามที่กำหนดในตัวละคร) — ความคิด/การกระทำของ ${narrator} เขียนได้เต็มที่
+- ตัวละครอื่นทุกตัว คุณเขียนการกระทำ/คำพูด/ปฏิกิริยาให้ได้ทั้งหมด
+- ไม่มี "{{user}}"/ผู้เล่นในโหมดนี้ — กฎเหล็กข้อ 2 (เรื่อง {{user}}) ไม่นำมาใช้`;
+}
+
 export function assembleSystemPrompt(ctx: NovelContext): string {
-  const parts = [
-    BASE_RULES,
+  const parts: string[] = [BASE_RULES];
+  if (ctx.narrator && ctx.narrator.trim()) {
+    parts.push('', novelFrame(ctx.narrator.trim()));
+  }
+  parts.push(
     '',
     modeBlock(ctx.mode),
     '',
@@ -222,7 +253,7 @@ export function assembleSystemPrompt(ctx: NovelContext): string {
     '',
     '=== ตัวเอก ===',
     charXml(ctx.protagonist, true),
-  ];
+  );
 
   if (ctx.supporting && ctx.supporting.length > 0) {
     parts.push('', '=== ตัวละครสมทบ ===');
@@ -230,11 +261,28 @@ export function assembleSystemPrompt(ctx: NovelContext): string {
   }
 
   if (ctx.relations && ctx.relations.length > 0) {
-    parts.push('', '=== ความสัมพันธ์ ===', relationsXml(ctx.relations));
+    parts.push('', '=== ความสัมพันธ์ ===', relationsXml(ctx.relations, !!ctx.narrator));
+  }
+
+  // ลายเซ็นการเขียน + ทิศทาง/ข้อห้าม — header มีคำว่า "Style Guide" / "Do / Don't" ให้ logger ตรวจเจอ
+  if (ctx.styleGuide && ctx.styleGuide.trim()) {
+    parts.push('', '=== Style Guide — ลายเซ็นการเขียน (รักษาสไตล์นี้เสมอ) ===', ctx.styleGuide.trim());
+  }
+  if (ctx.dontList && ctx.dontList.trim()) {
+    parts.push('', "=== Do / Don't — ทิศทางเรื่อง (กฎที่ต้องทำตามเสมอ) ===", ctx.dontList.trim());
+  }
+  // Vocabulary Palette — คำเฉพาะ/คำที่ให้ใช้ตรงๆ/คำห้ามใช้ (mirror ตัวเก่า novel.html) บังคับคำศัพท์ในงานเขียน
+  if (ctx.vocabPalette && ctx.vocabPalette.trim()) {
+    parts.push('', '=== Vocabulary Palette — คำเฉพาะ/คำห้ามใช้ (บังคับใช้คำตามนี้) ===', ctx.vocabPalette.trim().slice(0, 800));
   }
 
   if (ctx.eventOrder && ctx.eventOrder.length > 0) {
     parts.push(eventOrderBlock(ctx.eventOrder));
+  }
+
+  // สถานะ canonical ณ บทปัจจุบัน — วางใกล้ eventCurrent ที่สุด (freshest) ให้โมเดลยึดก่อนเขียน
+  if (ctx.continuity && ctx.continuity.trim()) {
+    parts.push('', '=== สถานะปัจจุบัน (canonical — ตัวละครต้องคงตามนี้ ห้ามขัดแย้ง/ย้อนกลับ) ===', ctx.continuity.trim());
   }
 
   parts.push('', '=== เหตุการณ์ปัจจุบันที่ต้องเขียน ===', ctx.eventCurrent);

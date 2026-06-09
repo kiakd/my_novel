@@ -2,6 +2,7 @@
 // ใช้เป็น "seed" ตอน DB ว่างเท่านั้น (ดู seed.ts ที่ map → Story shape)
 // types ที่นี่เป็นของ mock เอง (ไม่ใช่โมเดลจริงใน types.ts)
 import type { ColorKey } from './theme';
+import type { ArcBeat, RelBeat, EventImportance } from './types';
 
 interface Character {
   id: string; name: string; role: string; color: ColorKey; initial: string;
@@ -112,6 +113,58 @@ export const EVENTS: TimelineEvent[] = [
   { when: 'Week 3', title: 'Embers rekindled', detail: 'Tam restores the old hearth-lantern; hope returns.', chapter: 'c4', color: 'sun' },
   { when: 'Week 5', title: 'The Warden wakes', detail: 'The ash runs deepest; ancient stone stirs.', chapter: 'c5', color: 'slate' },
 ];
+
+// ---- Timeline digest: จุดเปลี่ยนรายบท (ch = เลขบท 1-based ตามลำดับ CHAPTERS) ----
+// "introduced by" = บทแรกที่ตัวละครมี beat → ค่อยๆ โผล่ทีละบท
+export const ARCS: Record<string, ArcBeat[]> = {
+  kaelen: [
+    { ch: 1, kind: 'status', label: 'Outcast', why: 'The cinder-monks turn on her when her flame refuses to die.' },
+    { ch: 1, kind: 'skill', label: 'Ember-shaping' },
+    { ch: 1, kind: 'look', label: 'Patched travel coat', sub: 'outfit' },
+    { ch: 2, kind: 'mindset', label: 'Wary hope', why: 'Learning to lean on Mira out on the Reach.' },
+    { ch: 3, kind: 'mindset', label: 'Defiant', why: "Refuses Vorst's soot-ink bargain." },
+    { ch: 5, kind: 'milestone', label: 'Wakes the Warden', why: 'Pays the price to stir the ancient stone.' },
+  ],
+  mira: [
+    { ch: 2, kind: 'skill', label: 'Ley-line reading' },
+    { ch: 2, kind: 'status', label: 'Guide' },
+    { ch: 3, kind: 'mindset', label: 'Torn', why: "Vorst's deal closes around her brother." },
+    { ch: 4, kind: 'look', label: 'Map-pocket vest', sub: 'outfit' },
+  ],
+  vorst: [
+    { ch: 3, kind: 'status', label: 'Ash Baron' },
+    { ch: 3, kind: 'milestone', label: 'Seals the soot-ink bargain', why: 'Binds one of the company by contract.' },
+    { ch: 3, kind: 'look', label: 'Lacquered black coat', sub: 'outfit' },
+  ],
+  sela: [
+    { ch: 4, kind: 'status', label: 'Hearthkeeper' },
+    { ch: 4, kind: 'skill', label: 'Hearth-binding' },
+  ],
+  tam: [
+    { ch: 3, kind: 'status', label: 'Bound by debt', why: "Vorst's bargain falls on his shoulders." },
+    { ch: 4, kind: 'skill', label: 'Tinkering' },
+    { ch: 4, kind: 'milestone', label: 'Restores the hearth-lantern', why: 'Hope flickers back to life.' },
+  ],
+  warden: [
+    { ch: 5, kind: 'status', label: 'Waking' },
+    { ch: 5, kind: 'milestone', label: 'Stirs awake', why: 'Rouses when the ash runs deepest.' },
+  ],
+};
+
+// จุดเปลี่ยนความสัมพันธ์รายบท (อ้างอิง RELATIONS[].id)
+export const REL_BEATS: Record<string, RelBeat[]> = {
+  r1: [{ ch: 2, type: 'allies', intensity: 40 }, { ch: 4, type: 'allies', intensity: 72 }],
+  r2: [{ ch: 3, type: 'rivals', intensity: -55 }],
+  r3: [{ ch: 4, type: 'mentored by', intensity: 50 }],
+  r4: [{ ch: 3, type: 'sibling', intensity: 65 }],
+  r5: [{ ch: 3, type: 'employs', intensity: -30 }],
+  r6: [{ ch: 4, type: 'keeps watch', intensity: 35 }],
+};
+
+// ความสำคัญของเหตุการณ์ (อ้างอิง chapter id)
+export const EVENT_IMP: Record<string, EventImportance> = {
+  c1: 'pivotal', c2: 'minor', c3: 'major', c4: 'minor', c5: 'pivotal',
+};
 
 export const RELATIONS: Relation[] = [
   { id: 'r1', from: 'kaelen', to: 'mira', type: 'allies', feeling: 'Wary trust warming into something steadier.' },

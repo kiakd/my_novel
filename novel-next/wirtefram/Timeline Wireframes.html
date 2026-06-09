@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>novel · Timeline — Chapter digest</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Kalam:wght@300;400;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --paper:#f7f6f3;
+    --card:#fcfbf9;
+    --ink:#23211e;
+    --ink-soft:#6c675f;
+    --line:#2a2724;
+    --hair:#cbc6bd;
+    /* single semantic accent: "added this chapter" */
+    --add:oklch(0.55 0.12 150);
+    --add-tint:oklch(0.95 0.035 150);
+    --add-line:oklch(0.72 0.11 150);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{background:var(--paper);color:var(--ink);font-family:'Kalam',cursive;font-weight:400;-webkit-font-smoothing:antialiased;}
+  .disp{font-family:'Caveat',cursive;}
+  .box{background:var(--card);border:2px solid var(--line);border-radius:255px 14px 225px 16px/16px 225px 14px 255px;}
+  .hatch{background-image:repeating-linear-gradient(45deg,transparent 0 6px,rgba(35,33,30,.10) 6px 7px);}
+  .tag{font-family:'Caveat',cursive;font-size:18px;color:var(--ink-soft);line-height:1;display:inline-block;}
+  /* header */
+  header.app{position:sticky;top:0;z-index:30;background:var(--paper);border-bottom:2px solid var(--line);padding:14px 22px;}
+  .titlerow{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;}
+  .titlerow h1{font-family:'Caveat',cursive;font-weight:700;font-size:30px;margin:0;letter-spacing:.5px;}
+  .titlerow .sub{font-size:14px;color:var(--ink-soft);}
+  main{padding:24px 22px 80px;max-width:1240px;margin:0 auto;}
+  .frame-head{margin-bottom:16px;}
+  .frame-head h2{margin:0 0 3px;font-family:'Caveat',cursive;font-weight:700;font-size:28px;}
+  .frame-head p{margin:0;font-size:14.5px;color:var(--ink-soft);max-width:820px;line-height:1.5;}
+  /* window chrome */
+  .winchrome{padding:10px 12px;border-bottom:2px dashed var(--hair);display:flex;align-items:center;gap:7px;}
+  .winchrome i{width:11px;height:11px;border:2px solid var(--line);border-radius:50%;display:block;}
+  .winchrome .url{margin-left:8px;font-size:12.5px;color:var(--ink-soft);background:var(--paper);border:1.5px solid var(--hair);border-radius:8px;padding:3px 12px;flex:1;max-width:380px;}
+  .pad{padding:18px;}
+  /* chapter select bar */
+  .chbar{display:flex;align-items:center;gap:12px;padding:14px 16px;}
+  .stepbtn{font-family:'Kalam';font-weight:700;font-size:16px;width:38px;height:38px;flex:none;background:var(--card);border:2px solid var(--line);border-radius:12px 10px 12px 10px;cursor:pointer;}
+  .chsel{font-family:'Kalam',cursive;font-weight:700;font-size:16px;border:2px solid var(--line);border-radius:10px;padding:7px 12px;background:var(--card);cursor:pointer;}
+  .chbar .read{font-family:'Caveat',cursive;font-size:22px;margin-left:auto;color:var(--ink-soft);white-space:nowrap;}
+  /* cards */
+  .ava{width:30px;height:30px;flex:none;border:2px solid var(--line);border-radius:50% 48% 52% 50%/50% 52% 48% 50%;display:grid;place-items:center;font-family:'Kalam';font-weight:700;font-size:12px;background:var(--card);}
+  .ccards{display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:12px;align-content:start;}
+  .ccard{border:2px solid var(--line);border-radius:14px 200px 16px 210px/210px 16px 200px 14px;padding:11px 13px;background:var(--card);position:relative;}
+  .ccard.click{cursor:pointer;transition:box-shadow .1s,transform .1s;}
+  .ccard.click:hover{box-shadow:4px 4px 0 var(--line);transform:translate(-1px,-1px);}
+  .ccard .ch{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+  .ccard .nm{font-weight:700;font-size:14px;}
+  .ccard .kv{font-size:12px;color:var(--ink-soft);line-height:1.55;}
+  .ccard .kv b{color:var(--ink);font-weight:700;}
+  .upd{position:absolute;top:9px;right:11px;font-family:'Kalam';font-weight:700;font-size:10px;color:#fff;background:var(--add);border-radius:6px;padding:1px 6px;letter-spacing:.5px;}
+  .note{font-size:13px;color:var(--ink-soft);line-height:1.55;}
+  .beatitem{display:flex;align-items:center;gap:8px;border:1.5px solid var(--hair);border-radius:10px;padding:7px 9px;font-size:12.5px;}
+  .beatitem.added{background:var(--add-tint);border-color:var(--add-line);}
+  .relrow2{display:flex;align-items:center;gap:9px;border:1.5px solid var(--hair);border-radius:12px;padding:8px 12px;}
+  .relrow2 .nm{font-weight:700;font-size:13px;}
+  .lg-line{flex:none;}
+  .lg-line.allies{border-top:6px solid var(--line);}
+  .lg-line.loves{border-top:4px double var(--line);}
+  .lg-line.rivals{border-top:4px dashed var(--line);}
+  .lg-line.conflict{border-top:7px dashed var(--line);}
+  /* ===== character state overlay ===== */
+  .overlay{position:fixed;inset:0;z-index:50;background:rgba(35,33,30,.36);display:flex;align-items:flex-start;justify-content:center;padding:28px 18px;overflow:auto;}
+  .jpanel{background:var(--paper);border:2px solid var(--line);border-radius:22px;max-width:1040px;width:100%;box-shadow:8px 10px 0 rgba(35,33,30,.16);max-height:calc(100vh - 52px);display:flex;flex-direction:column;}
+  .jhead{display:flex;align-items:center;gap:14px;padding:15px 20px;border-bottom:2px solid var(--line);}
+  .jhead .big{width:50px;height:50px;font-size:17px;}
+  .jhead h2{font-family:'Caveat',cursive;font-weight:700;font-size:27px;margin:0;line-height:1;}
+  .jhead .role{font-size:12.5px;color:var(--ink-soft);margin-top:3px;}
+  .jback{font-family:'Kalam',cursive;font-weight:700;font-size:14px;border:2px solid var(--line);background:var(--card);border-radius:10px;padding:7px 13px;cursor:pointer;}
+  .jclose{margin-left:auto;width:34px;height:34px;border:2px solid var(--line);background:var(--card);border-radius:10px;cursor:pointer;font-size:14px;}
+  .jbody{padding:16px 20px 24px;overflow:auto;min-height:0;}
+  /* chapter rail */
+  .crail{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:14px;}
+  .crail .cchip{font-family:'Kalam';font-weight:700;font-size:12px;border:2px solid var(--hair);background:var(--card);border-radius:9px;padding:5px 9px;cursor:pointer;color:var(--ink-soft);line-height:1;text-align:center;min-width:42px;}
+  .crail .cchip.on{border-color:var(--line);color:var(--ink);background:var(--paper);box-shadow:2px 2px 0 var(--line);}
+  .crail .cchip.has{border-color:var(--add-line);}
+  .crail .cchip .d{display:block;font-size:9px;color:var(--add);margin-top:1px;}
+  /* whats-new banner */
+  .newbanner{border:2px solid var(--add-line);background:var(--add-tint);border-radius:14px;padding:12px 14px;margin-bottom:16px;}
+  .newbanner .hd{font-family:'Caveat';font-weight:700;font-size:19px;color:var(--add);margin-bottom:6px;}
+  .newbanner.empty{border-color:var(--hair);background:var(--card);}
+  .newbanner.empty .hd{color:var(--ink-soft);}
+  .newchips{display:flex;flex-wrap:wrap;gap:7px;}
+  .newchip{font-size:12px;background:var(--card);border:1.5px solid var(--add-line);color:var(--add);border-radius:18px;padding:3px 11px;font-weight:700;}
+  /* state cards grid */
+  .scards{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;}
+  .scard{border:2px solid var(--line);border-radius:16px;background:var(--card);overflow:hidden;}
+  .scard h4{margin:0;font-family:'Kalam';font-weight:700;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-soft);padding:11px 14px;border-bottom:2px dashed var(--hair);display:flex;align-items:center;gap:8px;}
+  .scard h4 .cnt{margin-left:auto;font-family:'Caveat';font-size:16px;letter-spacing:0;text-transform:none;}
+  .scard .sb{padding:12px 14px;display:flex;flex-direction:column;gap:9px;}
+  .sitem{display:flex;align-items:flex-start;gap:9px;}
+  .sitem .dot{width:12px;height:12px;flex:none;border:2px solid var(--line);background:var(--card);margin-top:3px;}
+  .sitem .dot.skill{transform:rotate(45deg);border-radius:2px;}
+  .sitem .dot.mindset{border-radius:3px;}
+  .sitem .dot.status{border-radius:50% 5px 50% 5px;}
+  .sitem .dot.look{border-radius:50% 50% 50% 2px;}
+  .sitem .dot.milestone{border-radius:50%;}
+  .sitem .body{flex:1;min-width:0;}
+  .sitem .lab{font-size:13.5px;font-weight:700;line-height:1.25;}
+  .sitem .meta{font-size:11px;color:var(--ink-soft);line-height:1.4;}
+  .sitem .meta .was{text-decoration:line-through;opacity:.7;}
+  .sitem .why{font-size:11.5px;color:var(--ink-soft);font-style:italic;line-height:1.4;margin-top:1px;}
+  .sitem.added .lab{color:var(--add);}
+  .sitem.added{background:var(--add-tint);margin:-3px -6px;padding:5px 6px;border-radius:9px;border:1.5px solid var(--add-line);}
+  .sitem.added .dot{border-color:var(--add);}
+  .plus{font-family:'Kalam';font-weight:700;font-size:10px;color:#fff;background:var(--add);border-radius:6px;padding:1px 6px;letter-spacing:.5px;white-space:nowrap;flex:none;margin-top:2px;}
+  .empty-line{font-size:12.5px;color:var(--ink-soft);}
+  .subtag{font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-soft);border:1.5px solid var(--hair);border-radius:6px;padding:1px 5px;flex:none;margin-top:2px;}
+  /* image-slot theming (b&w sketch) */
+  image-slot::part(frame){background:var(--paper);}
+  image-slot::part(ring){border-color:var(--ink-soft);border-width:2px;}
+  /* multi-image gallery */
+  .gal{display:flex;flex-wrap:wrap;gap:10px;align-items:stretch;}
+  .galadd{border:2px dashed var(--ink-soft);background:var(--paper);border-radius:10px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:var(--ink-soft);font-family:'Kalam',cursive;}
+  .galadd .p{font-family:'Caveat',cursive;font-size:30px;line-height:1;}
+  .galadd .t{font-size:11px;}
+  .galadd:hover{border-color:var(--line);color:var(--ink);box-shadow:3px 3px 0 var(--line);}
+</style>
+</head>
+<body>
+<header class="app">
+  <div class="titlerow">
+    <h1>novel</h1>
+    <span class="sub">Timeline — chapter digest · click a character for their state</span>
+  </div>
+</header>
+<main id="stage"></main>
+
+<script src="image-slot.js"></script>
+<script>
+/* ===================== DATA (Ashfall Saga) ===================== */
+const CH = [
+  {n:1,t:'Embers',b:'Kaelen is cast out of the hold; the saga opens on the road north.'},
+  {n:2,t:'The Road',b:'Mira begins healer training. A market fire scatters the party.'},
+  {n:3,t:'Saltmarsh',b:'Vorst is exiled and turns openly against Kaelen.'},
+  {n:4,t:'Ashfall',b:'The Ashfall: Kaelen unlocks Emberlight. Lyss joins the company.'},
+  {n:5,t:'Hollow Court',b:'Sera learns spycraft inside the Hollow Court; Talia awakens.'},
+  {n:6,t:'Long Night',b:"Mira's doubt deepens — and turns, this chapter, to love for Kaelen."},
+  {n:7,t:'Siege of Vell',b:'Bram falls at Vell. Doran grows bitter and breaks from Kaelen.'},
+  {n:8,t:'Usurper',b:'Vorst seizes the throne. Open war with Kaelen begins.'},
+  {n:9,t:'Coronation',b:'Kaelen is crowned; Mira takes her place as queen-consort.'},
+  {n:10,t:'After',b:'The dust settles over the new reign.'}
+];
+const N = CH.length;
+const CHARS = [
+  {id:'ka',nm:'Kaelen',ini:'KA'},{id:'mi',nm:'Mira',ini:'MI'},
+  {id:'do',nm:'Doran',ini:'DO'},{id:'vo',nm:'Vorst',ini:'VO'},
+  {id:'se',nm:'Sera',ini:'SE'},{id:'ly',nm:'Lyss',ini:'LY'},
+  {id:'br',nm:'Bram',ini:'BR'},{id:'ta',nm:'Talia',ini:'TA'}
+];
+const CI = Object.fromEntries(CHARS.map((c,i)=>[c.id,i]));
+const ARC = {
+  ka:[
+    {ch:1,kind:'status',label:'Outcast',why:'Cast out of the hold after the duel.'},
+    {ch:1,kind:'look',label:'Travel leathers',sub:'outfit'},
+    {ch:4,kind:'skill',label:'Emberlight',why:'Power awakens in the Ashfall.'},
+    {ch:4,kind:'look',label:'Ash-white hair',sub:'hair',why:'Side-effect of Emberlight.'},
+    {ch:5,kind:'look',label:'Ashbrand',sub:'weapon',why:'Reforged from the old blade.'},
+    {ch:7,kind:'mindset',label:'Resolved',why:'Hardens after the Siege of Vell.'},
+    {ch:8,kind:'look',label:'Emberplate armor',sub:'outfit'},
+    {ch:9,kind:'milestone',label:'Crowned',why:'Coronation at the capital.'},
+    {ch:9,kind:'status',label:'King',why:'Takes the throne.'}
+  ],
+  mi:[
+    {ch:2,kind:'skill',label:'Healer training'},
+    {ch:6,kind:'mindset',label:'Doubt',why:'Losses pile up on the Long Night.'},
+    {ch:6,kind:'look',label:'Short-cropped hair',sub:'hair'},
+    {ch:9,kind:'status',label:'Queen-consort'}
+  ],
+  do:[
+    {ch:1,kind:'status',label:'Captain'},
+    {ch:7,kind:'mindset',label:'Bitter',why:'Blames Kaelen for Bram\u2019s death.'}
+  ],
+  vo:[
+    {ch:3,kind:'status',label:'Exiled'},
+    {ch:8,kind:'milestone',label:'Seizes throne'},
+    {ch:8,kind:'look',label:'Iron crown',sub:'outfit'}
+  ],
+  se:[{ch:5,kind:'skill',label:'Spycraft'}],
+  ly:[{ch:4,kind:'milestone',label:'Joins the party'}],
+  br:[{ch:2,kind:'status',label:'Smith'},{ch:7,kind:'milestone',label:'Falls at Vell',why:'Killed defending the wall.'}],
+  ta:[{ch:5,kind:'mindset',label:'Awakens',why:'The court ritual stirs her gift.'}]
+};
+const RELS = [
+  {a:'ka',b:'mi',beats:[{ch:2,type:'allies',int:30},{ch:6,type:'loves',int:80}]},
+  {a:'ka',b:'do',beats:[{ch:1,type:'allies',int:60},{ch:7,type:'rivals',int:-40}]},
+  {a:'ka',b:'vo',beats:[{ch:3,type:'rivals',int:-50},{ch:8,type:'conflict',int:-95}]},
+  {a:'vo',b:'se',beats:[{ch:5,type:'allies',int:50}]},
+  {a:'mi',b:'ly',beats:[{ch:4,type:'allies',int:45}]}
+];
+const EVENTS = [
+  {ch:2,label:'Market fire',imp:'minor'},{ch:4,label:'The Ashfall',imp:'pivotal'},
+  {ch:7,label:'Siege of Vell',imp:'major'},{ch:9,label:'Coronation',imp:'pivotal'}
+];
+const SUBLABEL={hair:'Hair',outfit:'Outfit',weapon:'Weapon',item:'Gear'};
+
+/* ===================== HELPERS ===================== */
+function el(tag, props, ...kids){
+  const e=document.createElement(tag);
+  if(props) for(const k in props){
+    if(k==='class') e.className=props[k];
+    else if(k==='style') e.style.cssText=props[k];
+    else if(k==='html') e.innerHTML=props[k];
+    else if(k.startsWith('on')) e.addEventListener(k.slice(2).toLowerCase(),props[k]);
+    else e.setAttribute(k,props[k]);
+  }
+  for(const c of kids){ if(c==null) continue; e.append(c.nodeType?c:document.createTextNode(c)); }
+  return e;
+}
+function imgSlot(id, ph, o){
+  o=o||{};
+  const a={id, placeholder:ph};
+  if(o.shape) a.shape=o.shape;
+  if(o.radius!=null) a.radius=o.radius;
+  let css=''; if(o.flex) css+='flex:'+o.flex+';'; if(o.w) css+='width:'+o.w+';';
+  css+='height:'+(o.h||90)+'px;'; if(o.minw0) css+='min-width:0;';
+  a.style=css;
+  return el('image-slot', a);
+}
+/* multi-image gallery: persists how many slots via localStorage; each slot
+   persists its own image via image-slot's sidecar. “+” adds, “−” removes last. */
+function galCount(key, def){ const v=localStorage.getItem('omgal:'+key); const n=v==null?def:parseInt(v,10); return Math.max(1, isNaN(n)?def:n); }
+function setGalCount(key, n){ localStorage.setItem('omgal:'+key, String(Math.max(1,n))); render(); }
+function multiGallery(key, o){
+  o=o||{};
+  const w=o.w||'120px', h=o.h||104, n=galCount(key, o.start||2);
+  const wrap=el('div',{class:'gal'});
+  for(let i=1;i<=n;i++) wrap.append(imgSlot(key+'-'+i, (o.ph||'Image')+' '+i, {w:w,h:h,radius:o.radius||10}));
+  wrap.append(el('button',{class:'galadd',style:'width:'+w+';height:'+h+'px',title:'Add another image',onclick:()=>setGalCount(key,n+1)},
+    el('span',{class:'p'},'＋'), el('span',{class:'t'},'add image')));
+  return wrap;
+}
+function relationTypeAt(rel, ch){ let cur=null; for(const bt of rel.beats){ if(bt.ch<=ch) cur=bt; } return cur; }function charStateAt(id, ch){ const out={skill:null,mindset:null,status:null}; for(const bt of (ARC[id]||[])){ if(bt.ch<=ch && out.hasOwnProperty(bt.kind)) out[bt.kind]=bt.label; } return out; }
+function introducedBy(id, ch){ return Math.min.apply(null,(ARC[id]||[{ch:99}]).map(b=>b.ch))<=ch; }function hasChangeAt(id, ch){
+  return (ARC[id]||[]).some(b=>b.ch===ch) || RELS.some(r=>(r.a===id||r.b===id)&&r.beats.some(b=>b.ch===ch));
+}
+// rich, categorized state as of chapter, with isNew flags
+function richState(id, ch){
+  const beats=(ARC[id]||[]);
+  const upto=beats.filter(b=>b.ch<=ch);
+  const isAt=b=>b.ch===ch;
+  const priorOf=(k,curch)=>{ let p=null; beats.forEach(b=>{ if(b.kind===k && b.ch<curch) p=b; }); return p; };
+  const latest=k=>{ let cur=null; upto.forEach(b=>{ if(b.kind===k) cur=b; }); return cur; };
+  const skills=upto.filter(b=>b.kind==='skill').map(b=>({...b,isNew:isAt(b)}));
+  const milestones=upto.filter(b=>b.kind==='milestone').map(b=>({...b,isNew:isAt(b)}));
+  const wrap=(b,k)=> b?{...b,isNew:b.ch===ch,prior:(b.ch===ch?priorOf(k,ch):null)}:null;
+  const mindset=wrap(latest('mindset'),'mindset');
+  const status=wrap(latest('status'),'status');
+  const subs={}; upto.filter(b=>b.kind==='look').forEach(b=>{ subs[b.sub||'item']=b; });
+  const look=Object.keys(subs).map(s=>({sub:s,...subs[s],isNew:subs[s].ch===ch}));
+  const bonds=RELS.filter(r=>r.a===id||r.b===id).map(r=>{
+    const cur=relationTypeAt(r,ch); if(!cur) return null;
+    const other=r.a===id?r.b:r.a;
+    const isNew=cur.ch===ch, brandNew=isNew && r.beats[0].ch===cur.ch;
+    let prior=null; if(isNew && !brandNew){ r.beats.forEach(b=>{ if(b.ch<cur.ch) prior=b; }); }
+    return {other,type:cur.type,int:cur.int,ch:cur.ch,isNew,brandNew,prior};
+  }).filter(Boolean);
+  return {skills,milestones,mindset,status,look,bonds};
+}
+
+/* ===================== VIEW ===================== */
+const view = { ch:5, char:null };
+function setCh(n){ view.ch=Math.min(N,Math.max(1,n)); render(); }
+function openChar(id){ view.char=id; render(); }
+function closeChar(){ view.char=null; render(); }
+
+/* ===================== DIGEST (main screen) ===================== */
+function win(urlText, body){
+  const w=el('div',{class:'box',style:'overflow:hidden;border-radius:18px'});
+  w.append(el('div',{class:'winchrome'},el('i',{}),el('i',{}),el('i',{}),el('div',{class:'url'},urlText)));
+  w.append(body);
+  return w;
+}
+function ctlSelect(){
+  const ch=view.ch;
+  const sel=el('select',{class:'chsel',onchange:e=>setCh(+e.target.value)});
+  CH.forEach((c,i)=>{ const p={value:i+1}; if(i+1===ch)p.selected='selected'; sel.append(el('option',p,'Ch '+c.n+' · '+c.t)); });
+  return el('div',{class:'chbar box',style:'border-radius:14px'},
+    el('button',{class:'stepbtn',onclick:()=>setCh(ch-1)},'‹'),
+    el('div',{class:'tag',style:'font-size:20px'},'show chapter'),
+    sel,
+    el('button',{class:'stepbtn',onclick:()=>setCh(ch+1)},'›'),
+    el('div',{class:'read'},'Ch '+ch+' / '+N)
+  );
+}
+function renderDigest(){
+  const ch=view.ch;
+  const wrap=el('div',{});
+  wrap.append(el('div',{class:'frame-head'},el('div',{},
+    el('h2',{},'Chapter digest'),
+    el('p',{},'Pick a chapter to see where the story stands. Click a character to open their state card — anything gained at the selected chapter is highlighted and marked +++.')
+  )));
+  const inner=el('div',{class:'pad',style:'display:flex;flex-direction:column;gap:16px'});
+  inner.append(ctlSelect());
+  const cols=el('div',{style:'display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap'});
+  // left — description + what changes this chapter
+  const left=el('div',{class:'box',style:'border-radius:16px;flex:1;min-width:300px;padding:18px'});
+  const evHere=EVENTS.filter(e=>e.ch===ch);
+  left.append(el('div',{class:'disp',style:'font-size:27px;font-weight:700;line-height:1.12;margin-bottom:4px'},'Ch '+ch+' · '+CH[ch-1].t,
+    evHere.find(e=>e.imp==='pivotal')?el('span',{class:'tag',style:'margin-left:10px'},'✦ pivotal'):null));
+  left.append(el('div',{class:'note',style:'margin-bottom:16px;font-size:14.5px'},CH[ch-1].b));
+  left.append(el('div',{class:'tag',style:'display:block;margin-bottom:8px'},'scenes — drop art for this chapter · add as many as you like'));
+  left.append(multiGallery('scene-ch'+ch, {ph:'Scene', w:'118px', h:96, radius:10, start:2}));
+  left.append(el('div',{style:'height:16px'}));
+  const changes=[];
+  CHARS.forEach(c=>(ARC[c.id]||[]).forEach(bt=>{ if(bt.ch===ch) changes.push(c.nm+' — '+bt.kind+': '+bt.label); }));
+  RELS.forEach(r=>r.beats.forEach(bt=>{ if(bt.ch===ch) changes.push(CHARS[CI[r.a]].nm+' × '+CHARS[CI[r.b]].nm+' → '+bt.type); }));
+  evHere.forEach(e=>changes.push((e.imp==='pivotal'?'✦ ':'')+'Event — '+e.label));
+  left.append(el('div',{class:'tag',style:'display:block;margin-bottom:8px'},'what changes this chapter'));
+  if(changes.length){ const ul=el('div',{style:'display:flex;flex-direction:column;gap:7px'}); changes.forEach(t=>ul.append(el('div',{class:'beatitem added'},el('span',{class:'plus'},'+++'),t))); left.append(ul); }
+  else left.append(el('div',{class:'note'},'nothing new — every character and bond carries over unchanged.'));
+  cols.append(left);
+  // right — characters in play + relationships
+  const right=el('div',{style:'flex:1;min-width:300px;display:flex;flex-direction:column;gap:14px'});
+  const introduced=CHARS.filter(c=>introducedBy(c.id,ch));
+  const rcards=el('div',{class:'box',style:'border-radius:16px;padding:16px'});
+  rcards.append(el('div',{class:'tag',style:'display:block;margin-bottom:10px'},'characters in play · '+introduced.length+' of '+CHARS.length+'  ·  click one for their state →'));
+  const grid=el('div',{class:'ccards'});
+  introduced.forEach(c=>{ const st=charStateAt(c.id,ch); const upd=hasChangeAt(c.id,ch);
+    grid.append(el('div',{class:'ccard click',onclick:()=>openChar(c.id)},
+      upd?el('span',{class:'upd'},'+++'):null,
+      el('div',{class:'ch'},el('span',{class:'ava',style:'width:26px;height:26px;font-size:10px'},c.ini),el('span',{class:'nm'},c.nm)),
+      el('div',{class:'kv',html:`skill: <b>${st.skill||'—'}</b><br>mindset: <b>${st.mindset||'—'}</b><br>status: <b>${st.status||'—'}</b>`})
+    )); });
+  rcards.append(grid);
+  const notYet=CHARS.length-introduced.length;
+  if(notYet) rcards.append(el('div',{class:'note',style:'margin-top:10px'},notYet+' character'+(notYet>1?'s':'')+' not yet introduced.'));
+  right.append(rcards);
+  const rels=el('div',{class:'box',style:'border-radius:16px;padding:16px'});
+  rels.append(el('div',{class:'tag',style:'display:block;margin-bottom:10px'},'relationships in effect'));
+  const list=el('div',{style:'display:flex;flex-direction:column;gap:8px'}); let any=false;
+  RELS.forEach(r=>{ const cur=relationTypeAt(r,ch); if(!cur)return; any=true; const isNew=cur.ch===ch;
+    list.append(el('div',{class:'relrow2'+(isNew?' ':''),style:isNew?'background:var(--add-tint);border-color:var(--add-line)':''},
+      el('span',{class:'ava',style:'width:22px;height:22px;font-size:9px'},CHARS[CI[r.a]].ini),
+      el('span',{class:'ava',style:'width:22px;height:22px;font-size:9px'},CHARS[CI[r.b]].ini),
+      el('span',{class:'nm'},CHARS[CI[r.a]].nm+' & '+CHARS[CI[r.b]].nm),
+      isNew?el('span',{class:'plus'},'+++'):null,
+      el('span',{class:'lg-line '+cur.type,style:'width:34px;margin-left:auto'}),
+      el('span',{class:'tag'},cur.type))); });
+  if(!any) list.append(el('div',{class:'note'},'no relationships have formed yet.'));
+  rels.append(list);
+  right.append(rels);
+  cols.append(right);
+  inner.append(cols);
+  wrap.append(win('novel.app / story / ashfall-saga / timeline', inner));
+  return wrap;
+}
+
+/* ===================== CHARACTER STATE OVERLAY ===================== */
+function plus(){ return el('span',{class:'plus'},'+++'); }
+function sitem(kind, label, opts){
+  opts=opts||{};
+  const body=el('div',{class:'body'},el('div',{class:'lab'},label));
+  if(opts.meta) body.append(el('div',{class:'meta',html:opts.meta}));
+  if(opts.why) body.append(el('div',{class:'why'},opts.why));
+  return el('div',{class:'sitem'+(opts.isNew?' added':'')},
+    opts.subtag?el('span',{class:'subtag'},opts.subtag):el('div',{class:'dot '+kind}),
+    body,
+    opts.isNew?plus():null
+  );
+}
+function scard(title, count, items){
+  const sb=el('div',{class:'sb'});
+  if(items.length) items.forEach(i=>sb.append(i));
+  else sb.append(el('div',{class:'empty-line'},'— none yet —'));
+  return el('div',{class:'scard'},
+    el('h4',{},title, count!=null?el('span',{class:'cnt'},count):null),
+    sb);
+}
+function renderCharacter(id){
+  const c=CHARS[CI[id]], ch=view.ch, S=richState(id,ch);
+  const panel=el('div',{class:'jpanel'});
+  panel.append(el('div',{class:'jhead'},
+    el('button',{class:'jback',onclick:closeChar},'‹ back to digest'),
+    el('span',{class:'ava big'},c.ini),
+    el('div',{},el('h2',{},c.nm),el('div',{class:'role'},'state as of Ch '+ch+' · '+CH[ch-1].t)),
+    el('button',{class:'jclose',onclick:closeChar},'✕')
+  ));
+  const body=el('div',{class:'jbody'});
+  // chapter rail
+  const rail=el('div',{class:'crail'});
+  CH.forEach((cc,i)=>{ const intro=introducedBy(id,i+1); const has=hasChangeAt(id,i+1);
+    rail.append(el('div',{class:'cchip'+(i+1===ch?' on':'')+(has?' has':''),style:intro?'':'opacity:.4',onclick:()=>setCh(i+1)},
+      'Ch'+cc.n, has?el('span',{class:'d'},'+++'):null)); });
+  body.append(el('div',{class:'tag',style:'display:block;margin-bottom:6px'},'step through chapters'));
+  body.append(rail);
+  // whats new banner
+  const news=[];
+  S.skills.filter(x=>x.isNew).forEach(x=>news.push('Skill · '+x.label));
+  if(S.mindset&&S.mindset.isNew) news.push('Mindset → '+S.mindset.label);
+  if(S.status&&S.status.isNew) news.push('Status → '+S.status.label);
+  S.look.filter(x=>x.isNew).forEach(x=>news.push((SUBLABEL[x.sub]||'Look')+' · '+x.label));
+  S.milestones.filter(x=>x.isNew).forEach(x=>news.push('Milestone · '+x.label));
+  S.bonds.filter(x=>x.isNew).forEach(x=>news.push((x.brandNew?'New bond · ':'Bond → ')+CHARS[CI[x.other]].nm+' · '+x.type));
+  if(news.length){
+    const nb=el('div',{class:'newbanner'},el('div',{class:'hd'},'+++ new in Ch '+ch+' · '+CH[ch-1].t));
+    const chips=el('div',{class:'newchips'}); news.forEach(t=>chips.append(el('span',{class:'newchip'},t))); nb.append(chips);
+    body.append(nb);
+  } else body.append(el('div',{class:'newbanner empty'},el('div',{class:'hd'},'No changes for '+c.nm+' in Ch '+ch+' — state carries over.')));
+  // reference gallery (multi image slots — add as many as you like)
+  body.append(el('div',{class:'tag',style:'display:block;margin:2px 0 8px'},'reference gallery — drop images of '+c.nm+' · add as many as you like'));
+  body.append(multiGallery('char-'+id, {ph:c.nm, w:'132px', h:124, radius:12, start:2}));
+  body.append(el('div',{style:'height:18px'}));
+  // state cards
+  const cards=el('div',{class:'scards'});
+  cards.append(scard('Skills', S.skills.length, S.skills.map(x=>sitem('skill',x.label,{isNew:x.isNew,meta:'gained Ch'+x.ch,why:x.isNew?x.why:null}))));
+  cards.append(scard('Mindset', null, S.mindset?[sitem('mindset',S.mindset.label,{isNew:S.mindset.isNew,meta:S.mindset.prior?('was <span class="was">'+S.mindset.prior.label+'</span> · since Ch'+S.mindset.ch):('since Ch'+S.mindset.ch),why:S.mindset.isNew?S.mindset.why:null})]:[]));
+  cards.append(scard('Status', null, S.status?[sitem('status',S.status.label,{isNew:S.status.isNew,meta:S.status.prior?('was <span class="was">'+S.status.prior.label+'</span> · since Ch'+S.status.ch):('since Ch'+S.status.ch),why:S.status.isNew?S.status.why:null})]:[]));
+  cards.append(scard('Look / gear', null, S.look.map(x=>el('div',{class:'sitem'+(x.isNew?' added':'')},
+    imgSlot('look-'+id+'-'+x.sub+'-'+x.ch, SUBLABEL[x.sub]||'Gear', {w:'52px',h:52,shape:'rounded',radius:8}),
+    el('div',{class:'body'},
+      el('div',{class:'lab'},el('span',{class:'subtag',style:'margin-right:6px'},SUBLABEL[x.sub]||'Gear'),x.label),
+      el('div',{class:'meta'},'since Ch'+x.ch),
+      (x.isNew&&x.why)?el('div',{class:'why'},x.why):null
+    ),
+    x.isNew?plus():null
+  ))));
+  cards.append(scard('Milestones', S.milestones.length, S.milestones.map(x=>sitem('milestone',x.label,{isNew:x.isNew,meta:'Ch'+x.ch,why:x.isNew?x.why:null}))));
+  // bonds card
+  const bondItems=S.bonds.map(x=>{
+    const oc=CHARS[CI[x.other]];
+    const meta = x.brandNew?('formed Ch'+x.ch): (x.prior?('was <span class="was">'+x.prior.type+'</span> · changed Ch'+x.ch):('since Ch'+x.ch));
+    const row=el('div',{class:'sitem'+(x.isNew?' added':'')},
+      el('span',{class:'ava',style:'width:24px;height:24px;font-size:9px;margin-top:1px'},oc.ini),
+      el('div',{class:'body'},
+        el('div',{class:'lab'},oc.nm+'  ·  '+x.type),
+        el('div',{class:'meta',html:meta})
+      ),
+      el('span',{class:'lg-line '+x.type,style:'width:30px;margin-top:8px'}),
+      x.isNew?plus():null);
+    return row;
+  });
+  cards.append(scard('Bonds', S.bonds.length, bondItems));
+  body.append(cards);
+  panel.append(body);
+  return el('div',{class:'overlay',onclick:e=>{ if(e.target.classList.contains('overlay')) closeChar(); }}, panel);
+}
+
+/* ===================== MOUNT ===================== */
+function render(){
+  const stage=document.getElementById('stage');
+  stage.innerHTML='';
+  stage.append(renderDigest());
+  if(view.char) stage.append(renderCharacter(view.char));
+}
+render();
+</script>
+</body>
+</html>

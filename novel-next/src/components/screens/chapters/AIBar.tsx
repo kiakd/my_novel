@@ -7,14 +7,15 @@ import type { BtnVariant } from '@/components/ui/Btn';
 interface AIBarProps {
   onAct: (id: string, label: string) => void;
   onExpand: () => void;
+  onContinue: () => void;
   busy: boolean;
 }
 
 /** แถบ AI ลอยล่างจอ (ขยาย/เขียนต่อ/รีวิว/สรุป) */
-export function AIBar({ onAct, onExpand, busy }: AIBarProps) {
+export function AIBar({ onAct, onExpand, onContinue, busy }: AIBarProps) {
   const { t } = useI18n();
+  // review/summary ยังเป็น placeholder (stub) — เขียนต่อ/ขยาย ทำงานจริงแล้ว
   const acts: [string, string, BtnVariant][] = [
-    ['continue', `▶ ${t('chapters.aiContinue')}`, 'soft'],
     ['review', `🔍 ${t('chapters.aiReview')}`, 'soft'],
     ['summary', `📝 ${t('chapters.aiSummary')}`, 'soft'],
   ];
@@ -24,6 +25,7 @@ export function AIBar({ onAct, onExpand, busy }: AIBarProps) {
         <span className="pl-2 pr-1 text-[13px] font-extrabold flex items-center gap-1.5 shrink-0" style={{ color: pal('sky').c }}>
           {busy ? <Spinner size={14} color={pal('sky').c} /> : '✦'} AI
         </span>
+        <Btn variant="primary" color="sky" size="sm" className="shrink-0" disabled={busy} onClick={onContinue}>▶ {t('chapters.aiContinue')}</Btn>
         <Btn variant="primary" color="lilac" size="sm" className="shrink-0" disabled={busy} onClick={onExpand}>✨ {t('chapters.aiExpand')}</Btn>
         {acts.map(([id, lbl, v]) => (
           <Btn key={id} variant={v} color="sky" size="sm" className="shrink-0" disabled={busy} onClick={() => onAct(id, lbl)}>{lbl}</Btn>

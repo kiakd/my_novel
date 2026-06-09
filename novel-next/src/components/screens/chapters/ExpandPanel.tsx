@@ -5,19 +5,21 @@ import { pal, cx } from '@/lib/theme';
 import { useI18n } from '@/lib/i18n';
 import { useStory } from '@/lib/store/StoryProvider';
 import { expand, type ExpandMode } from '@/lib/api';
+import { chapterRefs, continuityBrief } from '@/components/screens/timeline/arc';
 import { ImageDrop } from './ImageDrop';
 
 interface ExpandPanelProps {
   open: boolean;
   onClose: () => void;
   initialDraft: string;          // ข้อความที่ผู้ใช้เลือกในตอนเปิด (ถ้ามี)
+  chapterNum: number;            // บทที่กำลังเขียน (1-based) — ใช้ดึง continuity ณ บทนั้น
   onInsert: (text: string) => void;
 }
 
 const MODES: ExpandMode[] = ['scene', 'action', 'polish'];
 
-/** แผงขยายงานเขียน: ข้อความ + แนบรูป(WD14) + เลือกโหมด → AI ขยาย → แทรก/คัดลอก */
-export function ExpandPanel({ open, onClose, initialDraft, onInsert }: ExpandPanelProps) {
+/** แผงขยายงานเขียน: ข้อความ + แนบรูป(WD14) + continuity ตัวละคร + เลือกโหมด → AI ขยาย → แทรก/คัดลอก */
+export function ExpandPanel({ open, onClose, initialDraft, chapterNum, onInsert }: ExpandPanelProps) {
   const { t } = useI18n();
   const { story } = useStory();
   const [draft, setDraft] = useState('');
@@ -26,6 +28,8 @@ export function ExpandPanel({ open, onClose, initialDraft, onInsert }: ExpandPan
   const [buckets, setBuckets] = useState<Record<string, string[]> | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState('');
+  const [useCont, setUseCont] = useState(true);   // แนบ continuity ตัวละครให้ AI (กันหลุดคาแรกเตอร์)
+  const [showCont, setShowCont] = useState(false);
 
   // sync ข้อความที่เลือกทุกครั้งที่เปิด
   useEffect(() => { if (open) { setDraft(initialDraft); setResult(''); } }, [open, initialDraft]);
@@ -37,12 +41,18 @@ export function ExpandPanel({ open, onClose, initialDraft, onInsert }: ExpandPan
     story?.dontList && `Don't: ${story.dontList}`,
   ].filter(Boolean).join('\n');
 
+  // continuity ตัวละคร ณ บทที่กำลังเขียน — ดึงจาก arc beats ในไทม์ไลน์
+  const continuity = story
+    ? continuityBrief(story.characters ?? [], story.relations ?? [], chapterNum, chapterRefs(story.chapters ?? [], story.timeline ?? []))
+    : '';
+
   const run = async () => {
     if (!draft.trim()) { toast(t('chapters.expand.needDraft'), '⚠️'); return; }
     setBusy(true);
     setResult('');
     try {
-      const r = await expand({ draft, mode, tags: tags.length ? tags : undefined, buckets: buckets ?? undefined, style: styleContext || undefined });
+      const context = [styleContext, useCont && continuity ? continuity : ''].filter(Boolean).join('\n\n');
+      const r = await expand({ draft, mode, tags: tags.length ? tags : undefined, buckets: buckets ?? undefined, style: context || undefined });
       if (r.ok && r.text) setResult(r.text);
       else toast(r.error ?? t('common.offline'), '⚠️');
     } catch (e) {
@@ -116,6 +126,22 @@ export function ExpandPanel({ open, onClose, initialDraft, onInsert }: ExpandPan
             ))}
           </div>
         </div>
+
+        {/* continuity ตัวละคร — กัน AI หลุดคาแรกเตอร์ */}
+        {continuity && (
+          <div className="rounded-2xl border-2 border-line bg-white px-3.5 py-2.5">
+            <label className="flex items-center gap-2.5 cursor-pointer select-none">
+              <input type="checkbox" checked={useCont} onChange={(e) => setUseCont(e.target.checked)} className="h-4 w-4 accent-[#1FB587]" />
+              <span className="text-[13px] font-bold text-ink flex-1">📎 {t('timeline.attachContinuity')}</span>
+              <button type="button" onClick={(e) => { e.preventDefault(); setShowCont((v) => !v); }} className="text-[12px] font-bold text-muted hover:text-ink transition shrink-0">
+                {showCont ? t('common.close') : t('timeline.continuityPreview')}
+              </button>
+            </label>
+            {showCont && (
+              <pre className="mt-2 text-[11.5px] text-ink/80 leading-relaxed whitespace-pre-wrap max-h-40 overflow-auto font-sans bg-cream/50 rounded-xl p-2.5">{continuity}</pre>
+            )}
+          </div>
+        )}
 
         <Btn variant="primary" color="sky" className="w-full" disabled={busy || !draft.trim()} onClick={run}>
           {busy ? <Spinner size={15} color="#fff" /> : '✦'} {t('chapters.expand.run')}
