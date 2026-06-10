@@ -16,6 +16,10 @@ import { generateRoleplay } from '@/lib/api';
 import { buildNovelContext, cleanRoleplayArtifacts } from '@/lib/novel-context';
 
 const LS_LIST_OPEN = 'ns_chapterlist_open';
+const LS_PROVIDER = 'ns_gen_provider';
+
+/** provider ที่ใช้เจน prose — สลับ DeepSeek (cloud) ↔ Gemma local (LM Studio) */
+export type GenProvider = 'deepseek' | 'lmstudio';
 
 const STATUS_COLOR: Record<ChapterStatus, string> = { done: 'mint', draft: 'sun', empty: 'slate' };
 
@@ -27,7 +31,7 @@ const htmlToText = (html?: string): string => {
   d.innerHTML = html;
   return d.textContent ?? '';
 };
-const wordCount = (html?: string) => htmlToText(html).trim().split(/\s+/).filter(Boolean).length;
+const charCount = (html?: string) => htmlToText(html).replace(/\s+/g, '').length;
 const statusOf = (content?: string, stored?: ChapterStatus): ChapterStatus =>
   !htmlToText(content).trim() ? 'empty' : stored && stored !== 'empty' ? stored : 'draft';
 
@@ -42,8 +46,11 @@ export function ChaptersScreen() {
   const [expandDraft, setExpandDraft] = useState('');
   const [contOpen, setContOpen] = useState(false);
   const [listOpen, setListOpen] = useState(true);
+  const [provider, setProviderState] = useState<GenProvider>('deepseek');
 
   useEffect(() => { if (localStorage.getItem(LS_LIST_OPEN) === '0') setListOpen(false); }, []);
+  useEffect(() => { const p = localStorage.getItem(LS_PROVIDER); if (p === 'lmstudio' || p === 'deepseek') setProviderState(p); }, []);
+  const setProvider = (p: GenProvider) => { setProviderState(p); try { localStorage.setItem(LS_PROVIDER, p); } catch { /* ignore */ } };
   const toggleList = () => setListOpen((v) => {
     const n = !v;
     try { localStorage.setItem(LS_LIST_OPEN, n ? '1' : '0'); } catch { /* ignore */ }
@@ -55,7 +62,7 @@ export function ChaptersScreen() {
   const chapters = [...(story?.chapters ?? [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   const active = chapters.find((c) => c.id === activeId) ?? chapters[0] ?? null;
   const activeStatus = active ? statusOf(active.content, active.status) : 'empty';
-  const words = wordCount(active?.content);
+  const chars = charCount(active?.content);
 
   const patchActive = (patch: Partial<{ title: string; content: string; status: ChapterStatus }>) => {
     if (!active) return;
@@ -81,7 +88,9 @@ export function ChaptersScreen() {
       r18: 'เขียนต่อจากเนื้อเรื่องด้านล่าง เข้าสู่ฉากเลิฟซีนผู้ใหญ่แบบเต็มอารมณ์ (เต็มใจทั้งสองฝ่ายตาม lore lock)',
     };
     // อ่าน "ทั้งบท" ไม่ใช่แค่ท้าย — กันหลงทาง/ชุดหลุด. ถ้ายาวเกิน cap เก็บหัวบท (setup ชุด/ฉาก) + ท้ายบท (จุดต่อ)
-    const CTX_CAP = 14000;
+    // local (Gemma 8K ctx) ต้อง cap เล็กกว่า cloud มาก ไม่งั้น context ล้น
+    const isLocal = provider === 'lmstudio';
+    const CTX_CAP = isLocal ? 4500 : 14000;
     const clip = (s: string) =>
       s.length <= CTX_CAP ? s : `${s.slice(0, 2000)}\n…\n${s.slice(-(CTX_CAP - 2000))}`;
     const full = htmlToText(active.content).trim();
@@ -105,7 +114,9 @@ export function ChaptersScreen() {
     toast(t('chapters.continue.working'), '✦');
     try {
       const ctx = buildNovelContext(story, { mode, eventCurrent, chapterNum });
-      const r = await generateRoleplay({ context: ctx, user_input: `เขียนต่อบท "${active.title || ''}"`, max_tokens: mode === 'r18' ? 2600 : 2200 });
+      // local ช้า + ctx เล็ก → ขอ output สั้นลง
+      const maxTokens = isLocal ? (mode === 'r18' ? 1500 : 1200) : (mode === 'r18' ? 2600 : 2200);
+      const r = await generateRoleplay({ context: ctx, user_input: `เขียนต่อบท "${active.title || ''}"`, provider, max_tokens: maxTokens });
       if (r.ok && r.text) {
         editorRef.current?.insertHtmlAtEnd(textToHtml(cleanRoleplayArtifacts(r.text)));
         toast(t('chapters.continue.done'), '✨');
@@ -135,7 +146,7 @@ export function ChaptersScreen() {
             <Btn variant="primary" color="sky" className="mb-2 w-full" onClick={addChapter}>＋ {t('chapters.newChapter')}</Btn>
             <div className="flex flex-col gap-1 max-md:max-h-[280px] overflow-auto -mr-1 pr-1">
               {chapters.map((c, i) => (
-                <ChapterRow key={c.id} title={c.title ?? ''} words={wordCount(c.content)} idx={i} active={c.id === active?.id} onClick={() => setActiveId(c.id)} />
+                <ChapterRow key={c.id} title={c.title ?? ''} chars={charCount(c.content)} idx={i} active={c.id === active?.id} onClick={() => setActiveId(c.id)} />
               ))}
             </div>
           </Card>
@@ -152,7 +163,7 @@ export function ChaptersScreen() {
                 <span className="font-bold text-muted text-sm">{t('chapters.chapterN', { n: chapters.indexOf(active) + 1 })}</span>
               </div>
               <div className="flex items-center gap-4">
-                <span className="font-extrabold text-sm" style={{ color: pal('sky').c }}>{t('chapters.words', { n: words.toLocaleString() })}</span>
+                <span className="font-extrabold text-sm" style={{ color: pal('sky').c }}>{t('chapters.chars', { n: chars.toLocaleString() })}</span>
                 <SaveIndicator status={status} variant="inline" />
               </div>
             </div>
@@ -171,7 +182,7 @@ export function ChaptersScreen() {
       </div>
       {active && <AIBar onAct={act} onExpand={openExpand} onContinue={() => setContOpen(true)} busy={busy} />}
       <ExpandPanel open={expandOpen} onClose={() => setExpandOpen(false)} initialDraft={expandDraft} chapterNum={active ? chapters.indexOf(active) + 1 : 1} onInsert={insertExpanded} />
-      <ContinueMenu open={contOpen} onClose={() => setContOpen(false)} onPick={runContinue} busy={busy} />
+      <ContinueMenu open={contOpen} onClose={() => setContOpen(false)} onPick={runContinue} busy={busy} provider={provider} onProvider={setProvider} />
     </div>
   );
 }

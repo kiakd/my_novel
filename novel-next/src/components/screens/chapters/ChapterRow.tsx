@@ -4,14 +4,14 @@ import { pal, cx } from '@/lib/theme';
 
 interface ChapterRowProps {
   title: string;
-  words: number;
+  chars: number;
   idx: number;
   active: boolean;
   onClick: () => void;
 }
 
 /** แถวบทในลิสต์ซ้าย */
-export function ChapterRow({ title, words, idx, active, onClick }: ChapterRowProps) {
+export function ChapterRow({ title, chars, idx, active, onClick }: ChapterRowProps) {
   const { t } = useI18n();
   return (
     <button onClick={onClick}
@@ -21,7 +21,7 @@ export function ChapterRow({ title, words, idx, active, onClick }: ChapterRowPro
         <span className="h-7 w-7 rounded-xl grid place-items-center font-display font-semibold text-sm shrink-0" style={{ background: active ? pal('sky').c : '#ECE2D1', color: active ? '#fff' : '#988C7C' }}>{idx + 1}</span>
         <div className="min-w-0 flex-1">
           <div className="font-bold text-ink truncate text-[15px]">{title || t('chapters.untitled')}</div>
-          <div className="text-[12px] font-bold text-muted">{t('chapters.words', { n: words.toLocaleString() })}</div>
+          <div className="text-[12px] font-bold text-muted">{t('chapters.chars', { n: chars.toLocaleString() })}</div>
         </div>
         <span className="opacity-0 group-hover:opacity-100 transition text-muted cursor-grab">⠿</span>
       </div>

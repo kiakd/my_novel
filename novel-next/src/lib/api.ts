@@ -51,7 +51,7 @@ export const generate = (body: { user: string; system?: string; provider?: strin
 
 // ---- AI: เขียนต่อบท (roleplay assembler ฝั่ง backend ประกอบ system prompt จาก context) ----
 export interface GenRoleplayResult { ok: boolean; text?: string; error?: string; provider?: string; model?: string; prompt_chars?: number }
-export const generateRoleplay = (body: { context: unknown; user_input: string; provider?: string; temperature?: number; max_tokens?: number }) =>
+export const generateRoleplay = (body: { context: unknown; user_input: string; provider?: string; temperature?: number; max_tokens?: number; prefill?: string }) =>
   jsonFetch<GenRoleplayResult>('/api/generate-roleplay', { method: 'POST', body: JSON.stringify(body) });
 
 // ---- รูป ref → booru tags (WD14 โลคัล ผ่าน ComfyUI) ----

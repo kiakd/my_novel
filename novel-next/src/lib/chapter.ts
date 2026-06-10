@@ -10,8 +10,9 @@ export const htmlToText = (html?: string): string => {
   return d.textContent ?? '';
 };
 
-export const wordCount = (html?: string): number =>
-  htmlToText(html).trim().split(/\s+/).filter(Boolean).length;
+/** จำนวนตัวอักษร (ไม่นับช่องว่าง/ขึ้นบรรทัด) — เหมาะกับไทยที่ไม่เว้นวรรคระหว่างคำ */
+export const charCount = (html?: string): number =>
+  htmlToText(html).replace(/\s+/g, '').length;
 
 export const hasContent = (html?: string): boolean => htmlToText(html).trim().length > 0;
 

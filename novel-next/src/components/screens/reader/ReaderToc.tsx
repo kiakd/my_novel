@@ -1,6 +1,6 @@
 'use client';
 import { pal, cx } from '@/lib/theme';
-import { wordCount, type Chapter } from '@/lib/chapter';
+import { charCount, type Chapter } from '@/lib/chapter';
 import type { ChapterStatus } from '@/lib/types';
 import { ReaderStorySelect } from './ReaderStorySelect';
 
@@ -14,7 +14,7 @@ interface ReaderTocProps {
   fg: string;
   faint: string;
   border: string;
-  labels: { toc: string; story: string; untitled: string; words: (n: number) => string };
+  labels: { toc: string; story: string; untitled: string; chars: (n: number) => string };
 }
 
 const DOT: Record<ChapterStatus, string> = { done: pal('mint').c, draft: pal('sun').c, empty: '#b9b0a3' };
@@ -50,7 +50,7 @@ export function ReaderToc({ open, onClose, chapters, currentId, onPick, chrome, 
                 <span className="font-extrabold text-xs tabular-nums" style={{ color: active ? accent : faint, minWidth: 20 }}>{i + 1}</span>
                 <span className="flex-1 min-w-0">
                   <span className="block truncate font-semibold" style={{ color: active ? accent : fg }}>{c.title?.trim() || labels.untitled}</span>
-                  <span className="block text-[11px] font-bold" style={{ color: faint }}>{labels.words(wordCount(c.content))}</span>
+                  <span className="block text-[11px] font-bold" style={{ color: faint }}>{labels.chars(charCount(c.content))}</span>
                 </span>
                 <span style={{ width: 7, height: 7, borderRadius: 99, background: DOT[st], flex: '0 0 auto' }} />
               </button>

@@ -28,7 +28,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
       <div className="mt-auto px-3 pt-3">
         <div className="rounded-3xl p-4 text-center" style={{ background: pal('grape').soft }}>
           <div className="text-2xl mb-1">✨</div>
-          <div className="font-display font-medium text-ink text-sm">12,120 {t('header.wordsThisWeek')}</div>
+          <div className="font-display font-medium text-ink text-sm">12,120 {t('header.charsThisWeek')}</div>
           <div className="text-[12px] font-bold text-muted">{t('header.keepGoing')}</div>
         </div>
       </div>

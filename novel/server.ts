@@ -4,6 +4,7 @@ import { mkdir } from 'node:fs/promises';
 import { getDb } from './db';
 import { logRequest, logActivity, logError, ensureLogIndexes, APP_LOG_COLLECTION } from './logger';
 import { assembleSystemPrompt, type NovelContext } from './prompts';
+import { assembleChatPrompt, assembleNarratorPrompt, type ChatCharLite } from './chat-prompt';
 import { pickStory, writeStoryMd, type Story } from './story-md';
 import { runWD14, categorizeTags, REF_SCENE_SYSTEM, buildRefSceneUser } from './ref-tag';
 import {
@@ -18,6 +19,8 @@ import {
 const PORT = Number(process.env.PORT ?? 3000);
 
 const STATE_ID = 'main';
+const CHAT_STATE_ID = 'chat';   // state ก้อนแยกของระบบแชท RP (ไม่ปนกับ stories) — เก็บเฉพาะ chars+items
+const CHAT_SESSIONS_COLLECTION = 'chat_sessions';   // session แชทเก็บ doc ละอัน (_id = session.id)
 const DICT_ID = 'dict';
 const COLLECTION = 'workspace';
 const LOG_COLLECTION = 'ai_logs';
@@ -108,8 +111,9 @@ const EXPAND_SYSTEM = `คุณเป็นนักเขียนนิยา
 - รักษาน้ำเสียง/บุคลิกตัวละครและสไตล์ของเรื่อง เคารพข้อห้าม (don'ts) ที่ให้มา
 - ตอบกลับเป็นร้อยแก้วภาษาไทยล้วน ไม่ต้องอธิบาย ไม่ต้องใส่หัวข้อ/มาร์กดาวน์/คำนำ`;
 
-type Provider = 'openrouter' | 'deepseek';
+type Provider = 'openrouter' | 'deepseek' | 'lmstudio';
 
+// keyEnv ว่าง = ไม่ต้องใช้ API key (local เช่น LM Studio) → ถือว่า available เสมอ
 const PROVIDER_CONFIG: Record<Provider, { url: string; defaultModel: string; keyEnv: string }> = {
   openrouter: {
     url: 'https://openrouter.ai/api/v1/chat/completions',
@@ -121,26 +125,40 @@ const PROVIDER_CONFIG: Record<Provider, { url: string; defaultModel: string; key
     defaultModel: process.env.DEEPSEEK_MODEL ?? 'deepseek-chat',
     keyEnv: 'DEEPSEEK_API_KEY',
   },
+  // LM Studio (local, OpenAI-compatible) — ไม่ต้องมี key, รัน Gemma local ได้
+  lmstudio: {
+    url: process.env.LMSTUDIO_URL ?? 'http://localhost:1234/v1/chat/completions',
+    defaultModel: process.env.LMSTUDIO_MODEL ?? 'gemma-4-12b-it-uncensored',
+    keyEnv: '',
+  },
 };
 
-const DEFAULT_PROVIDER: Provider =
-  (process.env.AI_PROVIDER as Provider) === 'deepseek' ? 'deepseek' : 'openrouter';
+const ALL_PROVIDERS: Provider[] = ['openrouter', 'deepseek', 'lmstudio'];
+const isProvider = (s?: string): s is Provider => !!s && (ALL_PROVIDERS as string[]).includes(s);
+
+const DEFAULT_PROVIDER: Provider = isProvider(process.env.AI_PROVIDER) ? process.env.AI_PROVIDER : 'openrouter';
 
 function providerAvailable(p: Provider): boolean {
-  return !!process.env[PROVIDER_CONFIG[p].keyEnv];
+  const cfg = PROVIDER_CONFIG[p];
+  return cfg.keyEnv ? !!process.env[cfg.keyEnv] : true; // keyless = local = พร้อมเสมอ
 }
 
 function resolveProvider(req?: string): Provider {
-  if (req === 'openrouter' || req === 'deepseek') {
+  if (isProvider(req)) {
     if (!providerAvailable(req)) {
       throw new Error(`provider "${req}" requested but ${PROVIDER_CONFIG[req].keyEnv} not set`);
     }
     return req;
   }
   if (providerAvailable(DEFAULT_PROVIDER)) return DEFAULT_PROVIDER;
-  const fallback: Provider = DEFAULT_PROVIDER === 'openrouter' ? 'deepseek' : 'openrouter';
-  if (providerAvailable(fallback)) return fallback;
-  throw new Error('no provider API key set (OPENROUTER_API_KEY or DEEPSEEK_API_KEY)');
+  const fallback = ALL_PROVIDERS.find((p) => p !== DEFAULT_PROVIDER && providerAvailable(p));
+  if (fallback) return fallback;
+  throw new Error('no provider available (set OPENROUTER_API_KEY / DEEPSEEK_API_KEY or run LM Studio)');
+}
+
+// provider สำหรับใส่ log ตอน error — ห้าม throw ซ้ำใน catch (เช่นกรณี error ต้นทางคือ "no provider available")
+function providerForLog(req?: string): string {
+  try { return resolveProvider(req); } catch { return req ?? 'unknown'; }
 }
 
 async function callAI(payload: {
@@ -151,13 +169,15 @@ async function callAI(payload: {
   max_tokens?: number;
   provider?: string;
   prefill?: string;   // assistant prefix — บังคับโมเดล "เขียนต่อ" จากท่อนนี้ ลด soft-refusal/การเลี่ยงคำ
+  history?: { role: 'user' | 'assistant'; content: string }[];   // ประวัติสนทนา (โหมดแชทหลายเทิร์น)
 }) {
   const provider = resolveProvider(payload.provider);
   const cfg = PROVIDER_CONFIG[provider];
-  const apiKey = process.env[cfg.keyEnv]!;
+  const apiKey = cfg.keyEnv ? process.env[cfg.keyEnv]! : 'lm-studio'; // local ไม่เช็ค key (ส่ง dummy)
 
   const messages: any[] = [];
   if (payload.system) messages.push({ role: 'system', content: payload.system });
+  if (payload.history?.length) messages.push(...payload.history);
   messages.push({ role: 'user', content: payload.user });
 
   // prefill / prefix completion
@@ -275,6 +295,25 @@ async function logCall(data: {
   }
 }
 
+// SD prompt builder สำหรับฉากแชท (ChatChar + ฉากไทย → booru อังกฤษ) — Illustrious/SDXL
+const CHAT_SCENE_SD_SYSTEM = `You are an expert Stable Diffusion prompt engineer for an anime Illustrious/SDXL model.
+Convert a character profile + a Thai roleplay scene into a booru-style English image prompt.
+
+Output JSON ONLY: {"positive": "...", "negative": "..."}
+
+positive rules:
+- Start with: masterpiece, best quality, absurdres, ultra detailed
+- Character identity (translate the Thai profile into booru tags): count (1girl/1boy), race/species, ears, hair length+color+style, eye color, skin, notable face features, body proportions (breast size, waist, hips, butt)
+- ⚠️ DISGUISE OVERRIDE: if the "story so far / scene" indicates the character is currently disguised, transformed, or shapeshifted (different hair color, different race/ears, hidden marks, human-passing form, masked, etc.), build the VISIBLE identity tags from that DISGUISED appearance — NOT the true profile. Draw what others would see in this scene. Only use the true profile's identity when the scene shows the true form revealed.
+- Outfit: use the profile's default outfit BUT adjust to the scene — if the scene shows clothes removed/opened/changed/damaged, reflect that exact state instead (e.g. open robe, topless, nude, clothes pulled aside)
+- Scene: derive pose, action, interaction with viewer, facial expression, gaze, and any explicit acts from the Thai scene; add the matching booru tags
+- Setting & camera: location, time of day, lighting, mood, and camera angle (pov / from above / etc.) from the scene
+- Comma-separated booru tags, English only, ~50-80 tags max
+negative rules:
+- Always include: (worst quality, low quality:1.4), lowres, bad anatomy, bad hands, extra digits, deformed face, text, watermark, signature, child, loli, multiple views
+NSFW is allowed (adult fiction, all characters 22+); use explicit booru tags when the scene is explicit.
+Return JSON only, no commentary.`;
+
 // จับเวลาแต่ละ request ด้วย WeakMap keyed by Request (ปลอดภัยกับ concurrency)
 const reqStart = new WeakMap<Request, number>();
 
@@ -356,6 +395,100 @@ const app = new Elysia()
     return { ok: true, rev: cur + 1 };
   })
 
+  // --- chat state (ระบบแชท RP — doc 'chat' เก็บเฉพาะ meta: chars+items; sessions แยก doc ละอันใน chat_sessions) ---
+  .get('/api/chat-state', async () => {
+    const db = await getDb();
+    const col = db.collection(COLLECTION);
+    const doc = await col.findOne({ _id: CHAT_STATE_ID as any });
+    if (!doc?.state) return null;
+    // migrate ครั้งเดียว: ฟอร์แมตเก่าเก็บ sessions ปนใน doc เดียว (ชนเพดาน 16MB + PUT หนัก) → ย้ายออก
+    const legacy: any[] = doc.state.sessions ?? [];
+    if (legacy.length) {
+      const sessCol = db.collection(CHAT_SESSIONS_COLLECTION);
+      for (const s of legacy) {
+        if (!s?.id) continue;
+        await sessCol.updateOne(
+          { _id: s.id as any },
+          { $setOnInsert: { session: s, rev: 1, updatedAt: new Date() } },
+          { upsert: true },
+        );
+      }
+      await col.updateOne({ _id: CHAT_STATE_ID as any }, { $unset: { 'state.sessions': '' } });
+      logActivity('chat.migrate-sessions', CHAT_STATE_ID, { count: legacy.length });
+    }
+    const { sessions: _legacy, ...meta } = doc.state;
+    return { ...meta, __rev: doc.rev ?? 0 };
+  })
+  .put('/api/chat-state', async ({ body, set }) => {
+    const db = await getDb();
+    const col = db.collection(COLLECTION);
+    const incoming = { ...(body as any) };
+    const baseRev = incoming.__rev;
+    delete incoming.__rev;
+    const existing = await col.findOne({ _id: CHAT_STATE_ID as any }, { projection: { rev: 1 } });
+    if (!existing) {
+      await col.updateOne({ _id: CHAT_STATE_ID as any }, { $set: { state: incoming, updatedAt: new Date(), rev: 1 } }, { upsert: true });
+      return { ok: true, rev: 1 };
+    }
+    const hasRev = existing.rev !== undefined && existing.rev !== null;
+    const cur = hasRev ? existing.rev : 0;
+    if (baseRev !== cur) {
+      set.status = 409;
+      return { ok: false, conflict: true, currentRev: cur, error: `rev mismatch (client=${baseRev}, server=${cur})` };
+    }
+    const revFilter = hasRev ? { rev: cur } : { rev: { $exists: false } };
+    const r = await col.updateOne(
+      { _id: CHAT_STATE_ID as any, ...revFilter },
+      { $set: { state: incoming, updatedAt: new Date() }, $inc: { rev: 1 } },
+    );
+    if (r.matchedCount === 0) {
+      const d = await col.findOne({ _id: CHAT_STATE_ID as any }, { projection: { rev: 1 } });
+      set.status = 409;
+      return { ok: false, conflict: true, currentRev: d?.rev ?? 0, error: 'rev changed during write' };
+    }
+    return { ok: true, rev: cur + 1 };
+  })
+
+  // --- chat sessions (doc ละ session — เซฟ/โหลดเฉพาะอันที่เปลี่ยน ไม่ต้องส่งทุกแชททุกครั้ง) ---
+  .get('/api/chat-sessions', async () => {
+    const db = await getDb();
+    const docs = await db.collection(CHAT_SESSIONS_COLLECTION).find({}).toArray();
+    return docs.map((d: any) => ({ ...d.session, __rev: d.rev ?? 0 }));
+  })
+  .put('/api/chat-session/:id', async ({ params, body, set }) => {
+    const db = await getDb();
+    const col = db.collection(CHAT_SESSIONS_COLLECTION);
+    const incoming = { ...(body as any) };
+    const baseRev = incoming.__rev;
+    delete incoming.__rev;
+    if (incoming.id !== params.id) return { ok: false, error: `session id mismatch (body=${incoming.id}, url=${params.id})` };
+    const existing = await col.findOne({ _id: params.id as any }, { projection: { rev: 1 } });
+    if (!existing) {
+      await col.updateOne({ _id: params.id as any }, { $set: { session: incoming, updatedAt: new Date(), rev: 1 } }, { upsert: true });
+      return { ok: true, rev: 1 };
+    }
+    const cur = existing.rev ?? 0;
+    if (baseRev !== cur) {
+      set.status = 409;
+      return { ok: false, conflict: true, currentRev: cur, error: `rev mismatch (client=${baseRev}, server=${cur})` };
+    }
+    const r = await col.updateOne(
+      { _id: params.id as any, rev: cur },
+      { $set: { session: incoming, updatedAt: new Date() }, $inc: { rev: 1 } },
+    );
+    if (r.matchedCount === 0) {
+      const d = await col.findOne({ _id: params.id as any }, { projection: { rev: 1 } });
+      set.status = 409;
+      return { ok: false, conflict: true, currentRev: d?.rev ?? 0, error: 'rev changed during write' };
+    }
+    return { ok: true, rev: cur + 1 };
+  })
+  .delete('/api/chat-session/:id', async ({ params }) => {
+    const db = await getDb();
+    await db.collection(CHAT_SESSIONS_COLLECTION).deleteOne({ _id: params.id as any });
+    return { ok: true };
+  })
+
   // --- export ground-truth markdown (storyline/character/event) ลง disk จาก state ใน Mongo ---
   .post('/api/export-md', async ({ body }) => {
     const b = (body ?? {}) as { storyId?: string; dir?: string };
@@ -402,10 +535,12 @@ const app = new Elysia()
       available: {
         openrouter: providerAvailable('openrouter'),
         deepseek: providerAvailable('deepseek'),
+        lmstudio: providerAvailable('lmstudio'),
       },
       models: {
         openrouter: PROVIDER_CONFIG.openrouter.defaultModel,
         deepseek: PROVIDER_CONFIG.deepseek.defaultModel,
+        lmstudio: PROVIDER_CONFIG.lmstudio.defaultModel,
       },
     };
   })
@@ -474,6 +609,7 @@ const app = new Elysia()
       provider?: string;
       temperature?: number;
       max_tokens?: number;
+      prefill?: string;   // assistant prefix — ลด soft-refusal/การเลี่ยงคำ, บังคับให้เขียนต่อจากท่อนนี้
     };
     if (!b?.context?.protagonist || !b?.context?.setting || !b?.context?.eventCurrent) {
       return { ok: false, error: 'context.protagonist, context.setting, context.eventCurrent are required' };
@@ -490,6 +626,7 @@ const app = new Elysia()
         provider: b.provider,
         temperature: b.temperature ?? 0.85,
         max_tokens,
+        prefill: b.prefill,
       });
       const ms = Date.now() - t0;
       logCall({
@@ -513,7 +650,7 @@ const app = new Elysia()
         system: assembleSystemPrompt(b.context),
         user: b.user_input,
         response: '',
-        provider: resolveProvider(b.provider),
+        provider: providerForLog(b.provider),
         model: '',
         usage: null,
         temperature: b.temperature ?? 0.85,
@@ -521,6 +658,108 @@ const app = new Elysia()
         ok: false,
         error: e.message,
         ms,
+      }).catch(() => {});
+      return { ok: false, error: e.message };
+    }
+  })
+
+  // --- AI chat (roleplay หลายเทิร์น, ตัวละครมี agency/ปฏิเสธได้) ---
+  .post('/api/chat', async ({ body }) => {
+    const b = body as {
+      char: ChatCharLite;
+      history?: { role: 'user' | 'char'; content: string }[];
+      user_input: string;
+      rel?: number;
+      summary?: string;
+      mode?: 'char' | 'narrator';
+      provider?: string;
+      prefill?: string;
+      temperature?: number;
+      max_tokens?: number;
+    };
+    if (!b?.char?.name) return { ok: false, error: 'missing "char.name"' };
+    if (!b?.user_input) return { ok: false, error: 'missing "user_input"' };
+    const rel = Math.max(-100, Math.min(100, b.rel ?? 0));
+    const t0 = Date.now();
+    try {
+      // local (Gemma) token น้อย — สั่งความยาวคำตอบสั้นลง ไม่ให้โดน max_tokens ตัดกลางประโยค
+      const compact = resolveProvider(b.provider) === 'lmstudio';
+      const system = b.mode === 'narrator' ? assembleNarratorPrompt(b.char, b.summary, compact) : assembleChatPrompt(b.char, rel, b.summary, compact);
+      const history = (b.history ?? []).map((m) => ({
+        role: m.role === 'char' ? ('assistant' as const) : ('user' as const),
+        content: m.content,
+      }));
+      const max_tokens = b.max_tokens ?? 700;
+      const out = await callAI({
+        system,
+        user: b.user_input,
+        history,
+        provider: b.provider,
+        prefill: b.prefill,
+        temperature: b.temperature ?? 0.9,
+        max_tokens,
+      });
+      logCall({
+        endpoint: 'chat', system, user: b.user_input, response: out.text,
+        provider: out.provider, model: out.model ?? '', usage: out.usage,
+        temperature: b.temperature ?? 0.9, maxTokens: max_tokens, ok: true, ms: Date.now() - t0,
+      }).catch(() => {});
+      return { ok: true, ...out };
+    } catch (e: any) {
+      logCall({
+        endpoint: 'chat', system: '', user: b.user_input, response: '',
+        provider: providerForLog(b.provider), model: '', usage: null,
+        temperature: b.temperature ?? 0.9, maxTokens: b.max_tokens ?? 700, ok: false, error: e.message, ms: Date.now() - t0,
+      }).catch(() => {});
+      return { ok: false, error: e.message };
+    }
+  })
+
+  // --- AI: ฉากแชท → SD prompt (อังกฤษ) → ComfyUI → รูปประกอบ ---
+  .post('/api/chat/scene-image', async ({ body }) => {
+    const b = body as {
+      char: { name: string; appearance?: string; outfit?: string; description?: string };
+      sceneText: string;
+      summary?: string;
+      sessionId?: string;
+      provider?: string;
+      model?: string;
+      width?: number; height?: number; steps?: number; cfg?: number;
+    };
+    if (!b?.char?.name || !b?.sceneText) return { ok: false, error: 'char.name + sceneText required' };
+    const t0 = Date.now();
+    try {
+      const c = b.char;
+      const userMsg =
+        `Character profile (TRUE identity):\nname: ${c.name}\nappearance: ${c.appearance ?? ''}\ndefault outfit: ${c.outfit ?? ''}\nextra: ${c.description ?? ''}\n\n` +
+        `${b.summary?.trim() ? `Story so far (for current state / disguise — what the character looks like RIGHT NOW may differ from the true profile):\n${b.summary.trim()}\n\n` : ''}` +
+        `Scene (Thai):\n${b.sceneText}\n\nApply the DISGUISE OVERRIDE rule using the story-so-far + scene. Build the image prompt JSON.`;
+      const out = await callAI({ system: CHAT_SCENE_SD_SYSTEM, user: userMsg, provider: b.provider, temperature: 0.5, max_tokens: 800 });
+      let parsed: any = null;
+      try { const m = out.text.match(/\{[\s\S]*\}/); parsed = JSON.parse(m ? m[0] : out.text); }
+      catch { return { ok: false, error: 'LLM returned non-JSON', raw: out.text.slice(0, 300) }; }
+      if (!parsed?.positive) return { ok: false, error: 'no positive prompt from LLM' };
+
+      const img = await generateComfyUI({
+        prompt: parsed.positive,
+        negative_prompt: parsed.negative,
+        model: b.model ?? 'wai_illustrious_v17.safetensors',
+        book: 'chat', ch: b.sessionId || 'session',
+        width: b.width ?? 832, height: b.height ?? 1216,
+        steps: b.steps ?? 28, cfg_scale: b.cfg ?? 5,
+      } as any);
+
+      logCall({
+        endpoint: 'chat/scene-image', system: CHAT_SCENE_SD_SYSTEM, user: userMsg, response: parsed.positive,
+        provider: out.provider, model: out.model ?? '', usage: out.usage, temperature: 0.5, maxTokens: 800,
+        ok: true, ms: Date.now() - t0,
+      }).catch(() => {});
+      return { ok: true, url: (img as any).url, prompt: parsed.positive, negative: parsed.negative };
+    } catch (e: any) {
+      logCall({
+        endpoint: 'chat/scene-image', system: CHAT_SCENE_SD_SYSTEM, user: b.sceneText, response: '',
+        provider: providerForLog(b.provider), model: '', usage: null, temperature: 0.5, maxTokens: 800,
+        ok: false, error: e.message, ms: Date.now() - t0,
       }).catch(() => {});
       return { ok: false, error: e.message };
     }
@@ -627,7 +866,7 @@ const app = new Elysia()
     } catch (e: any) {
       logCall({
         endpoint: 'expand', system: EXPAND_SYSTEM, user, response: '',
-        provider: resolveProvider(b.provider), model: '', usage: null,
+        provider: providerForLog(b.provider), model: '', usage: null,
         temperature: 0.85, maxTokens: max_tokens, ok: false, error: e.message, ms: Date.now() - t0,
       }).catch(() => {});
       return { ok: false, error: e.message };

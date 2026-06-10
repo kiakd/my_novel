@@ -94,7 +94,7 @@ export function ReaderScreen() {
         open={tocOpen} onClose={() => setTocOpen(false)}
         chapters={chapters} currentId={currentId} onPick={pick}
         chrome={theme.chrome} fg={theme.fg} faint={theme.faint} border={theme.border}
-        labels={{ toc: t('reader.toc'), story: t('reader.story'), untitled: t('reader.untitled'), words: (n: number) => t('reader.words', { n: n.toLocaleString() }) }}
+        labels={{ toc: t('reader.toc'), story: t('reader.story'), untitled: t('reader.untitled'), chars: (n: number) => t('reader.chars', { n: n.toLocaleString() }) }}
       />
 
       <ReaderSettings
