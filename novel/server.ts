@@ -320,7 +320,7 @@ positive rules:
 - Comma-separated booru tags, English only, ~50-80 tags max
 negative rules:
 - Always include: (worst quality, low quality:1.4), lowres, bad anatomy, bad hands, extra digits, deformed face, text, watermark, signature, child, loli, multiple views
-NSFW is allowed (adult fiction, all characters 22+); use explicit booru tags when the scene is explicit.
+NSFW is allowed (adult fiction, all characters 18+); use explicit booru tags when the scene is explicit.
 Return JSON only, no commentary.`;
 
 // จับเวลาแต่ละ request ด้วย WeakMap keyed by Request (ปลอดภัยกับ concurrency)
