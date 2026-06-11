@@ -88,7 +88,8 @@ export interface ChatSession {
   summarizedCount?: number; // จำนวนข้อความ (ไม่นับไอเท็ม) ที่ถูกรวมเข้า summary แล้ว
   secretSummary?: string;        // rolling summary ของ "ฉากลับ" (narrator+secret) — ฉีดเฉพาะโหมดผู้เล่าเรื่อง ตัวละครหลักไม่เห็น
   secretSummarizedCount?: number; // จำนวนฉากลับที่ถูกรวมเข้า secretSummary แล้ว
-  stateCard?: ChatStateCard;     // บัตรสถานะปัจจุบัน — อัปเดตอัตโนมัติตอนพับ summary, แก้มือได้ในหน้า ⚙️
+  stateCard?: ChatStateCard;     // บัตรสถานะปัจจุบัน — อัปเดตจาก "ช่วงล่าสุด" ทุก ~6 เทิร์น, แก้มือได้ในหน้า ⚙️
+  stateCardAt?: number;          // ตำแหน่งไทม์ไลน์ (นับ non-item) ที่ stateCard สะท้อนถึง — decouple จาก summarizedCount กัน stateCard ค้าง
   memFacts?: ChatMemFact[];      // ความจำแยกหมวดสะสม (รอ Phase 4 vector retrieval)
   createdAt?: number;
   updatedAt?: number;

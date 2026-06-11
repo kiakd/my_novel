@@ -72,10 +72,15 @@
 2. **field เวลา** ✅ — เพิ่ม `time` ใน `ChatStateCard` (12 เดือน/24 ชม.) + extractor เลื่อนเวลาตามบท + ช่องแก้ในหน้าตั้งค่า (`chat-types.ts`/`chat-api.ts` STATE_SYSTEM/`ChatScreen.tsx` STATE_FIELDS) → แก้ location ค้าง "ใต้แสงจันทร์"
 3. **ดัน lexicon** ✅ — `shared-rules.ts` แรงขึ้น (ถึงฉากสัมผัส/ออรัล/สอดใส่ ใช้คำตรงทันที) + เตือนซ้ำท้าย persona reminder → ทดสอบ DeepSeek ใช้คำดิบแล้ว (ควย/หัวควย/หี); E4B ยัง slow-burn ต้อง tokens เยอะ/prefill
 
+## ✅ ทำเพิ่มรอบ 3 (11 มิ.ย. — anti-drift + E4B)
+1. **anti-drift state machine** ✅
+   - **(A) กฎปลอมตัว state machine** (`chat-prompt.ts`): ก่อน action เข้าเมือง/ชุมชน/ที่สาธารณะ → เช็ค field "ตัวตน/ร่างตอนนี้" ถ้าร่างจริงต้องปลอมก่อนในบทเดียวกัน
+   - **(B) decouple stateCard จาก fold** (`ChatScreen.tsx` + `chat-types.ts` `stateCardAt`): refresh stateCard จาก "ช่วงล่าสุด" ทุก ~6 เทิร์น (เดิมสกัดจากส่วนที่เพิ่งพับ=ของเก่า → ค้าง) → time/location/ปลอมตัว สดเสมอ
+   - **(C) canonical entity** (`chat-api.ts` STATE_SYSTEM): ชื่อเฉพาะ (NPC/สัตว์เลี้ยง/สถานที่/ของ) + ที่มา ห้ามเปลี่ยน/แต่งใหม่ — กัน retcon (ม้า "ไอวี่")
+2. **E4B ctx 8192 default** ✅ — สคริปต์ `novel/load-local-model.cmd` (โหลด E4B @8192 ก่อนใช้แชท local; แอปคุม JIT ctx ไม่ได้ ต้อง pre-load) · โหลดไว้แล้ว
+
 ## ⬜ ยังไม่ได้ทำ (รอจูนต่อ)
 - **ปฏิทิน/ชื่อเวลาแบบโลกแฟนตาซี** (ตั้งเดือน/ยาม/ฤดูเอง) — ตอนนี้ใช้ 12 เดือน/24 ชม. มาตรฐานไปก่อน (TODO note ใน `chat-types.ts`)
-- **anti-drift เพิ่ม** — ปลด stateCard จาก summarizedCount lag (อัปเดตทุกเทิร์น), กฎปลอมตัวเป็น state machine (`currentForm`+เช็ค "next scene=ชุมชน"), canonical entity (ล็อกชื่อ/ที่มาม้า/NPC)
-- **โหลด E4B default ctx 8192** (ไม่ใช่ 4096) — ตอนนี้ต้องโหลดเองทุกครั้ง
 - **นิยาม "ขอบเขตอำนาจตราทาส" ในการ์ดตัวละคร** ให้ชัด (consent model ช่วยแล้ว แต่ควรเขียนกฎตรา=override จริง)
 - **E4B lexicon** — ดันให้ถึงฉากจริงเร็วขึ้น (prefill/tokens)
 

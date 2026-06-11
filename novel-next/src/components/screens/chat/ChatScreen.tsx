@@ -165,22 +165,31 @@ export function ChatScreen() {
           summarized += foldN;
           raw = raw.slice(foldN);
           updateSession(sessionId, (s) => ({ ...s, summary, summarizedCount: summarized }));
-          // Phase 3: อัปเดต "บัตรสถานะ" + เก็บความจำแยกหมวด จากช่วงที่เพิ่งพับ (ล้มเหลวได้เงียบ ๆ — บัตรเดิมยังอยู่)
-          void extractState({ prevCard: session?.stateCard, transcript, charName: sessChar.name, provider }).then((ex) => {
-            if (!ex || !sessionId) return;
-            // เอาเฉพาะ field ที่สกัดได้จริง — undefined ห้ามทับค่าเดิมในบัตร
-            const cleaned = Object.fromEntries(Object.entries(ex.card).filter(([, v]) => v)) as ChatStateCard;
-            const now = Date.now();
-            updateSession(sessionId, (s) => ({
-              ...s,
-              stateCard: { ...s.stateCard, ...cleaned },
-              memFacts: [...(s.memFacts ?? []), ...ex.facts.map((f) => ({ ...f, ts: now }))],
-            }));
-          });
         } else {
           toast('ย่อความจำไม่สำเร็จ — ถ้าแชทยาวต่อ เรื่องเก่าอาจเริ่มหลุด', '⚠️');
         }
       }
+    }
+    // อัปเดต "บัตรสถานะ" จาก "ช่วงล่าสุด" (decouple จาก fold) — สกัดจากข้อความปัจจุบัน ไม่ใช่ส่วนที่เพิ่งพับ (เก่า)
+    // รันทุก ~STATE_REFRESH เทิร์น เพื่อให้ time/location/ปลอมตัว สดเสมอ กัน stateCard ค้างเมื่อ raw ยังไม่ถึงรอบ fold
+    const STATE_REFRESH = 6;
+    const seenAt = session?.stateCardAt ?? summarized;
+    if (conv.length > 0 && conv.length - seenAt >= STATE_REFRESH) {
+      const recent = conv.slice(Math.max(seenAt, conv.length - 12));
+      const recentTranscript = recent.map((m) => `${speaker(m)}: ${m.text}`).join('\n');
+      const total = conv.length;
+      void extractState({ prevCard: session?.stateCard, transcript: recentTranscript, charName: sessChar.name, provider }).then((ex) => {
+        if (!ex || !sessionId) return;
+        // เอาเฉพาะ field ที่สกัดได้จริง — undefined ห้ามทับค่าเดิมในบัตร
+        const cleaned = Object.fromEntries(Object.entries(ex.card).filter(([, v]) => v)) as ChatStateCard;
+        const now = Date.now();
+        updateSession(sessionId, (s) => ({
+          ...s,
+          stateCard: { ...s.stateCard, ...cleaned },
+          memFacts: [...(s.memFacts ?? []), ...ex.facts.map((f) => ({ ...f, ts: now }))],
+          stateCardAt: total,
+        }));
+      });
     }
     return { summary, raw };
   };
