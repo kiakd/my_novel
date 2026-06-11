@@ -1,5 +1,5 @@
 // ============ API client ของระบบแชท RP (แยกจาก api.ts ของเนื้อเรื่อง) ============
-import type { ChatMeta, ChatMetaWithRev, ChatSession, ChatSessionWithRev, ChatChar, ChatMsg } from './chat-types';
+import type { ChatMeta, ChatMetaWithRev, ChatSession, ChatSessionWithRev, ChatChar, ChatMsg, ChatStateCard, ChatMemFact } from './chat-types';
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
@@ -35,6 +35,8 @@ export const sendChat = (body: {
   user_input: string;
   rel: number;
   summary?: string;
+  lore?: string[];
+  state?: string;        // บัตรสถานะปัจจุบัน (ข้อความ format แล้ว) — ฉีดใกล้ท้าย system prompt
   mode?: 'char' | 'narrator';
   provider?: string;
   max_tokens?: number;
@@ -49,7 +51,9 @@ const SUMMARY_SYSTEM =
   'สถานะล่าสุด (อยู่ที่ไหน ใส่/ถอดชุดอะไร ใครอยู่ในฉาก), พัฒนาการความสัมพันธ์และอารมณ์/ท่าทีล่าสุด, ปมที่ค้างอยู่. ' +
   '⚠️ สำคัญ: ต้องเก็บ "พัฒนาการเนื้อเรื่อง/พล็อต" ด้วยเสมอ — พลัง/ความสามารถที่ได้คืนหรือเสียไป, สิ่งของ/อาวุธ/ภารกิจ/เป้าหมายใหม่, การย้ายเมือง/สถานที่, ตัวละครใหม่ที่เจอ. ' +
   'อย่าเก็บแต่ฉากความสัมพันธ์/ฉากผู้ใหญ่จนลืมพล็อต. ' +
-  'ตัดเฉพาะบทพูดน้ำ ๆ ที่ไม่มีสาระทิ้ง. เขียนภาษาไทยเล่าต่อเนื่องมุมบุคคลที่สาม เป็นระเบียบตามลำดับเวลา ~250-320 คำ.';
+  '⚠️ ห้ามเดา/แต่งเติมข้อเท็จจริงที่ไม่ได้ระบุในบทสนทนาหรือสรุปเดิมเด็ดขาด — โดยเฉพาะ "เพศ รูปลักษณ์ และชื่อของร่างปลอมตัว" (อย่าอนุมานเพศจากชื่อ) ถ้าไม่แน่ใจให้คงถ้อยคำตามต้นฉบับ. ' +
+  'ตัดเฉพาะบทพูดน้ำ ๆ ที่ไม่มีสาระทิ้ง. เขียนภาษาไทยเล่าต่อเนื่องมุมบุคคลที่สาม เป็นระเบียบตามลำดับเวลา ~250-320 คำ. ' +
+  'ปิดท้ายด้วยย่อหน้า "สถานะปัจจุบัน:" ระบุชัด: อยู่ที่ไหน, กำลังทำอะไร, การปลอมตัวตอนนี้ (ชื่อปลอม เพศและรูปลักษณ์ของร่างปลอม หรือ "ร่างจริง"), ใครบ้างที่รู้ตัวจริง, ชุด/ของสำคัญที่มี.';
 
 export const summarizeChat = (body: { prevSummary?: string; transcript: string; charName: string; provider?: string }) =>
   jsonFetch<{ ok: boolean; text?: string; error?: string }>('/api/generate', {
@@ -65,6 +69,48 @@ export const summarizeChat = (body: { prevSummary?: string; transcript: string; 
       max_tokens: 800,
     }),
   });
+
+// ---- สกัด "บัตรสถานะ" + ความจำแยกหมวด จากช่วงบทสนทนาที่เพิ่งถูกพับเข้า summary (Phase 3 anti-drift) ----
+const STATE_SYSTEM =
+  'คุณคือผู้ช่วยสกัด "บัตรสถานะปัจจุบัน" ของตัวละครจากบทสนทนาโรลเพลย์ ตอบเป็น JSON เท่านั้น ห้ามมีข้อความอื่น:\n' +
+  '{"location":"อยู่ที่ไหนตอนนี้","disguise":"ตัวตน/ร่างตอนนี้ (ถ้าปลอมตัว: ชื่อปลอม เพศ รูปลักษณ์ของร่างปลอม | ถ้าไม่: ร่างจริง)","whoKnowsTruth":"ใครรู้ตัวจริงบ้าง","outfit":"ชุดที่ใส่ตอนนี้","inventory":"ของสำคัญที่มี","goals":"กำลังทำ/ตามล่าอะไร",' +
+  '"facts":[{"kind":"relationship|event|fact|emotion","text":"ข้อเท็จจริงสำคัญ 1 ประโยค"}]}\n' +
+  'กฎ: เริ่มจาก "บัตรเดิม" แล้วอัปเดตเฉพาะที่บทสนทนาช่วงใหม่เปลี่ยนจริง · ห้ามเดา/แต่งเติมเด็ดขาด (โดยเฉพาะเพศ/รูปลักษณ์ของร่างปลอม — ห้ามอนุมานจากชื่อ) · ' +
+  'field ไหนไม่มีข้อมูลใหม่ให้คงค่าจากบัตรเดิม · facts เอาเฉพาะเรื่องสำคัญที่ควรจำระยะยาว 0-5 ข้อ';
+
+export interface ExtractedState { card: ChatStateCard; facts: Omit<ChatMemFact, 'ts'>[] }
+export async function extractState(body: {
+  prevCard?: ChatStateCard; transcript: string; charName: string; provider?: string;
+}): Promise<ExtractedState | null> {
+  try {
+    const r = await jsonFetch<{ ok: boolean; text?: string }>('/api/generate', {
+      method: 'POST',
+      body: JSON.stringify({
+        system: STATE_SYSTEM,
+        user:
+          `[ตัวละครหลัก: ${body.charName}]\n` +
+          `[บัตรเดิม]\n${JSON.stringify(body.prevCard ?? {})}\n\n` +
+          `[บทสนทนาช่วงใหม่]\n${body.transcript}\n\n[งาน] อัปเดตบัตรสถานะเป็น JSON`,
+        provider: body.provider,
+        temperature: 0.2,
+        max_tokens: 600,
+      }),
+    });
+    const m = r.text?.match(/\{[\s\S]*\}/);
+    if (!m) return null;
+    const j = JSON.parse(m[0]);
+    const pick = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+    const card: ChatStateCard = {
+      location: pick(j.location), disguise: pick(j.disguise), whoKnowsTruth: pick(j.whoKnowsTruth),
+      outfit: pick(j.outfit), inventory: pick(j.inventory), goals: pick(j.goals),
+    };
+    const KINDS = ['relationship', 'event', 'fact', 'emotion'];
+    const facts = (Array.isArray(j.facts) ? j.facts : [])
+      .filter((f: any) => typeof f?.text === 'string' && f.text.trim())
+      .map((f: any) => ({ kind: (KINDS.includes(f.kind) ? f.kind : 'fact') as ChatMemFact['kind'], text: f.text.trim() }));
+    return { card, facts };
+  } catch { return null; }
+}
 
 // ---- ฉากแชท → SD prompt (อังกฤษ) → ComfyUI → รูปประกอบ ----
 export const chatSceneImage = (body: {

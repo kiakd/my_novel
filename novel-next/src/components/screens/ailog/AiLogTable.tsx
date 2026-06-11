@@ -1,10 +1,10 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { Card, Drawer, IconBtn, Tag, Spinner, EmptyState } from '@/components/ui';
+import { Card, Drawer, IconBtn, Tag, Spinner, EmptyState, toast } from '@/components/ui';
 import { useI18n } from '@/lib/i18n';
 import { pal, cx } from '@/lib/theme';
-import { getAiLogs } from '@/lib/api';
-import type { AILogRow } from '@/lib/types';
+import { getAiLogs, getAiLog } from '@/lib/api';
+import type { AILogRow, AILogDetail } from '@/lib/types';
 import { StatusDot } from './StatusDot';
 import { fmtTime } from './util';
 
@@ -15,8 +15,29 @@ export function AiLogTable() {
   const { t } = useI18n();
   const [rows, setRows] = useState<AILogRow[] | null>(null);
   const [open, setOpen] = useState<AILogRow | null>(null);
+  const [detail, setDetail] = useState<AILogDetail | null>(null);  // log เต็ม (ไม่ถูกตัด) ของรายการที่เปิด
+  const [loadingDetail, setLoadingDetail] = useState(false);
 
   useEffect(() => { getAiLogs(150).then(setRows).catch(() => setRows([])); }, []);
+
+  // เปิด drawer → ดึง log เต็มมาแทน preview ที่ถูกตัด 200 ตัว
+  useEffect(() => {
+    if (!open) { setDetail(null); return; }
+    let alive = true;
+    setLoadingDetail(true);
+    getAiLog(open.id)
+      .then((d) => { if (alive) setDetail(d); })
+      .catch(() => { if (alive) setDetail(null); })
+      .finally(() => { if (alive) setLoadingDetail(false); });
+    return () => { alive = false; };
+  }, [open]);
+
+  const copy = (text: string, label: string) => {
+    if (!text) return;
+    navigator.clipboard.writeText(text)
+      .then(() => toast(`คัดลอก${label}แล้ว`, '📋'))
+      .catch(() => toast('คัดลอกไม่สำเร็จ', '⚠️'));
+  };
 
   if (rows === null) return <div className="grid place-items-center py-20"><Spinner size={26} /></div>;
   if (rows.length === 0) return <Card className="py-6"><EmptyState emoji="🤖" color="slate" title={t('ailog.empty')} /></Card>;
@@ -57,18 +78,41 @@ export function AiLogTable() {
               </div>
               <IconBtn onClick={() => setOpen(null)}>✕</IconBtn>
             </div>
-            <div className="flex gap-2 mb-5 flex-wrap">
+            <div className="flex gap-2 mb-4 flex-wrap items-center">
               <Tag color="grape">{open.provider}</Tag>
               <Tag color="sky">{open.model}</Tag>
               <StatusDot status={open.ok ? 'ok' : 'error'} />
+              {loadingDetail && <Spinner size={14} />}
             </div>
+            {/* คัดลอก prompt ที่ป้อนโมเดล (system + user) ไปลองเทสต่อ */}
+            <button
+              onClick={() => copy(`${detail?.system ?? ''}\n\n=== USER ===\n${detail?.user ?? ''}`, 'Prompt (system+user)')}
+              disabled={loadingDetail || !detail}
+              className="w-full mb-4 rounded-2xl py-2.5 font-bold text-[13px] text-white transition disabled:opacity-50 active:scale-[.98]"
+              style={{ background: pal('grape').c }}>
+              📋 คัดลอก Prompt (system + user) ไปลองเทส
+            </button>
             {open.error && <div className="mb-4 bg-white rounded-2xl border border-line p-3.5 text-coral font-bold text-sm">{open.error}</div>}
-            {([['systemPrompt', open.systemPreview], ['user', open.userPreview], ['response', open.responsePreview]] as const).map(([key, val]) => (
-              <div key={key} className="mb-4">
-                <div className="text-[11px] font-extrabold uppercase tracking-wider mb-1.5" style={{ color: pal('grape').c }}>{t(`ailog.${key}`)}</div>
-                <div className="bg-white rounded-2xl border border-line p-3.5 font-mono text-[12.5px] leading-relaxed text-ink/80 whitespace-pre-wrap break-words">{val || '—'}</div>
-              </div>
-            ))}
+            {([
+              ['systemPrompt', detail?.system, open.systemPreview],
+              ['user', detail?.user, open.userPreview],
+              ['response', detail?.response, open.responsePreview],
+            ] as const).map(([key, full, prev]) => {
+              const val = full ?? prev ?? '';
+              const truncated = !detail && !!prev && prev.length >= 200;  // ยังโชว์ preview ตัดอยู่
+              return (
+                <div key={key} className="mb-4">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[11px] font-extrabold uppercase tracking-wider" style={{ color: pal('grape').c }}>{t(`ailog.${key}`)}</span>
+                    <button onClick={() => copy(val, t(`ailog.${key}`))} disabled={!val}
+                      title="คัดลอก" className="text-[11px] font-bold text-muted hover:text-ink disabled:opacity-40 transition px-1.5 py-0.5 rounded-lg hover:bg-ink/[.06]">📋 คัดลอก</button>
+                  </div>
+                  <div className="bg-white rounded-2xl border border-line p-3.5 font-mono text-[12.5px] leading-relaxed text-ink/80 whitespace-pre-wrap break-words">
+                    {val || '—'}{truncated && <span className="text-muted italic">… (กำลังโหลดส่วนที่เหลือ)</span>}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </Drawer>

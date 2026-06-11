@@ -14,7 +14,7 @@ interface AIBarProps {
 /** แถบ AI ลอยล่างจอ (ขยาย/เขียนต่อ/รีวิว/สรุป) */
 export function AIBar({ onAct, onExpand, onContinue, busy }: AIBarProps) {
   const { t } = useI18n();
-  // review/summary ยังเป็น placeholder (stub) — เขียนต่อ/ขยาย ทำงานจริงแล้ว
+  // summary ทำงานจริงแล้ว (สรุปบท → ความจำข้ามบท) — review ยังเป็น placeholder (stub)
   const acts: [string, string, BtnVariant][] = [
     ['review', `🔍 ${t('chapters.aiReview')}`, 'soft'],
     ['summary', `📝 ${t('chapters.aiSummary')}`, 'soft'],

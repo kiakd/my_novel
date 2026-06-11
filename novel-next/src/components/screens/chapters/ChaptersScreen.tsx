@@ -12,7 +12,7 @@ import { ChapterEditor, type ChapterEditorHandle } from './ChapterEditor';
 import { AIBar } from './AIBar';
 import { ExpandPanel } from './ExpandPanel';
 import { ContinueMenu, type ContinueKind } from './ContinueMenu';
-import { generateRoleplay } from '@/lib/api';
+import { generate, generateRoleplay } from '@/lib/api';
 import { buildNovelContext, cleanRoleplayArtifacts } from '@/lib/novel-context';
 
 const LS_LIST_OPEN = 'ns_chapterlist_open';
@@ -64,13 +64,42 @@ export function ChaptersScreen() {
   const activeStatus = active ? statusOf(active.content, active.status) : 'empty';
   const chars = charCount(active?.content);
 
-  const patchActive = (patch: Partial<{ title: string; content: string; status: ChapterStatus }>) => {
+  const patchActive = (patch: Partial<{ title: string; content: string; status: ChapterStatus; summary: string }>) => {
     if (!active) return;
     mutateStory((s) => ({ ...s, chapters: s.chapters.map((c) => (c.id === active.id ? { ...c, ...patch } : c)) }));
   };
+  const patchChapter = (id: string, patch: Partial<{ summary: string }>) =>
+    mutateStory((s) => ({ ...s, chapters: s.chapters.map((c) => (c.id === id ? { ...c, ...patch } : c)) }));
   const setBody = (v: string) => patchActive({ content: v, status: statusOf(v, active?.status) });
 
-  const act = (_id: string, lbl: string) => {
+  // ---- สรุปบท = ความจำข้ามบท (กลไกเดียวกับ rolling summary ของแชท — หน่วยพับคือ "บท") ----
+  const CH_SUMMARY_SYSTEM =
+    'คุณคือผู้ช่วยสรุปบทนิยายเป็น "ความจำข้ามบท" สำหรับให้ AI เขียนบทถัดไปต่อได้ไม่หลุด. ' +
+    'เก็บข้อเท็จจริงสำคัญให้ครบ: เหตุการณ์/พล็อตสำคัญ, พัฒนาการความสัมพันธ์, สิ่งที่ได้มา/เสียไป/ตกลงสัญญา, การย้ายสถานที่. ' +
+    'ห้ามเดา/แต่งเติมสิ่งที่ไม่อยู่ในเนื้อบทเด็ดขาด (โดยเฉพาะเพศ/รูปลักษณ์ของร่างปลอมตัว — ห้ามอนุมานจากชื่อ). ' +
+    'เขียนไทยมุมบุคคลที่สาม ~100-150 คำ ปิดท้ายบรรทัด "สถานะปลายบท:" ระบุชัด ใครอยู่ที่ไหน ใส่ชุดอะไร ความสัมพันธ์/เป้าหมายล่าสุด.';
+  const summarizeChapter = async (ch: { title?: string; content?: string }): Promise<string | null> => {
+    const text = htmlToText(ch.content).trim();
+    if (!text) return null;
+    const clipped = text.length > 12000 ? `${text.slice(0, 3000)}\n…\n${text.slice(-9000)}` : text;
+    const r = await generate({ system: CH_SUMMARY_SYSTEM, user: `[บท: ${ch.title || '-'}]\n${clipped}`, provider, temperature: 0.3, max_tokens: 500 });
+    return r.ok && r.text?.trim() ? r.text.trim() : null;
+  };
+  const runSummarize = async () => {
+    if (!active) return;
+    if (!htmlToText(active.content).trim()) { toast(t('chapters.sumEmpty'), '⚠️'); return; }
+    setBusy(true);
+    toast(t('chapters.sumWorking'), '📝');
+    try {
+      const s = await summarizeChapter(active);
+      if (s) { patchActive({ summary: s }); toast(t('chapters.sumDone'), '🧠'); }
+      else toast(t('common.offline'), '⚠️');
+    } finally { setBusy(false); }
+  };
+
+  const act = (id: string, lbl: string) => {
+    if (id === 'summary') { void runSummarize(); return; }
+    // review ยังเป็น stub
     setBusy(true);
     toast(lbl.replace(/^[^ ]+ /, '') + '…', '✦');
     setTimeout(() => { setBusy(false); toast(t('common.done'), '✅'); }, 1300);
@@ -113,7 +142,18 @@ export function ChaptersScreen() {
     setBusy(true);
     toast(t('chapters.continue.working'), '✦');
     try {
-      const ctx = buildNovelContext(story, { mode, eventCurrent, chapterNum });
+      // auto-fold แบบเดียวกับแชท: บทก่อนหน้าที่มีเนื้อแต่ยังไม่มีสรุป → สรุปเก็บเป็นความจำก่อน (กัน context ข้ามบทหลุด)
+      let st = story;
+      const pending = chapters.slice(0, idx).filter((c) => !c.summary?.trim() && htmlToText(c.content).trim());
+      for (const c of pending) {
+        toast(t('chapters.sumFolding', { title: c.title || '…' }), '🧠');
+        const s = await summarizeChapter(c);
+        if (s) {
+          patchChapter(c.id, { summary: s });
+          st = { ...st, chapters: st.chapters.map((x) => (x.id === c.id ? { ...x, summary: s } : x)) };
+        }
+      }
+      const ctx = buildNovelContext(st, { mode, eventCurrent, chapterNum });
       // local ช้า + ctx เล็ก → ขอ output สั้นลง
       const maxTokens = isLocal ? (mode === 'r18' ? 1500 : 1200) : (mode === 'r18' ? 2600 : 2200);
       const r = await generateRoleplay({ context: ctx, user_input: `เขียนต่อบท "${active.title || ''}"`, provider, max_tokens: maxTokens });
@@ -171,6 +211,13 @@ export function ChaptersScreen() {
               <input value={active.title ?? ''} onChange={(e) => patchActive({ title: e.target.value })}
                 className="font-display text-3xl font-semibold text-ink bg-transparent w-full focus:outline-none mb-5 placeholder:text-muted/50" placeholder={t('chapters.untitled')} />
               <ChapterEditor ref={editorRef} chapterId={active.id} html={active.content ?? ''} placeholder={t('chapters.beginPlaceholder')} onChange={setBody} />
+              {/* ความจำข้ามบท — ป้อนให้ AI ตอนเขียนบทถัด ๆ ไป (สร้างอัตโนมัติตอน "เขียนต่อ" หรือกด 📝 สรุป) แก้มือได้ */}
+              <div className="mt-5 pt-3 border-t border-line/60">
+                <div className="text-[12px] font-bold text-muted mb-1.5">🧠 {t('chapters.sumLabel')}</div>
+                <textarea value={active.summary ?? ''} onChange={(e) => patchActive({ summary: e.target.value })} rows={3}
+                  placeholder={t('chapters.sumPlaceholder')}
+                  className="w-full bg-cream/60 rounded-xl px-3 py-2 text-[13px] text-ink border border-line focus:border-sky focus:bg-white focus:outline-none transition resize-y leading-relaxed" />
+              </div>
             </div>
           </Card>
         ) : (

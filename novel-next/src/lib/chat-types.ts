@@ -2,6 +2,15 @@
 // เก็บใน Mongo เป็น state ก้อนแยก (_id 'chat' ใน workspace) ผ่าน ChatProvider
 import type { ColorKey } from './theme';
 
+/** รายการ lorebook — ข้อเท็จจริงที่ถูกแทรกเข้า prompt "เฉพาะเมื่อ keyword โผล่ในบทสนทนาล่าสุด" (จ่าย token เฉพาะที่เกี่ยวกับฉาก) */
+export interface LoreEntry {
+  id: string;
+  keys: string[];        // keyword ที่ trigger (ไม่สนตัวพิมพ์เล็กใหญ่)
+  text: string;          // ข้อเท็จจริง 1-3 ประโยค
+  always?: boolean;      // ใส่เสมอโดยไม่ต้องรอ keyword
+  priority?: number;     // มากกว่า = สำคัญกว่า (รอดก่อนเมื่อเกินงบ)
+}
+
 /** ตัวละครสำหรับแชท RP — โปรไฟล์เหมือนตัวละครเนื้อเรื่อง + ฟิลด์เฉพาะแชท */
 export interface ChatChar {
   id: string;
@@ -25,6 +34,8 @@ export interface ChatChar {
   guard?: number;         // 0-100 ความหวงตัว/เข้าถึงยาก (สูง = ขยับช้า)
   relStart?: number;      // ความสัมพันธ์เริ่มต้น -100..100 (setup ความสัมพันธ์ไว้แต่แรกได้)
   power?: string;         // อำนาจพิเศษของผู้เล่นที่ "บังคับร่างกายได้ไร้เงื่อนไข ข้ามความสัมพันธ์" (เช่น ตราทาส/พรจากพระเจ้า) — ใจยังเพิ่ม/ลดตามจริง
+  powerStanding?: boolean; // โหมดบังคับถาวร: อำนาจมีผลทุกเทิร์น (คำสั่งบังคับ→กายทำตามเสมอ) ไม่ต้องกดปุ่ม ⚡ ทีละข้อความ
+  lore?: LoreEntry[];     // lorebook: ความรู้เฉพาะฉาก แทรกเมื่อ keyword โผล่ (Phase 2 anti-drift)
 }
 
 export interface ChatMsg {
@@ -47,6 +58,24 @@ export interface ChatItem {
   note?: string;          // คำบรรยายผล (ป้อนให้โมเดลรับรู้)
 }
 
+/** บัตรสถานะ — ข้อเท็จจริง "ปัจจุบัน" แบบ field ตายตัว ฉีดเข้า prompt ทุกเทิร์น
+ *  (Phase 3 anti-drift: identity/สถานะเป็น field ตรง ๆ ไม่ใช่ประโยคในเรียงความที่ summarizer ทำเพี้ยนได้) */
+export interface ChatStateCard {
+  location?: string;       // อยู่ที่ไหน
+  disguise?: string;       // ตัวตน/ร่างตอนนี้ เช่น "ปลอมเป็นออเรล หญิงสาวมนุษย์ผมน้ำตาล" หรือ "ร่างจริง"
+  whoKnowsTruth?: string;  // ใครรู้ตัวจริงบ้าง
+  outfit?: string;         // ชุดตอนนี้
+  inventory?: string;      // ของสำคัญที่มี
+  goals?: string;          // กำลังทำ/ตามล่าอะไร
+}
+
+/** ความจำแยกหมวด — สะสมไว้สำหรับ vector retrieval (Phase 4); ยังไม่ถูกฉีดเข้า prompt ตรง ๆ */
+export interface ChatMemFact {
+  kind: 'relationship' | 'event' | 'fact' | 'emotion';
+  text: string;
+  ts: number;
+}
+
 export interface ChatSession {
   id: string;
   charId: string;         // อ้างกลับ template (สำหรับจัดกลุ่ม) — 1 ตัวละครมีได้หลายแชท
@@ -58,6 +87,8 @@ export interface ChatSession {
   summarizedCount?: number; // จำนวนข้อความ (ไม่นับไอเท็ม) ที่ถูกรวมเข้า summary แล้ว
   secretSummary?: string;        // rolling summary ของ "ฉากลับ" (narrator+secret) — ฉีดเฉพาะโหมดผู้เล่าเรื่อง ตัวละครหลักไม่เห็น
   secretSummarizedCount?: number; // จำนวนฉากลับที่ถูกรวมเข้า secretSummary แล้ว
+  stateCard?: ChatStateCard;     // บัตรสถานะปัจจุบัน — อัปเดตอัตโนมัติตอนพับ summary, แก้มือได้ในหน้า ⚙️
+  memFacts?: ChatMemFact[];      // ความจำแยกหมวดสะสม (รอ Phase 4 vector retrieval)
   createdAt?: number;
   updatedAt?: number;
 }

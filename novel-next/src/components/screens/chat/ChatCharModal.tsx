@@ -2,7 +2,8 @@
 import { useState } from 'react';
 import { Modal, Avatar, Btn, IconBtn, Input, Textarea, Field, toast } from '@/components/ui';
 import { pal, type ColorKey } from '@/lib/theme';
-import type { ChatChar } from '@/lib/chat-types';
+import { keysToText, textToKeys } from '@/lib/chat-lore';
+import type { ChatChar, LoreEntry } from '@/lib/chat-types';
 
 const COLORS: ColorKey[] = ['coral', 'sky', 'mint', 'grape', 'sun', 'bubble', 'lilac', 'slate'];
 
@@ -18,6 +19,11 @@ export function ChatCharModal({ char, onClose, onSave, onDelete }: Props) {
   const [d, setD] = useState<ChatChar>(char);
   const set = (p: Partial<ChatChar>) => setD((x) => ({ ...x, ...p }));
   const P = pal(d.color ?? 'coral');
+
+  // ---- lorebook ----
+  const addLore = () => set({ lore: [...(d.lore ?? []), { id: 'lr' + Date.now(), keys: [], text: '' }] });
+  const setLore = (id: string, p: Partial<LoreEntry>) => set({ lore: (d.lore ?? []).map((e) => (e.id === id ? { ...e, ...p } : e)) });
+  const delLore = (id: string) => set({ lore: (d.lore ?? []).filter((e) => e.id !== id) });
 
   return (
     <Modal open onClose={onClose} size="lg">
@@ -64,6 +70,15 @@ export function ChatCharModal({ char, onClose, onSave, onDelete }: Props) {
             <Field label="⚡ อำนาจพิเศษเหนือตัวละคร (ข้ามความสัมพันธ์ — เว้นว่างถ้าไม่มี)" hint={<span className="text-[11px] text-muted">ร่างกายทำตามไร้เงื่อนไข แต่ใจยังเพิ่ม/ลดตามจริง</span>}>
               <Textarea rows={2} value={d.power ?? ''} onChange={(e) => set({ power: e.target.value })} placeholder='เช่น "ตราทาส: บังคับร่างกายให้เชื่อฟังทุกคำสั่งไร้เงื่อนไข" หรือ "พรจากพระเจ้า"' />
             </Field>
+            {d.power?.trim() && (
+              <label className="flex items-start gap-2.5 cursor-pointer rounded-xl border border-line px-3 py-2.5 bg-white/60">
+                <input type="checkbox" checked={!!d.powerStanding} onChange={(e) => set({ powerStanding: e.target.checked })} className="mt-0.5 accent-grape" />
+                <span className="text-[12.5px] leading-snug">
+                  <b>🔒 บังคับถาวร</b> — คำสั่งบังคับทุกข้อความ ร่างกายตัวละครทำตามทันที <b>โดยไม่ต้องกดปุ่ม ⚡ ทีละครั้ง</b>
+                  <span className="block text-[11px] text-muted mt-0.5">เหมาะกับฉากทาส/มีปลอกคอ — ใจ/คำพูด/ความสัมพันธ์ยังขัดขืนได้ตามจริง (ปิดไว้ = ต้องกด ⚡ เองทุกครั้ง)</span>
+                </span>
+              </label>
+            )}
             <div className="grid sm:grid-cols-2 gap-3">
               <Field label="💚 สิ่งที่ทำให้ชอบขึ้น (บรรทัดละข้อ)"><Textarea rows={3} value={d.likes ?? ''} onChange={(e) => set({ likes: e.target.value })} placeholder="จริงใจ&#10;ให้เกียรติ&#10;ตลกถูกจังหวะ" /></Field>
               <Field label="💢 สิ่งที่ทำให้ไม่ชอบ/โกรธ (บรรทัดละข้อ)"><Textarea rows={3} value={d.dislikes ?? ''} onChange={(e) => set({ dislikes: e.target.value })} placeholder="ลามกไม่ดูจังหวะ&#10;โกหก&#10;ก้าวร้าว" /></Field>
@@ -74,6 +89,34 @@ export function ChatCharModal({ char, onClose, onSave, onDelete }: Props) {
             <Field label={`ความสัมพันธ์เริ่มต้น: ${d.relStart ?? 0} (${(d.relStart ?? 0) < 0 ? 'ติดลบ=ศัตรู' : 'setup ได้'})`}>
               <input type="range" min={-100} max={100} value={d.relStart ?? 0} onChange={(e) => set({ relStart: Number(e.target.value) })} className="w-full accent-grape" />
             </Field>
+          </div>
+        </div>
+
+        {/* Lorebook — ความรู้เฉพาะฉาก แทรกเมื่อ keyword โผล่ (กันเรื่องเพี้ยนโดยไม่เปลือง context) */}
+        <div className="rounded-2xl p-4 border-2 border-line">
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <div className="font-bold text-[14px] text-ink">📚 Lorebook — ความรู้เฉพาะฉาก</div>
+            <Btn variant="ghost" onClick={addLore}>＋ เพิ่ม</Btn>
+          </div>
+          <p className="text-[11.5px] text-muted mb-2.5">
+            ข้อเท็จจริงที่จะถูกป้อนให้ AI <b>เฉพาะตอนที่ keyword โผล่ในแชทช่วงล่าสุด</b> — เหมาะกับตัวละครรอง สถานที่ ของสำคัญ เหตุการณ์เบื้องหลัง (กันเรื่องเพี้ยนแบบไม่เปลือง context)
+          </p>
+          {(d.lore ?? []).length === 0 && <div className="text-[12px] text-muted text-center py-2">ยังไม่มี — กด "＋ เพิ่ม"</div>}
+          <div className="flex flex-col gap-2">
+            {(d.lore ?? []).map((e) => (
+              <div key={e.id} className="flex flex-col gap-1.5 rounded-xl border border-line p-2.5 bg-white/60">
+                <div className="flex items-center gap-2">
+                  <Input value={keysToText(e.keys)} onChange={(ev) => setLore(e.id, { keys: textToKeys(ev.target.value) })}
+                    placeholder="keyword คั่นด้วย , เช่น ลูน่า, ร้านขนมปัง" className="flex-1 !text-[12.5px] !py-1.5" />
+                  <label className="flex items-center gap-1 text-[11px] font-bold text-muted shrink-0 cursor-pointer select-none" title="แทรกทุกเทิร์นโดยไม่ต้องรอ keyword">
+                    <input type="checkbox" checked={!!e.always} onChange={(ev) => setLore(e.id, { always: ev.target.checked })} className="accent-grape" /> ใส่เสมอ
+                  </label>
+                  <IconBtn onClick={() => delLore(e.id)} title="ลบรายการนี้">🗑</IconBtn>
+                </div>
+                <Textarea rows={2} value={e.text} onChange={(ev) => setLore(e.id, { text: ev.target.value })}
+                  placeholder='ข้อเท็จจริง 1-3 ประโยค เช่น "ลูน่า: เพื่อนสนิทของออเรเลีย เปิดร้านขนมปังป้ายไม้สามก้อนติดจัตุรัสกลางเมือง รู้ว่าออเรเลียหมั้นกับผู้เล่น"' />
+              </div>
+            ))}
           </div>
         </div>
       </div>

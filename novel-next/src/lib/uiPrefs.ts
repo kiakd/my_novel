@@ -24,3 +24,25 @@ export function useChatFontSize() {
 
   return { size, set, inc, dec };
 }
+
+// ============ ผู้ให้บริการโมเดลของแชท (deepseek=cloud เร็ว/ฉลาด · lmstudio=Gemma E4B local) ============
+const LS_CHAT_PROVIDER = 'ns_chat_provider';
+export type ChatProvider = 'deepseek' | 'lmstudio';
+export const CHAT_PROVIDER_DEFAULT: ChatProvider = 'deepseek';
+const isProvider = (v: unknown): v is ChatProvider => v === 'deepseek' || v === 'lmstudio';
+
+/** provider ที่ใช้ในหน้าแชท — เลือกได้ระหว่าง DeepSeek (cloud) กับ Gemma E4B (local) เก็บถาวร */
+export function useChatProvider() {
+  const [provider, setProvider] = useState<ChatProvider>(CHAT_PROVIDER_DEFAULT);
+
+  useEffect(() => {
+    try { const v = localStorage.getItem(LS_CHAT_PROVIDER); if (isProvider(v)) setProvider(v); } catch { /* ignore */ }
+  }, []);
+
+  const set = useCallback((p: ChatProvider) => setProvider(() => {
+    try { localStorage.setItem(LS_CHAT_PROVIDER, p); } catch { /* ignore */ }
+    return p;
+  }), []);
+
+  return { provider, set };
+}

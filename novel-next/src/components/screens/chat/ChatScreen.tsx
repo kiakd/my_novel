@@ -3,25 +3,37 @@ import { useEffect, useRef, useState } from 'react';
 import { SectionTitle, Card, Btn, Avatar, IconBtn, Spinner, EmptyState, Modal, toast } from '@/components/ui';
 import { pal } from '@/lib/theme';
 import { useChat } from '@/lib/store/ChatProvider';
-import { sendChat, summarizeChat, judgeRel, chatSceneImage } from '@/lib/chat-api';
+import { sendChat, summarizeChat, judgeRel, chatSceneImage, extractState } from '@/lib/chat-api';
 import { applyItem, parseRelTag, clampRel, relLevel, floorRel } from '@/lib/chat-rel';
-import { useChatFontSize } from '@/lib/uiPrefs';
-import type { ChatChar, ChatItem, ChatMsg, ChatSession } from '@/lib/chat-types';
+import { activateLore, LORE_SCAN_DEPTH } from '@/lib/chat-lore';
+import { useChatFontSize, useChatProvider } from '@/lib/uiPrefs';
+import type { ChatChar, ChatItem, ChatMsg, ChatSession, ChatStateCard } from '@/lib/chat-types';
 import { ChatCharModal } from './ChatCharModal';
 import { ChatBubble } from './ChatBubble';
 import { RelMeter } from './RelMeter';
 import { ItemBar } from './ItemBar';
 
-type Provider = 'deepseek' | 'lmstudio';
-const LS_PROVIDER = 'ns_gen_provider';
-const PROVIDERS: { id: Provider; label: string }[] = [
-  { id: 'deepseek', label: '☁️ DeepSeek' },
-  { id: 'lmstudio', label: '💻 Gemma local' },
-];
+// แชทเลือก provider ได้ (useChatProvider): deepseek=cloud เร็ว/ฉลาด · lmstudio=Gemma E4B local (~44 tok/s)
+// E4B เร็วกว่า 12B เดิม 4 เท่า เลยกลับมาใช้แชทไหว (เดิม 12B ~7 tok/s = ~3 นาที/เทิร์น ช้าเกิน)
 
 const preview = (s: ChatSession) => {
   const last = s.messages.filter((m) => !m.item).slice(-1)[0];
   return last ? last.text.replace(/\*/g, '').slice(0, 64) : 'แชทใหม่';
+};
+
+// บัตรสถานะ → ข้อความสำหรับฉีดเข้า prompt (เฉพาะ field ที่มีค่า)
+const STATE_FIELDS: { key: keyof ChatStateCard; label: string }[] = [
+  { key: 'location', label: 'อยู่ที่' },
+  { key: 'disguise', label: 'ตัวตน/ร่างตอนนี้' },
+  { key: 'whoKnowsTruth', label: 'คนที่รู้ตัวจริง' },
+  { key: 'outfit', label: 'ชุดตอนนี้' },
+  { key: 'inventory', label: 'ของสำคัญ' },
+  { key: 'goals', label: 'เป้าหมายตอนนี้' },
+];
+const stateToText = (c?: ChatStateCard): string | undefined => {
+  if (!c) return undefined;
+  const rows = STATE_FIELDS.map(({ key, label }) => (c[key]?.trim() ? `${label}: ${c[key]!.trim()}` : null)).filter(Boolean);
+  return rows.length ? rows.join('\n') : undefined;
 };
 
 export function ChatScreen() {
@@ -38,12 +50,14 @@ export function ChatScreen() {
   const [usePower, setUsePower] = useState(false);                        // (char) ข้อความนี้ใช้อำนาจบังคับ
   const [drawing, setDrawing] = useState(false);                          // กำลังวาดรูปฉาก (ComfyUI)
   const [memoDraft, setMemoDraft] = useState('');                         // draft ความจำ (ใน view settings)
-  const [provider, setProvider] = useState<Provider>('deepseek');
+  const [cardDraft, setCardDraft] = useState<ChatStateCard>({});          // draft บัตรสถานะ (ใน view settings)
+  const { provider, set: setProvider } = useChatProvider();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const lastMsgRef = useRef<HTMLDivElement>(null);   // ต้นของข้อความล่าสุด (เพื่อเลื่อนให้คำตอบ AI ขึ้นบน)
+  const prevViewRef = useRef(view);
+  const prevSessRef = useRef<string | null>(null);
+  const prevLenRef = useRef(0);
   const font = useChatFontSize();
-
-  useEffect(() => { const p = localStorage.getItem(LS_PROVIDER); if (p === 'lmstudio' || p === 'deepseek') setProvider(p); }, []);
-  const pickProvider = (p: Provider) => { setProvider(p); try { localStorage.setItem(LS_PROVIDER, p); } catch { /* ignore */ } };
 
   const chars = state.chars;
   const char = chars.find((c) => c.id === charId) ?? null;
@@ -55,7 +69,24 @@ export function ChatScreen() {
   const rel = session?.rel ?? sessChar?.relStart ?? 0;
   const messages = session?.messages ?? [];
 
-  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }); }, [messages.length, busy, view]);
+  // เลื่อนอัจฉริยะ: เข้าห้อง/พิมพ์เอง → ลงล่างสุด · AI/ผู้เล่าเรื่องตอบ → เลื่อนให้ "ต้น" คำตอบใหม่อยู่บนสุด (อ่านจากต้นได้เลย ไม่ต้องไล่ขึ้น)
+  useEffect(() => {
+    const el = scrollRef.current;
+    const enteredChat = prevViewRef.current !== 'chat';
+    const sessChanged = prevSessRef.current !== sessionId;
+    const grew = messages.length > prevLenRef.current;
+    const last = messages[messages.length - 1];
+    prevViewRef.current = view;
+    prevSessRef.current = sessionId;
+    prevLenRef.current = messages.length;
+    if (view !== 'chat' || !el) return;
+    if (enteredChat || sessChanged) {
+      el.scrollTo({ top: el.scrollHeight });                                   // โหลดห้อง → ล่างสุดทันที (เห็นข้อความล่าสุด)
+    } else if (grew && last) {
+      if (last.role === 'user') el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });   // พิมพ์เอง → ลงล่าง
+      else lastMsgRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });        // AI ตอบ → ต้นคำตอบขึ้นบน
+    }
+  }, [messages.length, sessionId, view, busy]);
 
   // ---- template CRUD ----
   const addChar = () => { const id = 'cc' + Date.now(); mutate((st) => ({ ...st, chars: [...st.chars, { id, name: 'ตัวละครใหม่', color: 'coral', guard: 40, relStart: 0 }] })); setEditId(id); };
@@ -92,7 +123,7 @@ export function ChatScreen() {
   // พับเมื่อ "จำนวน" เกิน FOLD_TRIGGER หรือ "ความยาวรวม" เกินงบของ provider — Gemma local ctx ~8K token ต้องพับไวกว่า cloud มาก
   const RAW_KEEP = 16;
   const FOLD_TRIGGER = 30;
-  const rawBudget = provider === 'lmstudio' ? 6000 : 20000;   // งบ history ดิบ (ตัวอักษร)
+  const rawBudget = 20000;   // งบ history ดิบ (ตัวอักษร) — DeepSeek ctx ใหญ่ (ถ้ากลับมาใช้ local ต้องลดเหลือ ~6000)
   const totalLen = (ms: ChatMsg[]) => ms.reduce((n, m) => n + m.text.length, 0);
   const speaker = (m: ChatMsg) => (m.role === 'user' ? 'ผู้เล่น' : m.role === 'narrator' ? '[ผู้เล่าเรื่อง]' : (sessChar?.name ?? 'ตัวละคร'));
   const toHist = (m: ChatMsg) =>
@@ -131,6 +162,18 @@ export function ChatScreen() {
           summarized += foldN;
           raw = raw.slice(foldN);
           updateSession(sessionId, (s) => ({ ...s, summary, summarizedCount: summarized }));
+          // Phase 3: อัปเดต "บัตรสถานะ" + เก็บความจำแยกหมวด จากช่วงที่เพิ่งพับ (ล้มเหลวได้เงียบ ๆ — บัตรเดิมยังอยู่)
+          void extractState({ prevCard: session?.stateCard, transcript, charName: sessChar.name, provider }).then((ex) => {
+            if (!ex || !sessionId) return;
+            // เอาเฉพาะ field ที่สกัดได้จริง — undefined ห้ามทับค่าเดิมในบัตร
+            const cleaned = Object.fromEntries(Object.entries(ex.card).filter(([, v]) => v)) as ChatStateCard;
+            const now = Date.now();
+            updateSession(sessionId, (s) => ({
+              ...s,
+              stateCard: { ...s.stateCard, ...cleaned },
+              memFacts: [...(s.memFacts ?? []), ...ex.facts.map((f) => ({ ...f, ts: now }))],
+            }));
+          });
         } else {
           toast('ย่อความจำไม่สำเร็จ — ถ้าแชทยาวต่อ เรื่องเก่าอาจเริ่มหลุด', '⚠️');
         }
@@ -167,13 +210,19 @@ export function ChatScreen() {
     return { summary, raw };
   };
 
+  // lorebook: เลือกข้อเท็จจริงที่ keyword โผล่ในข้อความล่าสุด (จ่าย token เฉพาะที่เกี่ยวกับฉาก)
+  const pickLore = (recent: ChatMsg[], userInput: string): string[] | undefined => {
+    const hits = activateLore(sessChar?.lore, [...recent.slice(-LORE_SCAN_DEPTH).map((m) => m.text), userInput]);
+    return hits.length ? hits.map((e) => e.text) : undefined;
+  };
+
   const callModel = async (userInput: string, baseRel: number, hist: ChatMsg[], maxTok?: number, judge = false) => {
     if (!sessChar || !sessionId) return;
     setBusy(true);
     try {
       const { summary, raw } = await buildMemory(hist);
       const history = raw.map(toHist);
-      const r = await sendChat({ char: sessChar, history, user_input: userInput, rel: baseRel, summary: summary || undefined, provider, max_tokens: maxTok ?? (provider === 'lmstudio' ? 900 : 1500) });
+      const r = await sendChat({ char: sessChar, history, user_input: userInput, rel: baseRel, summary: summary || undefined, lore: pickLore(raw, userInput), state: stateToText(session?.stateCard), provider, max_tokens: maxTok ?? 1500 });
       if (r.ok && r.text) {
         const { text } = parseRelTag(r.text);   // ตัดแท็กออกถ้าโมเดลเผลอใส่ (ตอนนี้ใช้ judge ประเมินแทน)
         updateSession(sessionId, (s) => ({ ...s, messages: [...s.messages, { role: 'char', text, ts: Date.now() }], updatedAt: Date.now() }));
@@ -210,7 +259,7 @@ export function ChatScreen() {
       // ล่าสุดเป็นแชท → ต่อเป็นแชท
       await callModel(
         '(ดำเนินเรื่องต่อ) เล่นบทต่อเองจากจังหวะก่อนหน้า — บรรยายการกระทำ ความรู้สึก ฉาก และบทพูดของตัวละครให้ไหลต่อไปอีกหนึ่งช่วงอย่างมีรายละเอียด โดยไม่ต้องรอผู้เล่นพูด คงโทนและระดับความสัมพันธ์เดิม',
-        rel, messages, provider === 'lmstudio' ? 900 : 1500,
+        rel, messages, 1500,
       );
     }
   };
@@ -223,10 +272,11 @@ export function ChatScreen() {
       const { summary, raw } = await buildMemory(messages);
       // ผู้เล่าเรื่องรอบรู้: เห็นทั้งไทม์ไลน์สาธารณะ + ฉากลับ (ความจำลับพับแยก ไม่ปนเข้า summary ที่ตัวละครเห็น)
       const { summary: secretSummary, raw: secretRaw } = await buildSecretMemory(messages);
-      const history = [...raw, ...secretRaw].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0)).map(toHist);
+      const merged = [...raw, ...secretRaw].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+      const history = merged.map(toHist);
       const fullSummary = [summary, secretSummary ? `[เหตุการณ์ลับที่ ${sessChar.name} ไม่รับรู้ — ใช้ประกอบการบรรยายเท่านั้น]\n${secretSummary}` : '']
         .filter(Boolean).join('\n\n');
-      const r = await sendChat({ char: sessChar, history, user_input: userInput, rel, summary: fullSummary || undefined, mode: 'narrator', provider, max_tokens: provider === 'lmstudio' ? 900 : 1500 });
+      const r = await sendChat({ char: sessChar, history, user_input: userInput, rel, summary: fullSummary || undefined, lore: pickLore(merged, userInput), state: stateToText(session?.stateCard), mode: 'narrator', provider, max_tokens: 1500 });
       if (r.ok && r.text) {
         const { text: out } = parseRelTag(r.text);
         updateSession(sessionId, (s) => ({ ...s, messages: [...s.messages, { role: 'narrator', text: out, secret: secretFlag, ts: Date.now() }], updatedAt: Date.now() }));
@@ -316,7 +366,7 @@ export function ChatScreen() {
             <div className="flex items-center gap-0.5 shrink-0">
               <button onClick={font.dec} title="ตัวอักษรเล็กลง" className="h-8 w-7 grid place-items-center rounded-lg text-[12px] font-bold text-muted hover:bg-ink/[.06] active:scale-90 transition">A−</button>
               <button onClick={font.inc} title="ตัวอักษรใหญ่ขึ้น" className="h-8 w-7 grid place-items-center rounded-lg text-[15px] font-bold text-muted hover:bg-ink/[.06] active:scale-90 transition">A+</button>
-              <button onClick={() => { setMemoDraft(session.summary ?? ''); setView('settings'); }} title="ตั้งค่าแชท / แก้ความจำ"
+              <button onClick={() => { setMemoDraft(session.summary ?? ''); setCardDraft(session.stateCard ?? {}); setView('settings'); }} title="ตั้งค่าแชท / แก้ความจำ"
                 className="h-8 w-8 grid place-items-center rounded-lg text-[16px] text-muted hover:bg-ink/[.06] active:scale-90 transition">⚙️</button>
             </div>
           </div>
@@ -324,30 +374,25 @@ export function ChatScreen() {
           {/* messages */}
           <div ref={scrollRef} style={{ fontSize: font.size }} className="flex-1 overflow-y-auto px-3 sm:px-4 py-4 flex flex-col gap-2.5">
             {messages.length === 0 && <div className="text-muted text-[13px] text-center py-8">เริ่มทักได้เลย</div>}
-            {messages.map((m, i) => <ChatBubble key={m.ts ? `${m.ts}-${m.role}` : i} msg={m} charColor={accent} drawing={drawing} onRegen={() => drawScene(m)} onDelete={() => removeImage(m)} onDeleteMsg={() => deleteMessage(m)} />)}
+            {messages.map((m, i) => (
+              <div key={m.ts ? `${m.ts}-${m.role}` : i} ref={i === messages.length - 1 ? lastMsgRef : null}>
+                <ChatBubble msg={m} charColor={accent} drawing={drawing} onRegen={() => drawScene(m)} onDelete={() => removeImage(m)} onDeleteMsg={() => deleteMessage(m)} />
+              </div>
+            ))}
             {busy && <div className="flex justify-start"><div className="rounded-2xl bg-ink/[.05] px-3.5 py-2.5"><Spinner size={16} /></div></div>}
           </div>
 
           {/* footer: โมเดล + ไอเท็ม + ช่องพิมพ์ */}
           <div className="shrink-0 border-t border-line px-3 pt-2 pb-3 flex flex-col gap-2 bg-white/70 backdrop-blur" style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}>
-            <div className="flex items-center gap-1.5">
-              <span className="text-[11px] font-bold text-muted shrink-0">โมเดล:</span>
-              {PROVIDERS.map((p) => (
-                <button key={p.id} onClick={() => pickProvider(p.id)}
-                  className={`rounded-full px-2.5 py-1 text-[11.5px] font-bold transition ${provider === p.id ? 'bg-grape text-white shadow-pop' : 'bg-ink/[.05] text-muted'}`}>
-                  {p.label}
-                </button>
-              ))}
-              <div className="ml-auto flex items-center gap-1.5 shrink-0">
-                <button onClick={() => drawScene()} disabled={drawing || messages.length === 0}
-                  className="rounded-full px-3 py-1 text-[11.5px] font-bold bg-grape/15 text-grape hover:bg-grape/25 disabled:opacity-40 transition">
-                  {drawing ? '🎨…' : '📷 วาดฉาก'}
-                </button>
-                <button onClick={continueScene} disabled={busy || messages.length === 0}
-                  className="rounded-full px-3 py-1 text-[11.5px] font-bold bg-bubble/15 text-bubble hover:bg-bubble/25 disabled:opacity-40 transition">
-                  ▶ ดำเนินต่อ
-                </button>
-              </div>
+            <div className="flex items-center justify-end gap-1.5">
+              <button onClick={() => drawScene()} disabled={drawing || messages.length === 0}
+                className="rounded-full px-3 py-1 text-[11.5px] font-bold bg-grape/15 text-grape hover:bg-grape/25 disabled:opacity-40 transition">
+                {drawing ? '🎨…' : '📷 วาดฉาก'}
+              </button>
+              <button onClick={continueScene} disabled={busy || messages.length === 0}
+                className="rounded-full px-3 py-1 text-[11.5px] font-bold bg-bubble/15 text-bubble hover:bg-bubble/25 disabled:opacity-40 transition">
+                ▶ ดำเนินต่อ
+              </button>
             </div>
             <ItemBar items={state.items} onUse={useItem} disabled={busy} />
             {/* โหมดป้อน: คุยกับตัวละคร / บรรยายฉาก(ผู้เล่าเรื่อง) */}
@@ -367,10 +412,17 @@ export function ChatScreen() {
                 </label>
               )}
               {chatMode === 'char' && sessChar.power?.trim() && (
-                <button onClick={() => setUsePower((v) => !v)} title={sessChar.power}
-                  className={`rounded-full px-2.5 py-1 text-[11.5px] font-bold transition ${usePower ? 'bg-grape text-white shadow-pop' : 'bg-ink/[.05] text-muted'}`}>
-                  ⚡ ใช้อำนาจ
-                </button>
+                sessChar.powerStanding ? (
+                  <span title={sessChar.power}
+                    className="rounded-full px-2.5 py-1 text-[11.5px] font-bold bg-grape text-white shadow-pop">
+                    🔒 บังคับถาวร
+                  </span>
+                ) : (
+                  <button onClick={() => setUsePower((v) => !v)} title={sessChar.power}
+                    className={`rounded-full px-2.5 py-1 text-[11.5px] font-bold transition ${usePower ? 'bg-grape text-white shadow-pop' : 'bg-ink/[.05] text-muted'}`}>
+                    ⚡ ใช้อำนาจ
+                  </button>
+                )
               )}
             </div>
             <div className="flex items-end gap-2">
@@ -396,9 +448,19 @@ export function ChatScreen() {
   // ================= VIEW: settings (ตั้งค่าแชท / แก้ความจำ) =================
   if (view === 'settings' && session && sessChar) {
     const saveMemo = () => {
-      if (sessionId) updateSession(sessionId, (s) => ({ ...s, summary: memoDraft.trim() || undefined }));
+      if (sessionId) {
+        const cleaned = Object.fromEntries(Object.entries(cardDraft).map(([k, v]) => [k, v?.trim() || undefined])) as ChatStateCard;
+        updateSession(sessionId, (s) => ({ ...s, summary: memoDraft.trim() || undefined, stateCard: cleaned }));
+      }
       toast('บันทึกความจำแล้ว', '🧠');
       setView('chat');
+    };
+    // ซิงค์การ์ด: ดึงโปรไฟล์ตัวละครต้นฉบับล่าสุดมาทับ snapshot ของแชทนี้ (แชทเก็บสำเนา ณ ตอนเริ่ม)
+    const tmpl = state.chars.find((c) => c.id === session.charId) ?? null;
+    const syncCard = () => {
+      if (!tmpl || !sessionId) return;
+      updateSession(sessionId, (s) => ({ ...s, char: { ...tmpl } }));
+      toast('ซิงค์การ์ดล่าสุดเข้าแชทนี้แล้ว', '🔄');
     };
     return (
       <div className="max-w-2xl mx-auto pb-6">
@@ -406,6 +468,48 @@ export function ChatScreen() {
           <IconBtn onClick={() => setView('chat')} title="กลับไปแชท">←</IconBtn>
           <div className="font-display text-xl font-semibold text-ink truncate">⚙️ ตั้งค่าแชท — {sessChar.name}</div>
         </div>
+        {/* โมเดล AI ของแชท — global pref (localStorage) ใช้กับทุกแชท: deepseek=cloud · lmstudio=Gemma E4B local */}
+        <Card className="p-4 sm:p-5 flex flex-col gap-2.5 mb-3">
+          <div className="font-bold text-ink">🤖 โมเดล AI ของแชท</div>
+          <p className="text-[12.5px] text-muted">เลือกผู้ให้บริการที่ใช้ตอบแชท (มีผลกับทุกแชท จำค่าไว้ให้). <b>DeepSeek</b> = cloud เร็ว/ฉลาด ต้องมีเน็ต. <b>Gemma E4B</b> = รันในเครื่อง (LM Studio) ส่วนตัว 100% ไม่ผ่านเน็ต ~44 tok/s</p>
+          <div className="flex gap-1.5 bg-cream/70 rounded-full p-1 self-start">
+            {([
+              { id: 'deepseek', label: '☁️ DeepSeek', hint: 'cloud' },
+              { id: 'lmstudio', label: '💻 Gemma E4B', hint: 'local' },
+            ] as const).map((p) => (
+              <button key={p.id} onClick={() => setProvider(p.id)}
+                title={p.hint}
+                className={`rounded-full px-3.5 py-1.5 text-[12.5px] font-bold transition ${provider === p.id ? 'bg-white shadow-pop text-ink' : 'text-muted hover:text-ink'}`}>
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </Card>
+        {/* บัตรสถานะ — field ตายตัว ฉีดเข้า prompt ทุกเทิร์น (อัปเดตอัตโนมัติตอนพับความจำ แก้มือได้) */}
+        <Card className="p-4 sm:p-5 flex flex-col gap-2 mb-3">
+          <div className="font-bold text-ink">📌 บัตรสถานะปัจจุบัน</div>
+          <p className="text-[12.5px] text-muted">ข้อเท็จจริง "ตอนนี้" ที่ AI ต้องยึดเด็ดขาด — ระบบอัปเดตให้อัตโนมัติตอนย่อความจำ แต่แก้มือตรงนี้ได้เลย (เช่นร่างปลอม/ชุด/ที่อยู่เพี้ยนเมื่อไหร่ มาแก้ที่นี่จุดเดียวจบ)</p>
+          <div className="grid sm:grid-cols-2 gap-2.5">
+            {STATE_FIELDS.map(({ key, label }) => (
+              <label key={key} className="flex flex-col gap-1">
+                <span className="text-[11.5px] font-bold text-muted">{label}</span>
+                <input value={cardDraft[key] ?? ''} onChange={(e) => setCardDraft((c) => ({ ...c, [key]: e.target.value }))}
+                  placeholder="—"
+                  className="bg-cream/70 rounded-xl px-3 py-2 text-ink text-[13px] border-2 border-line focus:border-grape focus:bg-white focus:outline-none transition" />
+              </label>
+            ))}
+          </div>
+        </Card>
+        {/* ซิงค์การ์ด — ดึงโปรไฟล์ตัวละครล่าสุดเข้าแชทนี้ (เช่นหลังเปิด 🔒 บังคับถาวร / แก้บุคลิก-อำนาจที่หน้าตัวละคร) */}
+        <Card className="p-4 sm:p-5 flex flex-col gap-2.5 mb-3">
+          <div className="font-bold text-ink">🔄 ซิงค์การ์ดตัวละคร</div>
+          <p className="text-[12.5px] text-muted">แชทนี้ใช้ "สำเนา" ข้อมูลตัวละคร ณ ตอนเริ่มแชท — ถ้าแก้การ์ดที่หน้าตัวละคร (เปิด 🔒 บังคับถาวร, แก้บุคลิก/อำนาจ/รูปลักษณ์ ฯลฯ) แล้วอยากให้แชทนี้ได้ค่าล่าสุด<b>โดยไม่ต้องเปิดแชทใหม่</b> กดปุ่มนี้ (สรุป/ความจำ/ความสัมพันธ์ของแชทไม่ถูกแตะ)</p>
+          {tmpl ? (
+            <Btn variant="primary" color="grape" className="self-start" onClick={syncCard}>🔄 ดึงการ์ดล่าสุดเข้าแชทนี้</Btn>
+          ) : (
+            <div className="text-[12.5px] text-muted">— ตัวละครต้นฉบับถูกลบไปแล้ว ซิงค์ไม่ได้</div>
+          )}
+        </Card>
         <Card className="p-4 sm:p-5 flex flex-col gap-2">
           <div className="font-bold text-ink">🧠 ความจำของแชทนี้ (สรุป)</div>
           <p className="text-[12.5px] text-muted">ก้อนนี้ถูกฉีดเข้า prompt ทุกครั้งที่ตอบ — แก้ตรงนี้เพื่อกัน context หลุด/เพี้ยน เช่นเพิ่ม “ออเรเลียได้พลังเวทกลับมาแล้ว, ตอนนี้อยู่เมือง X, กำลังตามล่านักค้าทาส”. ระบบจะรวมกับสรุปอัตโนมัติให้ ไม่ทับทิ้ง</p>

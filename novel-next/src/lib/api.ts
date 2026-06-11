@@ -1,5 +1,5 @@
 // ============ API client — เรียก backend เดิม (proxied ผ่าน Next rewrites) ============
-import type { AppState, AILogRow, AppLogRow } from './types';
+import type { AppState, AILogRow, AILogDetail, AppLogRow } from './types';
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
@@ -32,6 +32,12 @@ export const putState = (state: AppState, rev: number) =>
 /** ai_logs (การเรียก LLM) */
 export const getAiLogs = async (limit = 100): Promise<AILogRow[]> =>
   jsonFetch<AILogRow[]>(`/api/logs?limit=${limit}`);
+
+/** ดึง log เต็มทีละรายการ (system/user/response ไม่ถูกตัด) สำหรับ drawer + ปุ่ม copy */
+export const getAiLog = async (id: string): Promise<AILogDetail | null> => {
+  const r = await jsonFetch<{ ok: boolean; log?: AILogDetail; error?: string }>(`/api/logs/${encodeURIComponent(id)}`);
+  return r.ok && r.log ? r.log : null;
+};
 
 /** app_logs (request/activity/error) */
 export const getAppLogs = async (params: { type?: string; limit?: number } = {}): Promise<AppLogRow[]> => {

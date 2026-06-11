@@ -4,7 +4,7 @@ import { mkdir } from 'node:fs/promises';
 import { getDb } from './db';
 import { logRequest, logActivity, logError, ensureLogIndexes, APP_LOG_COLLECTION } from './logger';
 import { assembleSystemPrompt, type NovelContext } from './prompts';
-import { assembleChatPrompt, assembleNarratorPrompt, type ChatCharLite } from './chat-prompt';
+import { assembleChatPrompt, assembleNarratorPrompt, buildPersonaReminder, type ChatCharLite } from './chat-prompt';
 import { pickStory, writeStoryMd, type Story } from './story-md';
 import { runWD14, categorizeTags, REF_SCENE_SYSTEM, buildRefSceneUser } from './ref-tag';
 import {
@@ -128,7 +128,7 @@ const PROVIDER_CONFIG: Record<Provider, { url: string; defaultModel: string; key
   // LM Studio (local, OpenAI-compatible) — ไม่ต้องมี key, รัน Gemma local ได้
   lmstudio: {
     url: process.env.LMSTUDIO_URL ?? 'http://localhost:1234/v1/chat/completions',
-    defaultModel: process.env.LMSTUDIO_MODEL ?? 'gemma-4-12b-it-uncensored',
+    defaultModel: process.env.LMSTUDIO_MODEL ?? 'gemma-4-e4b-it-uncensored',
     keyEnv: '',
   },
 };
@@ -201,24 +201,33 @@ async function callAI(payload: {
     headers['X-Title'] = process.env.OPENROUTER_APP_NAME ?? 'NovelR18';
   }
 
+  const model = payload.model ?? cfg.defaultModel;
+  const body: Record<string, unknown> = {
+    model,
+    messages,
+    temperature: payload.temperature ?? 0.9,
+    max_tokens: payload.max_tokens ?? 1200,
+  };
+  // DeepSeek V4 (flash/pro) เปิด thinking เป็น default → token ถูกเผาเป็น reasoning จน content ว่าง
+  // แอปนี้ต้องการตอบเร็ว/ตรง ไม่ใช้ reasoning — ปิดเสมอ (ref: api-docs.deepseek.com/guides/thinking_mode)
+  if (provider === 'deepseek' && model.includes('v4')) body.thinking = { type: 'disabled' };
+
   const res = await fetch(url, {
     method: 'POST',
     headers,
-    body: JSON.stringify({
-      model: payload.model ?? cfg.defaultModel,
-      messages,
-      temperature: payload.temperature ?? 0.9,
-      max_tokens: payload.max_tokens ?? 1200,
-    }),
+    body: JSON.stringify(body),
   });
 
   const json = await res.json();
   if (!res.ok) {
     throw new Error(`${provider} ${res.status}: ${JSON.stringify(json).slice(0, 500)}`);
   }
+  // prefill เป็น assistant prefix ที่โมเดล "เขียนต่อ" — response คืนเฉพาะส่วนต่อ ไม่รวม prefix
+  // ต้อง prepend กลับ ไม่งั้นประโยคเปิดที่ผู้ใช้กำหนดจะหายไป (output ขึ้นต้นกลางประโยค)
+  const completion = json.choices?.[0]?.message?.content ?? '';
   return {
     provider,
-    text: json.choices?.[0]?.message?.content ?? '',
+    text: payload.prefill ? payload.prefill + completion : completion,
     usage: json.usage,
     model: json.model,
   };
@@ -671,6 +680,8 @@ const app = new Elysia()
       user_input: string;
       rel?: number;
       summary?: string;
+      lore?: string[];   // lorebook ที่ client เลือกมาแล้ว (keyword match) — แทรกใกล้ท้าย system prompt
+      state?: string;    // บัตรสถานะปัจจุบัน (format เป็นข้อความแล้ว) — แทรกใกล้ท้าย system prompt
       mode?: 'char' | 'narrator';
       provider?: string;
       prefill?: string;
@@ -684,15 +695,19 @@ const app = new Elysia()
     try {
       // local (Gemma) token น้อย — สั่งความยาวคำตอบสั้นลง ไม่ให้โดน max_tokens ตัดกลางประโยค
       const compact = resolveProvider(b.provider) === 'lmstudio';
-      const system = b.mode === 'narrator' ? assembleNarratorPrompt(b.char, b.summary, compact) : assembleChatPrompt(b.char, rel, b.summary, compact);
+      const system = b.mode === 'narrator' ? assembleNarratorPrompt(b.char, b.summary, compact, b.lore, b.state) : assembleChatPrompt(b.char, rel, b.summary, compact, b.lore, b.state);
       const history = (b.history ?? []).map((m) => ({
         role: m.role === 'char' ? ('assistant' as const) : ('user' as const),
         content: m.content,
       }));
+      // กัน persona drift: แทรกเตือนความจำ "ใกล้ท้าย" prompt ทุกเทิร์น (recency bias — ตำแหน่งท้ายมีอิทธิพลสูงสุด)
+      // เป็น server-side เท่านั้น ไม่ถูกเก็บลง history ฝั่ง client
+      const reminder = buildPersonaReminder(b.char, rel, b.mode === 'narrator' ? 'narrator' : 'char');
+      const userMsg = `${reminder}\n\n${b.user_input}`;
       const max_tokens = b.max_tokens ?? 700;
       const out = await callAI({
         system,
-        user: b.user_input,
+        user: userMsg,
         history,
         provider: b.provider,
         prefill: b.prefill,
@@ -700,7 +715,7 @@ const app = new Elysia()
         max_tokens,
       });
       logCall({
-        endpoint: 'chat', system, user: b.user_input, response: out.text,
+        endpoint: 'chat', system, user: userMsg, response: out.text,
         provider: out.provider, model: out.model ?? '', usage: out.usage,
         temperature: b.temperature ?? 0.9, maxTokens: max_tokens, ok: true, ms: Date.now() - t0,
       }).catch(() => {});

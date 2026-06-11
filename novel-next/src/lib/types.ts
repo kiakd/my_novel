@@ -129,6 +129,13 @@ export interface AILogRow {
   responsePreview?: string;
 }
 
+/** log เต็ม (ดึงทีละรายการจาก /api/logs/:id) — system/user/response ไม่ถูกตัด */
+export interface AILogDetail {
+  system?: string;
+  user?: string;
+  response?: string;
+}
+
 export interface AppLogRow {
   _id: string;
   ts: string;
