@@ -23,6 +23,7 @@ const preview = (s: ChatSession) => {
 
 // บัตรสถานะ → ข้อความสำหรับฉีดเข้า prompt (เฉพาะ field ที่มีค่า)
 const STATE_FIELDS: { key: keyof ChatStateCard; label: string }[] = [
+  { key: 'time', label: 'วัน/เวลา' },
   { key: 'location', label: 'อยู่ที่' },
   { key: 'disguise', label: 'ตัวตน/ร่างตอนนี้' },
   { key: 'whoKnowsTruth', label: 'คนที่รู้ตัวจริง' },
@@ -121,9 +122,11 @@ export function ChatScreen() {
   // ---- ส่งข้อความ ----
   // Rolling summary: เก็บข้อความล่าสุดแบบดิบ ที่เก่ากว่านั้นพับเข้า summary
   // พับเมื่อ "จำนวน" เกิน FOLD_TRIGGER หรือ "ความยาวรวม" เกินงบของ provider — Gemma local ctx ~8K token ต้องพับไวกว่า cloud มาก
-  const RAW_KEEP = 16;
-  const FOLD_TRIGGER = 30;
-  const rawBudget = 20000;   // งบ history ดิบ (ตัวอักษร) — DeepSeek ctx ใหญ่ (ถ้ากลับมาใช้ local ต้องลดเหลือ ~6000)
+  // งบ context แยกตาม provider: local (Gemma E4B ctx ~8K) ต้องบีบกว่า cloud มาก — กัน overflow + prefill เร็วขึ้น
+  const isLocalProvider = provider === 'lmstudio';
+  const RAW_KEEP = isLocalProvider ? 8 : 14;
+  const FOLD_TRIGGER = isLocalProvider ? 16 : 24;
+  const rawBudget = isLocalProvider ? 6000 : 12000;   // งบ history ดิบ (ตัวอักษร)
   const totalLen = (ms: ChatMsg[]) => ms.reduce((n, m) => n + m.text.length, 0);
   const speaker = (m: ChatMsg) => (m.role === 'user' ? 'ผู้เล่น' : m.role === 'narrator' ? '[ผู้เล่าเรื่อง]' : (sessChar?.name ?? 'ตัวละคร'));
   const toHist = (m: ChatMsg) =>

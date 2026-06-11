@@ -61,6 +61,7 @@ export interface ChatItem {
 /** บัตรสถานะ — ข้อเท็จจริง "ปัจจุบัน" แบบ field ตายตัว ฉีดเข้า prompt ทุกเทิร์น
  *  (Phase 3 anti-drift: identity/สถานะเป็น field ตรง ๆ ไม่ใช่ประโยคในเรียงความที่ summarizer ทำเพี้ยนได้) */
 export interface ChatStateCard {
+  time?: string;           // วัน/เดือน + เวลานาฬิกา (ระบบ 12 เดือน/24 ชม.) เลื่อนตามเหตุการณ์ — TODO: รองรับปฏิทิน/ชื่อเวลาแบบโลกแฟนตาซีที่ตั้งเองทีหลัง
   location?: string;       // อยู่ที่ไหน
   disguise?: string;       // ตัวตน/ร่างตอนนี้ เช่น "ปลอมเป็นออเรล หญิงสาวมนุษย์ผมน้ำตาล" หรือ "ร่างจริง"
   whoKnowsTruth?: string;  // ใครรู้ตัวจริงบ้าง

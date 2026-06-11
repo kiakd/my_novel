@@ -14,7 +14,7 @@ const STORY_DIR = join(__dir, '..', 'story', 'star-academy');
 const meta = JSON.parse(readFileSync(join(__dir, 'star-academy-meta.json'), 'utf8'));
 
 // --- อ่าน ep001–007 → chapters (แยกชื่อตอนจาก heading บรรทัดแรก) ---
-const EP_COUNT = 7;
+const EP_COUNT = 9;
 const chapters = Array.from({ length: EP_COUNT }, (_, i) => {
   const n = i + 1;
   const raw = readFileSync(join(STORY_DIR, `ep00${n}.md`), 'utf8');
