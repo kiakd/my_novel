@@ -1,6 +1,7 @@
 // ============ โมเดลข้อมูลของ "แชท RP" — แยกออกจาก story ทั้งหมด (ไม่ปนกัน) ============
 // เก็บใน Mongo เป็น state ก้อนแยก (_id 'chat' ใน workspace) ผ่าน ChatProvider
 import type { ColorKey } from './theme';
+import type { LiveState } from './live-state';
 
 /** รายการ lorebook — ข้อเท็จจริงที่ถูกแทรกเข้า prompt "เฉพาะเมื่อ keyword โผล่ในบทสนทนาล่าสุด" (จ่าย token เฉพาะที่เกี่ยวกับฉาก) */
 export interface LoreEntry {
@@ -90,6 +91,7 @@ export interface ChatSession {
   secretSummarizedCount?: number; // จำนวนฉากลับที่ถูกรวมเข้า secretSummary แล้ว
   stateCard?: ChatStateCard;     // บัตรสถานะปัจจุบัน — อัปเดตจาก "ช่วงล่าสุด" ทุก ~6 เทิร์น, แก้มือได้ในหน้า ⚙️
   stateCardAt?: number;          // ตำแหน่งไทม์ไลน์ (นับ non-item) ที่ stateCard สะท้อนถึง — decouple จาก summarizedCount กัน stateCard ค้าง
+  liveState?: LiveState;         // structured live state อัปเดตทุกเทิร์นผ่าน [[state:]] delta (ไม่เพิ่ม LLM call) — แยกจาก stateCard (extractState)
   memFacts?: ChatMemFact[];      // ความจำแยกหมวดสะสม (รอ Phase 4 vector retrieval)
   createdAt?: number;
   updatedAt?: number;

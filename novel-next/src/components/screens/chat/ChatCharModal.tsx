@@ -1,8 +1,9 @@
 'use client';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Modal, Avatar, Btn, IconBtn, Input, Textarea, Field, toast } from '@/components/ui';
 import { pal, type ColorKey } from '@/lib/theme';
 import { keysToText, textToKeys } from '@/lib/chat-lore';
+import { exportCardPng, exportCardJson, importCardFile } from '@/lib/card-client';
 import type { ChatChar, LoreEntry } from '@/lib/chat-types';
 
 const COLORS: ColorKey[] = ['coral', 'sky', 'mint', 'grape', 'sun', 'bubble', 'lilac', 'slate'];
@@ -19,6 +20,23 @@ export function ChatCharModal({ char, onClose, onSave, onDelete }: Props) {
   const [d, setD] = useState<ChatChar>(char);
   const set = (p: Partial<ChatChar>) => setD((x) => ({ ...x, ...p }));
   const P = pal(d.color ?? 'coral');
+
+  // ---- การ์ดตัวละคร V2/V3 (import/export) ----
+  const fileRef = useRef<HTMLInputElement>(null);
+  const onImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // เคลียร์ให้เลือกไฟล์เดิมซ้ำได้
+    if (!file) return;
+    try {
+      const patch = await importCardFile(file);
+      setD((x) => ({ ...x, ...patch, id: x.id, color: x.color, relStart: x.relStart })); // เขียนทับฟิลด์โปรไฟล์จากการ์ด, เก็บ id/color/relStart เดิม
+      toast('นำเข้าการ์ดแล้ว', '📥');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'นำเข้าการ์ดไม่สำเร็จ', '⚠️');
+    }
+  };
+  const onExportPng = async () => { try { await exportCardPng(d); } catch (err) { toast(err instanceof Error ? err.message : 'ส่งออกไม่สำเร็จ', '⚠️'); } };
+  const onExportJson = async () => { try { await exportCardJson(d); } catch (err) { toast(err instanceof Error ? err.message : 'ส่งออกไม่สำเร็จ', '⚠️'); } };
 
   // ---- lorebook ----
   const addLore = () => set({ lore: [...(d.lore ?? []), { id: 'lr' + Date.now(), keys: [], text: '' }] });
@@ -121,9 +139,13 @@ export function ChatCharModal({ char, onClose, onSave, onDelete }: Props) {
         </div>
       </div>
 
-      <div className="sticky bottom-0 bg-cream/95 backdrop-blur px-6 py-4 border-t border-line flex justify-between items-center">
+      <div className="sticky bottom-0 bg-cream/95 backdrop-blur px-6 py-4 border-t border-line flex flex-wrap justify-between items-center gap-2">
         <button className="text-coral font-bold text-sm hover:underline" onClick={() => { onDelete(d.id); onClose(); }}>🗑 ลบตัวละคร</button>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap items-center">
+          <input ref={fileRef} type="file" accept=".png,.json,image/png,application/json" className="hidden" onChange={onImportFile} />
+          <Btn variant="ghost" onClick={() => fileRef.current?.click()}>⬆️ นำเข้าการ์ด</Btn>
+          <Btn variant="ghost" onClick={onExportPng}>⬇️ การ์ด PNG</Btn>
+          <Btn variant="ghost" onClick={onExportJson}>⬇️ JSON</Btn>
           <Btn variant="ghost" onClick={onClose}>ยกเลิก</Btn>
           <Btn variant="primary" color={d.color ?? 'coral'} onClick={() => { if (!d.name.trim()) { toast('ใส่ชื่อตัวละครก่อน', '⚠️'); return; } onSave(d); onClose(); toast('บันทึกแล้ว', '💾'); }}>บันทึก</Btn>
         </div>

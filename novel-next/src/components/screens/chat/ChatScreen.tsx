@@ -8,6 +8,7 @@ import { applyItem, parseRelTag, clampRel, relLevel, floorRel } from '@/lib/chat
 import { activateLore, LORE_SCAN_DEPTH } from '@/lib/chat-lore';
 import { useChatFontSize, useChatProvider } from '@/lib/uiPrefs';
 import type { ChatChar, ChatItem, ChatMsg, ChatSession, ChatStateCard } from '@/lib/chat-types';
+import { emptyLiveState, renderLiveStateLines } from '@/lib/live-state';
 import { ChatCharModal } from './ChatCharModal';
 import { ChatBubble } from './ChatBubble';
 import { RelMeter } from './RelMeter';
@@ -52,6 +53,7 @@ export function ChatScreen() {
   const [drawing, setDrawing] = useState(false);                          // กำลังวาดรูปฉาก (ComfyUI)
   const [memoDraft, setMemoDraft] = useState('');                         // draft ความจำ (ใน view settings)
   const [cardDraft, setCardDraft] = useState<ChatStateCard>({});          // draft บัตรสถานะ (ใน view settings)
+  const [stateWarnings, setStateWarnings] = useState<string[]>([]);       // คำเตือนความขัดแย้งสถานะ (จาก live-state delta) — โชว์แบนเนอร์
   const { provider, set: setProvider } = useChatProvider();
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastMsgRef = useRef<HTMLDivElement>(null);   // ต้นของข้อความล่าสุด (เพื่อเลื่อนให้คำตอบ AI ขึ้นบน)
@@ -234,10 +236,14 @@ export function ChatScreen() {
     try {
       const { summary, raw } = await buildMemory(hist);
       const history = raw.map(toHist);
-      const r = await sendChat({ char: sessChar, history, user_input: userInput, rel: baseRel, summary: summary || undefined, lore: pickLore(raw, userInput), state: stateToText(session?.stateCard), provider, max_tokens: maxTok ?? 1500 });
+      const r = await sendChat({ char: sessChar, history, user_input: userInput, rel: baseRel, summary: summary || undefined, lore: pickLore(raw, userInput), state: stateToText(session?.stateCard), stateCard: session?.liveState ?? emptyLiveState(), provider, max_tokens: maxTok ?? 1500 });
       if (r.ok && r.text) {
-        const { text } = parseRelTag(r.text);   // ตัดแท็กออกถ้าโมเดลเผลอใส่ (ตอนนี้ใช้ judge ประเมินแทน)
+        const { text } = parseRelTag(r.text);   // ตัดแท็กออกถ้าโมเดลเผลอใส่ (ตอนนี้ใช้ judge ประเมินแทน) — backend strip แท็ก [[state:]] ให้แล้ว
         updateSession(sessionId, (s) => ({ ...s, messages: [...s.messages, { role: 'char', text, ts: Date.now() }], updatedAt: Date.now() }));
+        // live state: backend apply [[state:]] delta แล้วส่ง card ใหม่ + คำเตือนกลับมา (ไม่เอา rel มาทับ rel หลัก)
+        if (r.stateCard) updateSession(sessionId, (s) => ({ ...s, liveState: r.stateCard }));
+        if (r.stateWarnings?.length) { setStateWarnings(r.stateWarnings); toast('⚠️ ตรวจพบความขัดแย้งของสถานะ', '⚠️'); }
+        else setStateWarnings([]);
         // ให้ "ผู้ตัดสิน" ประเมินความสัมพันธ์เสมอ (เฉพาะเทิร์นผู้เล่นจริง)
         if (judge) {
           const jr = await judgeRel({ charName: sessChar.name, mindset: sessChar.mindset, likes: sessChar.likes, dislikes: sessChar.dislikes, currentRel: baseRel, userMsg: userInput, charReply: text, provider });
@@ -394,6 +400,24 @@ export function ChatScreen() {
             {busy && <div className="flex justify-start"><div className="rounded-2xl bg-ink/[.05] px-3.5 py-2.5"><Spinner size={16} /></div></div>}
           </div>
 
+          {/* แบนเนอร์เตือนความขัดแย้งสถานะ (live-state delta) — ปิดได้ */}
+          {stateWarnings.length > 0 && (
+            <div className="shrink-0 mx-3 mb-2 rounded-2xl border-2 border-coral/40 bg-coral/10 px-3.5 py-2.5">
+              <div className="flex items-start gap-2">
+                <div className="flex-1 min-w-0">
+                  <div className="text-[12.5px] font-bold text-coral">⚠️ สถานะอาจขัดแย้ง — ตรวจ/แก้บัตรสถานะ หรือรีเจนคำตอบ</div>
+                  <ul className="mt-1 flex flex-col gap-0.5">
+                    {stateWarnings.map((w, i) => (
+                      <li key={i} className="text-[12px] text-ink/80 leading-snug">⚠️ {w}</li>
+                    ))}
+                  </ul>
+                </div>
+                <button onClick={() => setStateWarnings([])} title="ปิด"
+                  className="h-6 w-6 grid place-items-center rounded-lg text-[13px] text-coral hover:bg-coral/15 active:scale-90 transition shrink-0">✕</button>
+              </div>
+            </div>
+          )}
+
           {/* footer: โมเดล + ไอเท็ม + ช่องพิมพ์ */}
           <div className="shrink-0 border-t border-line px-3 pt-2 pb-3 flex flex-col gap-2 bg-white/70 backdrop-blur" style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}>
             <div className="flex items-center justify-end gap-1.5">
@@ -512,6 +536,18 @@ export function ChatScreen() {
             ))}
           </div>
         </Card>
+        {/* สถานะติดตามอัตโนมัติ (live) — read-only: backend อัปเดตผ่าน [[state:]] delta ทุกเทิร์น */}
+        {renderLiveStateLines(session.liveState).length > 0 && (
+          <Card className="p-4 sm:p-5 flex flex-col gap-2 mb-3">
+            <div className="font-bold text-ink">📍 สถานะติดตามอัตโนมัติ (live)</div>
+            <p className="text-[12.5px] text-muted">ระบบติดตามให้อัตโนมัติทุกเทิร์น (ไม่เรียก AI เพิ่ม) — แสดงอย่างเดียว ใช้ตรวจว่าสถานะปัจจุบันตรงกับเรื่องไหม</p>
+            <ul className="flex flex-col gap-1">
+              {renderLiveStateLines(session.liveState).map((line, i) => (
+                <li key={i} className="text-[13px] text-ink/85 leading-snug">{line}</li>
+              ))}
+            </ul>
+          </Card>
+        )}
         {/* ซิงค์การ์ด — ดึงโปรไฟล์ตัวละครล่าสุดเข้าแชทนี้ (เช่นหลังเปิด 🔒 บังคับถาวร / แก้บุคลิก-อำนาจที่หน้าตัวละคร) */}
         <Card className="p-4 sm:p-5 flex flex-col gap-2.5 mb-3">
           <div className="font-bold text-ink">🔄 ซิงค์การ์ดตัวละคร</div>

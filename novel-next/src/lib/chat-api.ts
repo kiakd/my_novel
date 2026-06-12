@@ -1,5 +1,6 @@
 // ============ API client ของระบบแชท RP (แยกจาก api.ts ของเนื้อเรื่อง) ============
 import type { ChatMeta, ChatMetaWithRev, ChatSession, ChatSessionWithRev, ChatChar, ChatMsg, ChatStateCard, ChatMemFact } from './chat-types';
+import type { LiveState } from './live-state';
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
@@ -28,7 +29,12 @@ export const deleteChatSession = (id: string) =>
   jsonFetch<{ ok: boolean }>(`/api/chat-session/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
 // ---- ส่งข้อความแชท (หลายเทิร์น) ----
-export interface ChatReply { ok: boolean; text?: string; error?: string; provider?: string; model?: string }
+export interface ChatReply {
+  ok: boolean; text?: string; error?: string; provider?: string; model?: string;
+  stateCard?: LiveState;      // live state ที่ backend apply delta แล้ว (เมื่อส่ง stateCard มาในคำขอ)
+  stateDelta?: unknown;       // delta ที่พาร์สได้ (ดีบั๊ก)
+  stateWarnings?: string[];   // คำเตือนความขัดแย้ง deterministic (ว่าง = ไม่มีปัญหา)
+}
 export const sendChat = (body: {
   char: Partial<ChatChar> & { name: string };
   history: { role: ChatMsg['role']; content: string }[];
@@ -37,6 +43,7 @@ export const sendChat = (body: {
   summary?: string;
   lore?: string[];
   state?: string;        // บัตรสถานะปัจจุบัน (ข้อความ format แล้ว) — ฉีดใกล้ท้าย system prompt
+  stateCard?: LiveState;  // structured live state — backend ส่งกลับ delta + warnings (ไม่ส่ง = พฤติกรรมเดิม)
   mode?: 'char' | 'narrator';
   provider?: string;
   max_tokens?: number;
