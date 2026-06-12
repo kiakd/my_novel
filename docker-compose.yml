@@ -1,0 +1,47 @@
+# สแตกครบ: MongoDB + backend (novel) + frontend (novel-next)
+# ใช้: cp .env.docker.example .env  → แก้คีย์ → docker compose up -d --build
+# เปิดเว็บที่ http://localhost:3001  (frontend proxy /api,/uploads → backend อัตโนมัติ)
+#
+# LM Studio (Gemma) และ ComfyUI รันบน "เครื่อง host" → ใช้ host.docker.internal เข้าถึง
+# ถ้า host ไม่มี GPU/ไม่รัน 2 ตัวนี้ ก็ใช้ DeepSeek (cloud) เป็น provider แทนได้เลย
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    # ไม่ publish port ออกนอก — เข้าถึงได้เฉพาะใน network ของ compose (ปลอดภัยกว่า)
+
+  novel:
+    build: ./novel
+    restart: unless-stopped
+    environment:
+      - PORT=3000
+      - MONGODB_URI=mongodb://mongo:27017
+      - MONGODB_DB=${MONGODB_DB:-novel}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      - LMSTUDIO_URL=${LMSTUDIO_URL:-http://host.docker.internal:1234/v1/chat/completions}
+      - LMSTUDIO_MODEL=${LMSTUDIO_MODEL:-gemma-4-e4b-it-uncensored}
+      - COMFYUI_URL=${COMFYUI_URL:-http://host.docker.internal:8188}
+    volumes:
+      - ./novel/uploads:/app/uploads        # เก็บรูป/อวตารถาวร
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # ให้ Linux เข้าถึงบริการบน host (LM Studio/ComfyUI)
+    depends_on:
+      - mongo
+
+  web:
+    build: ./novel-next
+    restart: unless-stopped
+    environment:
+      - BACKEND_URL=http://novel:3000        # next.config rewrites /api,/uploads → backend
+      - NEXT_TELEMETRY_DISABLED=1
+    ports:
+      - "3001:3001"                          # << เปิดเว็บที่นี่
+    depends_on:
+      - novel
+
+volumes:
+  mongo-data:
