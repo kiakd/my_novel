@@ -39,9 +39,20 @@ services:
       - BACKEND_URL=http://novel:3000        # next.config rewrites /api,/uploads → backend
       - NEXT_TELEMETRY_DISABLED=1
     ports:
-      - "3001:3001"                          # << เปิดเว็บที่นี่
+      - "3001:3001"                          # << เปิดเว็บ local ที่นี่
     depends_on:
       - novel
+
+  # Cloudflare Tunnel — เปิดแอปออกเน็ตผ่านโดเมนคุณ โดยไม่ต้อง forward port / เปิด firewall
+  # opt-in: รันด้วย  docker compose --profile tunnel up -d
+  # ใน Cloudflare dashboard ตั้ง Public Hostname → Service = http://web:3001 (cloudflared อยู่เน็ตเวิร์กเดียวกัน)
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    profiles: ["tunnel"]
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - web
 
 volumes:
   mongo-data:
