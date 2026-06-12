@@ -15,6 +15,7 @@ export interface LiveIdentity {
 /** บัตรสถานะ structured — โครงตรงกับ StateCard ของ backend เป๊ะ */
 export interface LiveState {
   identity?: LiveIdentity;
+  time?: string;         // ช่วงเวลา/วันปัจจุบัน — เลื่อนตามเหตุการณ์ทุกเทิร์นผ่าน delta (นอน→เช้า ฯลฯ)
   location?: string;     // สถานที่ปัจจุบัน
   outfit?: string;       // ชุดที่ใส่ตอนนี้
   inventory?: string[];  // ของในครอบครอง
@@ -48,6 +49,7 @@ export function renderLiveStateLines(s?: LiveState): string[] {
     }
     if (parts.length) L.push(`ตัวตน/ร่างตอนนี้: ${parts.join(' · ')}`);
   }
+  if (s.time) L.push(`เวลา: ${s.time}`);
   if (s.location) L.push(`สถานที่: ${s.location}`);
   if (s.outfit) L.push(`ชุดที่ใส่: ${s.outfit}`);
   if (s.inventory?.length) L.push(`ของในครอบครอง: ${s.inventory.join(', ')}`);

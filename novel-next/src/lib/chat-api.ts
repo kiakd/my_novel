@@ -1,5 +1,5 @@
 // ============ API client ของระบบแชท RP (แยกจาก api.ts ของเนื้อเรื่อง) ============
-import type { ChatMeta, ChatMetaWithRev, ChatSession, ChatSessionWithRev, ChatChar, ChatMsg, ChatStateCard, ChatMemFact } from './chat-types';
+import type { ChatMeta, ChatMetaWithRev, ChatSession, ChatSessionWithRev, ChatChar, ChatMsg, ChatStateCard, ChatMemFact, PlayerPersona } from './chat-types';
 import type { LiveState } from './live-state';
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
@@ -44,12 +44,21 @@ export const sendChat = (body: {
   lore?: string[];
   state?: string;        // บัตรสถานะปัจจุบัน (ข้อความ format แล้ว) — ฉีดใกล้ท้าย system prompt
   stateCard?: LiveState;  // structured live state — backend ส่งกลับ delta + warnings (ไม่ส่ง = พฤติกรรมเดิม)
+  playerPersona?: { name?: string; role?: string; appearance?: string };  // บทบาทของผู้เล่นในแชทนี้
   mode?: 'char' | 'narrator';
   provider?: string;
   max_tokens?: number;
   temperature?: number;
   prefill?: string;
 }) => jsonFetch<ChatReply>('/api/chat', { method: 'POST', body: JSON.stringify(body) });
+
+// ---- AI สร้าง "บทบาทผู้เล่น" ที่เข้ากับฉากของตัวละคร (auto-fill) ----
+export const generatePlayerPersona = (body: {
+  char: { name: string; appearance?: string; description?: string; scenario?: string };
+  provider?: string;
+}) => jsonFetch<{ ok: boolean; persona?: { name: string; role: string; appearance: string }; error?: string }>(
+  '/api/chat/generate-persona', { method: 'POST', body: JSON.stringify(body) },
+);
 
 // ---- สรุปบทสนทนาช่วงเก่า (rolling summary) ผ่าน endpoint generate ทั่วไป ----
 const SUMMARY_SYSTEM =

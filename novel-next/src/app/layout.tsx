@@ -15,9 +15,10 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  // suppressHydrationWarning: กัน warning จาก browser extension (เช่น Immersive Translate) ที่เติม attribute ลง html/body ก่อน React hydrate
   return (
-    <html lang="th" className={`${fredoka.variable} ${nunito.variable}`}>
-      <body className="font-sans">
+    <html lang="th" className={`${fredoka.variable} ${nunito.variable}`} suppressHydrationWarning>
+      <body className="font-sans" suppressHydrationWarning>
         <I18nProvider>
           <StoryProvider>
             <div className="app-root">

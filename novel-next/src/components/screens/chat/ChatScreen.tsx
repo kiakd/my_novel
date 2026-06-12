@@ -3,12 +3,13 @@ import { useEffect, useRef, useState } from 'react';
 import { SectionTitle, Card, Btn, Avatar, IconBtn, Spinner, EmptyState, Modal, toast } from '@/components/ui';
 import { pal } from '@/lib/theme';
 import { useChat } from '@/lib/store/ChatProvider';
-import { sendChat, summarizeChat, judgeRel, chatSceneImage, extractState } from '@/lib/chat-api';
+import { sendChat, summarizeChat, judgeRel, chatSceneImage, extractState, generatePlayerPersona } from '@/lib/chat-api';
 import { applyItem, parseRelTag, clampRel, relLevel, floorRel } from '@/lib/chat-rel';
 import { activateLore, LORE_SCAN_DEPTH } from '@/lib/chat-lore';
 import { useChatFontSize, useChatProvider } from '@/lib/uiPrefs';
-import type { ChatChar, ChatItem, ChatMsg, ChatSession, ChatStateCard } from '@/lib/chat-types';
+import type { ChatChar, ChatItem, ChatMsg, ChatSession, ChatStateCard, PlayerPersona } from '@/lib/chat-types';
 import { emptyLiveState, renderLiveStateLines } from '@/lib/live-state';
+import type { LiveState } from '@/lib/live-state';
 import { ChatCharModal } from './ChatCharModal';
 import { ChatBubble } from './ChatBubble';
 import { RelMeter } from './RelMeter';
@@ -54,6 +55,8 @@ export function ChatScreen() {
   const [memoDraft, setMemoDraft] = useState('');                         // draft ความจำ (ใน view settings)
   const [cardDraft, setCardDraft] = useState<ChatStateCard>({});          // draft บัตรสถานะ (ใน view settings)
   const [stateWarnings, setStateWarnings] = useState<string[]>([]);       // คำเตือนความขัดแย้งสถานะ (จาก live-state delta) — โชว์แบนเนอร์
+  const [personaDraft, setPersonaDraft] = useState<PlayerPersona | null>(null); // draft บทบาทผู้เล่น (gate บังคับ + แก้ในsettings)
+  const [personaBusy, setPersonaBusy] = useState(false);                  // กำลังให้ AI กรอกบทบาท
   const { provider, set: setProvider } = useChatProvider();
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastMsgRef = useRef<HTMLDivElement>(null);   // ต้นของข้อความล่าสุด (เพื่อเลื่อนให้คำตอบ AI ขึ้นบน)
@@ -91,6 +94,15 @@ export function ChatScreen() {
     }
   }, [messages.length, sessionId, view, busy]);
 
+  // ---- บทบาทผู้เล่น (player persona): เตรียม draft ตามบริบท view/แชท ----
+  const blankPersona = (): PlayerPersona => ({ id: 'pp' + Date.now(), name: '', role: '', appearance: '' });
+  useEffect(() => {
+    if (view === 'settings' && session) setPersonaDraft(session.playerPersona ?? blankPersona());
+    else if (view === 'chat' && session && !session.playerPersona) setPersonaDraft(blankPersona());
+    else setPersonaDraft(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, sessionId]);
+
   // ---- template CRUD ----
   const addChar = () => { const id = 'cc' + Date.now(); mutate((st) => ({ ...st, chars: [...st.chars, { id, name: 'ตัวละครใหม่', color: 'coral', guard: 40, relStart: 0 }] })); setEditId(id); };
   const saveChar = (c: ChatChar) => mutate((st) => ({ ...st, chars: st.chars.map((x) => (x.id === c.id ? c : x)) }));
@@ -102,6 +114,70 @@ export function ChatScreen() {
   // ---- sessions ----
   const updateSession = (id: string, up: (s: ChatSession) => ChatSession) =>
     mutate((st) => ({ ...st, sessions: st.sessions.map((s) => (s.id === id ? up(s) : s)) }));
+
+  // ---- บทบาทผู้เล่น: AI กรอกให้ / หยิบจากคลัง / บันทึก ----
+  const aiFillPersona = async () => {
+    if (!sessChar) return;
+    setPersonaBusy(true);
+    try {
+      const r = await generatePlayerPersona({ char: { name: sessChar.name, appearance: sessChar.appearance, description: sessChar.description, scenario: sessChar.scenario }, provider });
+      if (r.ok && r.persona) setPersonaDraft((d) => ({ id: d?.id ?? ('pp' + Date.now()), ...r.persona! }));
+      else toast(r.error ?? 'ให้ AI กรอกบทบาทไม่สำเร็จ', '⚠️');
+    } catch (e) { toast((e as Error).message || 'เชื่อมต่อไม่ได้', '⚠️'); }
+    finally { setPersonaBusy(false); }
+  };
+  const pickPersona = (p: PlayerPersona) => setPersonaDraft({ ...p, id: 'pp' + Date.now() }); // สำเนาใหม่ — แก้แล้วไม่กระทบคลังเดิม
+  const savePersona = (toLibrary: boolean) => {
+    if (!sessionId || !personaDraft) return;
+    const p: PlayerPersona = { id: personaDraft.id, name: personaDraft.name.trim() || 'ผู้เล่น', role: personaDraft.role?.trim() || undefined, appearance: personaDraft.appearance?.trim() || undefined };
+    updateSession(sessionId, (s) => ({ ...s, playerPersona: p }));
+    if (toLibrary) mutate((st) => {
+      const lib = st.personas ?? [];
+      const idx = lib.findIndex((x) => x.id === p.id);
+      return { ...st, personas: idx >= 0 ? lib.map((x) => (x.id === p.id ? p : x)) : [...lib, p] };
+    });
+    toast(toLibrary ? 'ตั้งบทบาท + บันทึกเข้าคลังแล้ว' : 'ตั้งบทบาทแล้ว', '🎭');
+  };
+  // ฟอร์มแก้บทบาทผู้เล่น (ใช้ร่วม gate บังคับ + การ์ดใน settings)
+  const setPD = (patch: Partial<PlayerPersona>) => setPersonaDraft((d) => ({ ...(d ?? blankPersona()), ...patch }));
+  const personaEditorBody = () => {
+    const pd = personaDraft ?? blankPersona();
+    const lib = state.personas ?? [];
+    const field = 'bg-cream/70 rounded-xl px-3 py-2 text-ink text-[13px] border-2 border-line focus:border-grape focus:bg-white focus:outline-none transition';
+    return (
+      <>
+        {lib.length > 0 && (
+          <div className="flex flex-col gap-1">
+            <span className="text-[11.5px] font-bold text-muted">เลือกจากคลัง (หยิบมาแก้ได้ ไม่กระทบตัวเดิม)</span>
+            <div className="flex flex-wrap gap-1.5">
+              {lib.map((p) => (
+                <button key={p.id} onClick={() => pickPersona(p)}
+                  className="rounded-full px-3 py-1 text-[12px] font-bold bg-grape/10 text-grape hover:bg-grape/20 active:scale-95 transition">
+                  🎭 {p.name}{p.role ? ` · ${p.role.slice(0, 18)}` : ''}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        <label className="flex flex-col gap-1">
+          <span className="text-[11.5px] font-bold text-muted">ชื่อ/ที่ตัวละครเรียกคุณ *</span>
+          <input value={pd.name} onChange={(e) => setPD({ name: e.target.value })} placeholder="เช่น เพม, คุณชายอเล็กซ์" className={field} />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[11.5px] font-bold text-muted">บทบาท/สถานะ</span>
+          <textarea value={pd.role ?? ''} onChange={(e) => setPD({ role: e.target.value })} rows={2} placeholder="เช่น ทายาทตระกูลใหญ่ที่จ้างเธอ / นักล่าปีศาจที่บุกปราสาท / รุ่นพี่ที่ออฟฟิศ" className={`${field} resize-none`} />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[11.5px] font-bold text-muted">รูปลักษณ์/การแต่งตัว</span>
+          <textarea value={pd.appearance ?? ''} onChange={(e) => setPD({ appearance: e.target.value })} rows={2} placeholder="เช่น ชายหนุ่มสูงโปร่ง สูทดำ ท่าทางสุขุม" className={`${field} resize-none`} />
+        </label>
+        <button onClick={aiFillPersona} disabled={personaBusy}
+          className="self-start rounded-full px-3.5 py-1.5 text-[12.5px] font-bold bg-bubble/15 text-bubble hover:bg-bubble/25 disabled:opacity-50 transition">
+          {personaBusy ? '✨ กำลังให้ AI กรอก…' : '✨ ให้ AI กรอกบทบาทให้ (ตามฉากตัวละคร)'}
+        </button>
+      </>
+    );
+  };
 
   const newChat = () => {
     if (!char) return;
@@ -230,16 +306,28 @@ export function ChatScreen() {
     return hits.length ? hits.map((e) => e.text) : undefined;
   };
 
+  // snapshot เวลา/สถานที่ ติดไปกับข้อความ AI — ทั้งคู่มาจาก live delta (อัปเดตทุกเทิร์น) ก่อน แล้ว fallback ไป stateCard (extractState ทุก ~6 เทิร์น)
+  const snapAt = (card?: LiveState): { time?: string; place?: string } | undefined => {
+    const time = (card?.time ?? session?.liveState?.time ?? session?.stateCard?.time)?.trim() || undefined;
+    const place = (card?.location ?? session?.liveState?.location ?? session?.stateCard?.location)?.trim() || undefined;
+    const out: { time?: string; place?: string } = {};
+    if (time) out.time = time;
+    if (place) out.place = place;
+    return out.time || out.place ? out : undefined;
+  };
+
   const callModel = async (userInput: string, baseRel: number, hist: ChatMsg[], maxTok?: number, judge = false) => {
     if (!sessChar || !sessionId) return;
     setBusy(true);
     try {
       const { summary, raw } = await buildMemory(hist);
       const history = raw.map(toHist);
-      const r = await sendChat({ char: sessChar, history, user_input: userInput, rel: baseRel, summary: summary || undefined, lore: pickLore(raw, userInput), state: stateToText(session?.stateCard), stateCard: session?.liveState ?? emptyLiveState(), provider, max_tokens: maxTok ?? 1500 });
+      const r = await sendChat({ char: sessChar, history, user_input: userInput, rel: baseRel, summary: summary || undefined, lore: pickLore(raw, userInput), state: stateToText(session?.stateCard), stateCard: session?.liveState ?? emptyLiveState(), playerPersona: session?.playerPersona, provider, max_tokens: maxTok ?? 1500 });
       if (r.ok && r.text) {
         const { text } = parseRelTag(r.text);   // ตัดแท็กออกถ้าโมเดลเผลอใส่ (ตอนนี้ใช้ judge ประเมินแทน) — backend strip แท็ก [[state:]] ให้แล้ว
-        updateSession(sessionId, (s) => ({ ...s, messages: [...s.messages, { role: 'char', text, ts: Date.now() }], updatedAt: Date.now() }));
+        const at = snapAt(r.stateCard);          // เก็บเวลา/สถานที่ ณ จังหวะคำตอบนี้
+        const ts = Date.now();
+        updateSession(sessionId, (s) => ({ ...s, messages: [...s.messages, { role: 'char', text, ts, ...(at ? { at } : {}) }], updatedAt: ts }));
         // live state: backend apply [[state:]] delta แล้วส่ง card ใหม่ + คำเตือนกลับมา (ไม่เอา rel มาทับ rel หลัก)
         if (r.stateCard) updateSession(sessionId, (s) => ({ ...s, liveState: r.stateCard }));
         if (r.stateWarnings?.length) { setStateWarnings(r.stateWarnings); toast('⚠️ ตรวจพบความขัดแย้งของสถานะ', '⚠️'); }
@@ -283,21 +371,24 @@ export function ChatScreen() {
   };
 
   // โหมดผู้เล่าเรื่อง: ยิงคำกำกับ → โมเดลบรรยายฉาก/บุคคลที่ 3/NPC แล้วแนบเป็นข้อความ narrator (secretFlag)
-  const runNarrate = async (userInput: string, secretFlag: boolean) => {
+  const runNarrate = async (userInput: string, secretFlag: boolean, hist?: ChatMsg[]) => {
     if (!sessChar || !sessionId || busy) return;
     setBusy(true);
     try {
-      const { summary, raw } = await buildMemory(messages);
+      const base = hist ?? messages;   // regen ส่งบริบทที่ตัดคำตอบเดิมออกมาเอง (กัน stale closure)
+      const { summary, raw } = await buildMemory(base);
       // ผู้เล่าเรื่องรอบรู้: เห็นทั้งไทม์ไลน์สาธารณะ + ฉากลับ (ความจำลับพับแยก ไม่ปนเข้า summary ที่ตัวละครเห็น)
-      const { summary: secretSummary, raw: secretRaw } = await buildSecretMemory(messages);
+      const { summary: secretSummary, raw: secretRaw } = await buildSecretMemory(base);
       const merged = [...raw, ...secretRaw].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
       const history = merged.map(toHist);
       const fullSummary = [summary, secretSummary ? `[เหตุการณ์ลับที่ ${sessChar.name} ไม่รับรู้ — ใช้ประกอบการบรรยายเท่านั้น]\n${secretSummary}` : '']
         .filter(Boolean).join('\n\n');
-      const r = await sendChat({ char: sessChar, history, user_input: userInput, rel, summary: fullSummary || undefined, lore: pickLore(merged, userInput), state: stateToText(session?.stateCard), mode: 'narrator', provider, max_tokens: 1500 });
+      const r = await sendChat({ char: sessChar, history, user_input: userInput, rel, summary: fullSummary || undefined, lore: pickLore(merged, userInput), state: stateToText(session?.stateCard), playerPersona: session?.playerPersona, mode: 'narrator', provider, max_tokens: 1500 });
       if (r.ok && r.text) {
         const { text: out } = parseRelTag(r.text);
-        updateSession(sessionId, (s) => ({ ...s, messages: [...s.messages, { role: 'narrator', text: out, secret: secretFlag, ts: Date.now() }], updatedAt: Date.now() }));
+        const at = snapAt();
+        const ts = Date.now();
+        updateSession(sessionId, (s) => ({ ...s, messages: [...s.messages, { role: 'narrator', text: out, secret: secretFlag, ts, ...(at ? { at } : {}) }], updatedAt: ts }));
       } else toast(r.error ?? 'เชื่อมต่อไม่ได้', '⚠️');
     } catch (e) { toast((e as Error).message || 'เชื่อมต่อไม่ได้', '⚠️'); }
     finally { setBusy(false); }
@@ -329,6 +420,40 @@ export function ChatScreen() {
       }
       return next;
     });
+  };
+
+  // regen "คำตอบ AI" — ลบคำตอบนั้น (และอะไรที่อยู่หลัง) แล้วยิงใหม่จากบริบทเดิม โดยคงข้อความผู้เล่นไว้
+  // ⚠️ ไม่ย้อนบัตรสถานะ/rel ที่คำตอบเดิมเคยขยับ — ถ้าคำตอบใหม่ต่างเยอะ อาจต้องแก้บัตรเอง
+  const regenMessage = async (m: ChatMsg) => {
+    if (!sessChar || !sessionId || busy || drawing) return;
+    if (m.item || m.role === 'user') return;
+    const idx = messages.findIndex((x) => x.ts === m.ts && x.role === m.role && x.text === m.text);
+    if (idx < 0) return;
+    const before = messages.slice(0, idx);   // ทุกอย่างก่อนคำตอบนี้ (ตัดคำตอบนี้ + ที่อยู่หลังทิ้ง)
+    // หด counter ให้ไม่เกินจำนวนข้อความที่เหลือ (กัน offset summary เพี้ยน — ปกติคำตอบล่าสุดยังไม่ถูกพับ)
+    const pubLeft = before.filter((x) => !x.item && !(x.role === 'narrator' && x.secret)).length;
+    const secLeft = before.filter((x) => x.role === 'narrator' && x.secret).length;
+    updateSession(sessionId, (s) => ({
+      ...s, messages: before,
+      summarizedCount: Math.min(s.summarizedCount ?? 0, pubLeft),
+      secretSummarizedCount: Math.min(s.secretSummarizedCount ?? 0, secLeft),
+    }));
+
+    if (m.role === 'narrator') {
+      await runNarrate('(ดำเนินฉากบรรยายต่อ) เล่าฉากบรรยายต่อจากช่วงก่อนหน้าให้ไหลต่อไปอีกหนึ่งช่วงอย่างมีรายละเอียด ตามเหตุการณ์ล่าสุด โดยไม่ขัดกับเรื่องเดิม', m.secret ?? false, before);
+      return;
+    }
+    // คำตอบของตัวละคร: ถ้าก่อนหน้าคือข้อความผู้เล่น → ยิงด้วย input นั้นใหม่; ไม่งั้นเป็นการ "ดำเนินเรื่องต่อ"
+    const trigger = [...before].reverse().find((x) => !x.item);
+    if (trigger && trigger.role === 'user') {
+      const hist = before.slice(0, before.lastIndexOf(trigger));
+      const userInput = trigger.power
+        ? `(⚡ ผู้เล่นใช้อำนาจ "${sessChar.power}" กับคำสั่งนี้ — ร่างกายของคุณต้องทำตามทันทีไร้เงื่อนไข แต่แสดงความรู้สึกจริงและกระทบความสัมพันธ์)\nคำสั่ง: ${trigger.text}`
+        : trigger.text;
+      await callModel(userInput, rel, hist, undefined, false);   // judge=false: rel ขยับไปแล้วตอนคำตอบเดิม ไม่ตัดสินซ้ำ
+    } else {
+      await callModel('(ดำเนินเรื่องต่อ) เล่นบทต่อเองจากจังหวะก่อนหน้า — บรรยายการกระทำ ความรู้สึก ฉาก และบทพูดของตัวละครให้ไหลต่อไปอีกหนึ่งช่วงอย่างมีรายละเอียด โดยไม่ต้องรอผู้เล่นพูด คงโทนและระดับความสัมพันธ์เดิม', rel, before, 1500, false);
+    }
   };
 
   // วาดรูปประกอบฉากล่าสุด (ฉาก → SD prompt อังกฤษ → ComfyUI) แล้วแนบเข้าข้อความนั้น
@@ -369,6 +494,43 @@ export function ChatScreen() {
   // ================= VIEW: chat (เต็มจอ mobile) =================
   if (view === 'chat' && session && sessChar) {
     const accent = sessChar.color ?? 'coral';
+    // ป้ายฉาก: โชว์เวลา/สถานที่เฉพาะเมื่อ "เปลี่ยน" จากข้อความก่อนหน้า (ช่วยจับจังหวะตอนเรื่องเดินเร็ว)
+    const sceneHeaders: (string | null)[] = [];
+    {
+      let lt: string | undefined, lp: string | undefined;
+      for (const m of messages) {
+        const at = m.at;
+        if (at && (at.time || at.place) && (at.time !== lt || at.place !== lp)) {
+          sceneHeaders.push([at.time ? `🕐 ${at.time}` : null, at.place ? `📍 ${at.place}` : null].filter(Boolean).join('   ·   '));
+          lt = at.time; lp = at.place;
+        } else sceneHeaders.push(null);
+      }
+    }
+    // ปุ่ม regen โชว์เฉพาะคำตอบ AI ล่าสุด (มาตรฐานแชต — กัน thread เพี้ยนจากการ regen กลางบท)
+    let lastReplyIdx = -1;
+    for (let i = messages.length - 1; i >= 0; i--) { const m = messages[i]; if (!m.item && (m.role === 'char' || m.role === 'narrator')) { lastReplyIdx = i; break; } }
+
+    // 🎭 gate: บังคับตั้ง "บทบาทผู้เล่น" ก่อนเริ่มเล่น (ถ้ายังไม่มี)
+    if (!session.playerPersona) {
+      const pd = personaDraft ?? blankPersona();
+      return (
+        <div className="fixed inset-0 z-30 flex flex-col bg-cream md:static md:z-auto md:max-w-2xl md:mx-auto md:my-6 md:rounded-3xl md:border-2 md:border-line md:shadow-pop overflow-y-auto">
+          <div className="shrink-0 px-4 py-3 border-b border-line flex items-center gap-2.5 bg-white/70 backdrop-blur">
+            <IconBtn onClick={() => { setView('sessions'); setSessionId(null); }} title="กลับ">←</IconBtn>
+            <div className="font-display text-lg font-semibold text-ink leading-tight">🎭 ตั้งบทบาทของคุณ ก่อนเริ่มเล่นกับ {sessChar.name}</div>
+          </div>
+          <div className="flex-1 p-4 sm:p-5 flex flex-col gap-3">
+            <p className="text-[12.5px] text-muted leading-relaxed">เพื่อให้ <b>{sessChar.name}</b> รู้ว่าคุณสวมบทเป็นใคร และอินกับฉากจริง ๆ — ตั้งบทบาทของคุณก่อนสักนิด (ไม่อยากคิดเอง กด <b>✨ ให้ AI กรอกให้</b> ได้เลย)</p>
+            {personaEditorBody()}
+            <div className="flex flex-wrap gap-2 mt-1">
+              <Btn variant="primary" color="grape" disabled={!pd.name.trim()} onClick={() => savePersona(false)}>▶ เริ่มเล่น</Btn>
+              <button disabled={!pd.name.trim()} onClick={() => savePersona(true)}
+                className="rounded-full px-4 py-2 text-[13px] font-bold border-2 border-grape/40 text-grape hover:bg-grape/10 disabled:opacity-40 transition">💾 เริ่มเล่น + บันทึกเข้าคลัง</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
     return (
       <>
         <div className="fixed inset-0 z-30 flex flex-col bg-cream md:static md:z-auto md:max-w-3xl md:mx-auto md:h-[calc(100vh-160px)] md:rounded-3xl md:border-2 md:border-line md:overflow-hidden md:shadow-pop">
@@ -394,7 +556,14 @@ export function ChatScreen() {
             {messages.length === 0 && <div className="text-muted text-[13px] text-center py-8">เริ่มทักได้เลย</div>}
             {messages.map((m, i) => (
               <div key={m.ts ? `${m.ts}-${m.role}` : i} ref={i === messages.length - 1 ? lastMsgRef : null}>
-                <ChatBubble msg={m} charColor={accent} drawing={drawing} onRegen={() => drawScene(m)} onDelete={() => removeImage(m)} onDeleteMsg={() => deleteMessage(m)} />
+                {sceneHeaders[i] && (
+                  <div className="flex justify-center my-1.5">
+                    <span className="text-[11px] font-bold text-muted bg-ink/[.04] border border-line rounded-full px-3 py-1">{sceneHeaders[i]}</span>
+                  </div>
+                )}
+                <ChatBubble msg={m} charColor={accent} drawing={drawing} busy={busy}
+                  onRegen={() => drawScene(m)} onDelete={() => removeImage(m)} onDeleteMsg={() => deleteMessage(m)}
+                  onRegenText={i === lastReplyIdx ? () => regenMessage(m) : undefined} />
               </div>
             ))}
             {busy && <div className="flex justify-start"><div className="rounded-2xl bg-ink/[.05] px-3.5 py-2.5"><Spinner size={16} /></div></div>}
@@ -519,6 +688,17 @@ export function ChatScreen() {
                 {p.label}
               </button>
             ))}
+          </div>
+        </Card>
+        {/* บทบาทของผู้เล่น — ตัวตนที่ผู้เล่นสวมในแชทนี้ (ฉีดเข้า prompt ให้ตัวละครโต้ตอบตามบท) */}
+        <Card className="p-4 sm:p-5 flex flex-col gap-2.5 mb-3">
+          <div className="font-bold text-ink">🎭 บทบาทของฉัน (ผู้เล่น)</div>
+          <p className="text-[12.5px] text-muted">ตัวตนที่คุณสวมบทในแชทนี้ — <b>{sessChar.name}</b> จะรู้จักและโต้ตอบตามนี้ · แก้แล้วกดบันทึก (บันทึกเข้าคลังเพื่อหยิบไปใช้แชทอื่นได้)</p>
+          {personaEditorBody()}
+          <div className="flex flex-wrap gap-2 mt-1">
+            <Btn variant="primary" color="grape" disabled={!personaDraft?.name.trim()} onClick={() => savePersona(false)}>💾 บันทึกบทบาท</Btn>
+            <button disabled={!personaDraft?.name.trim()} onClick={() => savePersona(true)}
+              className="rounded-full px-4 py-2 text-[13px] font-bold border-2 border-grape/40 text-grape hover:bg-grape/10 disabled:opacity-40 transition">💾 บันทึก + เข้าคลัง</button>
           </div>
         </Card>
         {/* บัตรสถานะ — field ตายตัว ฉีดเข้า prompt ทุกเทิร์น (อัปเดตอัตโนมัติตอนพับความจำ แก้มือได้) */}

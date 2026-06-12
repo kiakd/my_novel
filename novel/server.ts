@@ -4,7 +4,7 @@ import { mkdir } from 'node:fs/promises';
 import { getDb } from './db';
 import { logRequest, logActivity, logError, ensureLogIndexes, APP_LOG_COLLECTION } from './logger';
 import { assembleSystemPrompt, type NovelContext } from './prompts';
-import { assembleChatPrompt, assembleNarratorPrompt, buildPersonaReminder, type ChatCharLite } from './chat-prompt';
+import { assembleChatPrompt, assembleNarratorPrompt, buildPersonaReminder, type ChatCharLite, type PlayerPersonaLite } from './chat-prompt';
 import { pickStory, writeStoryMd, type Story } from './story-md';
 import { runWD14, categorizeTags, REF_SCENE_SYSTEM, buildRefSceneUser } from './ref-tag';
 import { toCard, fromCard, embedCardInPng, extractCardFromPng, makeSolidPng, type NovelChar } from './card-v2';
@@ -692,6 +692,7 @@ const app = new Elysia()
       lore?: string[];   // lorebook ที่ client เลือกมาแล้ว (keyword match) — แทรกใกล้ท้าย system prompt
       state?: string;    // บัตรสถานะปัจจุบัน (format เป็นข้อความแล้ว) — แทรกใกล้ท้าย system prompt (legacy/manual)
       stateCard?: StateCard;  // บัตรสถานะแบบ structured — ถ้าส่งมา: render เอง + สั่งโมเดลปล่อย [[state:]] delta + เช็ค contradiction
+      playerPersona?: PlayerPersonaLite;  // บทบาทของผู้เล่นในแชทนี้ — ฉีดให้ตัวละครรู้จัก+โต้ตอบตามบท
       mode?: 'char' | 'narrator';
       provider?: string;
       prefill?: string;
@@ -712,15 +713,15 @@ const app = new Elysia()
       const liveText = b.stateCard ? renderStateCard(b.stateCard) : undefined;
       const stateText = [liveText, b.state].filter(Boolean).join('\n') || undefined;
       const system = b.mode === 'narrator'
-        ? assembleNarratorPrompt(b.char, b.summary, compact, b.lore, stateText)
-        : assembleChatPrompt(b.char, rel, b.summary, compact, b.lore, stateText, trackState);
+        ? assembleNarratorPrompt(b.char, b.summary, compact, b.lore, stateText, b.playerPersona)
+        : assembleChatPrompt(b.char, rel, b.summary, compact, b.lore, stateText, trackState, b.playerPersona);
       const history = (b.history ?? []).map((m) => ({
         role: m.role === 'char' ? ('assistant' as const) : ('user' as const),
         content: m.content,
       }));
       // กัน persona drift: แทรกเตือนความจำ "ใกล้ท้าย" prompt ทุกเทิร์น (recency bias — ตำแหน่งท้ายมีอิทธิพลสูงสุด)
       // เป็น server-side เท่านั้น ไม่ถูกเก็บลง history ฝั่ง client
-      const reminder = buildPersonaReminder(b.char, rel, b.mode === 'narrator' ? 'narrator' : 'char', trackState);
+      const reminder = buildPersonaReminder(b.char, rel, b.mode === 'narrator' ? 'narrator' : 'char', trackState, b.playerPersona);
       // nudge ท้าย user message: ดันให้แท็ก [[state:]] เป็นสิ่งสุดท้ายที่โมเดลเห็น (recency) — cloud อย่าง DeepSeek ลืมใส่บ่อยถ้าไม่ย้ำท้ายสุด
       const stateNudge = trackState ? '\n\n[ระบบ: ปิดท้ายคำตอบนี้ด้วยบรรทัด [[state: ...]] เสมอ — สรุปเฉพาะสิ่งที่เปลี่ยน หรือ [[state: none]] ถ้าไม่เปลี่ยน]' : '';
       // explicit nudge: เฉพาะฉาก R18 (char mode) — "แซนด์วิช" คำสั่ง lexicon ท้ายสุด (recency) ดันให้ Gemma เลิกเลี่ยงคำ. ทดสอบแล้วได้ผลเฉพาะเมื่อมีทั้ง reminder+nudge (สูตร D)
@@ -807,6 +808,26 @@ const app = new Elysia()
       }).catch(() => {});
       return { ok: false, error: e.message };
     }
+  })
+
+  // --- AI สร้าง "บทบาทผู้เล่น" ที่เข้ากับฉากของตัวละคร (player persona auto-fill) ---
+  .post('/api/chat/generate-persona', async ({ body }) => {
+    const b = body as { char?: { name?: string; appearance?: string; description?: string; scenario?: string }; provider?: string };
+    const c = b?.char;
+    if (!c?.name) return { ok: false, error: 'char.name required' };
+    const system =
+      'คุณคือผู้ช่วยออกแบบ "บทบาทของผู้เล่น" สำหรับเล่นโรลเพลย์กับตัวละครที่กำหนด. ' +
+      'สร้างตัวตนของ "ผู้เล่น" (อีกฝ่ายที่จะคุยกับตัวละครนี้) ให้เข้ากับฉาก/สถานการณ์ของตัวละครอย่างสมเหตุสมผลและน่าเล่น. ' +
+      'ตอบ JSON บรรทัดเดียวเท่านั้น: {"name":"ชื่อผู้เล่น","role":"บทบาท/สถานะ สั้น 1 ประโยค","appearance":"รูปลักษณ์/การแต่งตัว สั้น 1 ประโยค"} ' +
+      'ภาษาไทย กระชับ ไม่ต้องอธิบายเพิ่ม ไม่ต้องมี markdown.';
+    const user = `ตัวละคร: ${c.name}\nรูปลักษณ์: ${c.appearance ?? '-'}\nภูมิหลัง: ${c.description ?? '-'}\nฉาก/สถานการณ์: ${c.scenario ?? '-'}\n\nออกแบบบทบาทผู้เล่นที่เข้ากับฉากนี้`;
+    try {
+      const out = await callAI({ system, user, provider: b.provider, temperature: 0.8, max_tokens: 300 });
+      let parsed: any = null;
+      try { const m = out.text.match(/\{[\s\S]*\}/); parsed = JSON.parse(m ? m[0] : out.text); } catch { return { ok: false, error: 'LLM non-JSON', raw: out.text.slice(0, 200) }; }
+      if (!parsed?.name) return { ok: false, error: 'no name in result' };
+      return { ok: true, persona: { name: String(parsed.name).trim(), role: String(parsed.role ?? '').trim(), appearance: String(parsed.appearance ?? '').trim() } };
+    } catch (e: any) { return { ok: false, error: e.message }; }
   })
 
   // --- AI generate (raw) ---

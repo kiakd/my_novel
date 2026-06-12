@@ -18,6 +18,7 @@ export interface StateIdentity {
 
 export interface StateCard {
   identity?: StateIdentity;
+  time?: string;         // ช่วงเวลา/วันปัจจุบัน (เช่น "เช้าตรู่", "บ่าย 3 โมง", "ดึกสงัด วันที่ 2") — เลื่อนตามเหตุการณ์ (นอน→เช้า, เวลาผ่านไป)
   location?: string;     // สถานที่ปัจจุบัน
   outfit?: string;       // ชุดที่ใส่ตอนนี้
   inventory?: string[];  // ของในครอบครอง
@@ -29,7 +30,7 @@ export interface StateCard {
 }
 
 export interface StateDelta {
-  set: Partial<Pick<StateCard, 'location' | 'outfit' | 'rel'>> & { identity?: Partial<StateIdentity> };
+  set: Partial<Pick<StateCard, 'time' | 'location' | 'outfit' | 'rel'>> & { identity?: Partial<StateIdentity> };
   add: { inventory: string[]; conditions: string[]; powers: string[]; facts: string[] };
   remove: { inventory: string[]; conditions: string[]; powers: string[]; facts: string[] };
   raw: string;           // เนื้อในแท็กดิบ (ดีบั๊ก)
@@ -54,6 +55,7 @@ export function renderStateCard(s?: StateCard | null): string {
     }
     if (parts.length) L.push(`- ตัวตน/ร่างตอนนี้: ${parts.join(' · ')}`);
   }
+  if (s.time) L.push(`- เวลาปัจจุบัน: ${s.time}`);
   if (s.location) L.push(`- สถานที่ปัจจุบัน: ${s.location}`);
   if (s.outfit) L.push(`- ชุดที่ใส่อยู่: ${s.outfit}`);
   if (s.inventory?.length) L.push(`- ของในครอบครอง: ${s.inventory.join(', ')}`);
@@ -111,6 +113,7 @@ export function parseStateDelta(text: string): { delta: StateDelta | null; clean
     // โมเดล (โดยเฉพาะ local) ชอบใส่ค่าขยะแทน "ไม่มี" — ตัดทิ้ง ไม่ให้ไปทับค่าจริง
     if (isJunk(val) && key !== 'disguised') continue;
     switch (key) {
+      case 'time': case 'เวลา': delta.set.time = val; break;
       case 'location': case 'loc': delta.set.location = val; break;
       case 'outfit': delta.set.outfit = val; break;
       case 'rel': { const n = Number(val); if (!Number.isNaN(n)) delta.set.rel = n; break; }
@@ -135,6 +138,7 @@ function mergeList(prev: string[] | undefined, add: string[], remove: string[]):
 
 export function applyDelta(prev: StateCard | null | undefined, delta: StateDelta): StateCard {
   const base: StateCard = prev ? structuredClone(prev) : {};
+  if (delta.set.time !== undefined) base.time = delta.set.time;
   if (delta.set.location !== undefined) base.location = delta.set.location;
   if (delta.set.outfit !== undefined) base.outfit = delta.set.outfit;
   if (delta.set.rel !== undefined) base.rel = Math.max(-100, Math.min(100, delta.set.rel));
@@ -180,12 +184,17 @@ export function checkContradiction(prev: StateCard | null | undefined, next: Sta
   }
 
   // 2) กฎปลอมตัว: อยู่ที่สาธารณะแต่เป็นร่างจริง
-  if (next.identity && next.identity.disguised === false && isPublic(next.location)) {
+  // ⚠️ ยิงเฉพาะตัวละครที่ "มีกลไกปลอมตัวจริง" = มี alias (ชื่อปลอม) หรือ form ที่ "ไม่ใช่ร่างจริง"
+  // กันเคสโมเดลเผลอ set form=ร่างจริง ให้ตัวละครทั่วไป (ทอมบอย/มนุษย์ธรรมดา) แล้วโดนเตือนผิด
+  const TRUE_FORM_RE = /ร่างจริง|ตัวจริง|ร่างปกติ|true ?form|real ?form|original/i;
+  const fakeForm = (v?: string) => !!v && !TRUE_FORM_RE.test(v);
+  const hasDisguiseMechanic = !!(next.identity?.alias || p.identity?.alias || fakeForm(next.identity?.form) || fakeForm(p.identity?.form));
+  if (hasDisguiseMechanic && next.identity?.disguised === false && isPublic(next.location)) {
     warn.push(`ปรากฏ "ร่างจริง" ในที่สาธารณะ (${next.location}) — กฎปลอมตัวกำหนดให้ต้องแปลงร่าง/ปลอมตัวก่อนเข้าที่สาธารณะ`);
   }
 
-  // 3) เพศที่ปรากฏเปลี่ยน แต่ไม่ได้ปลอมตัว
-  if (p.identity?.gender && next.identity?.gender && p.identity.gender !== next.identity.gender && !next.identity.disguised) {
+  // 3) เพศที่ปรากฏเปลี่ยน แต่ไม่ได้ปลอมตัว (เฉพาะตัวที่มีกลไกปลอมตัว — กันทอมบอย/คนข้ามเพศที่ gender ปรากฏนิ่งอยู่แล้วโดนเตือนผิด)
+  if (hasDisguiseMechanic && p.identity?.gender && next.identity?.gender && p.identity.gender !== next.identity.gender && !next.identity.disguised) {
     warn.push(`เพศที่ปรากฏเปลี่ยน "${p.identity.gender}" → "${next.identity.gender}" โดยไม่ได้อยู่ในสถานะปลอมตัว/แปลงร่าง`);
   }
 
