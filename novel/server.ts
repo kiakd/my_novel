@@ -3,8 +3,9 @@ import { join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { getDb } from './db';
 import { logRequest, logActivity, logError, ensureLogIndexes, APP_LOG_COLLECTION } from './logger';
-import { assembleSystemPrompt, type NovelContext } from './prompts';
+import { assembleSystemPrompt, buildNovelReminder, type NovelContext } from './prompts';
 import { assembleChatPrompt, assembleNarratorPrompt, buildPersonaReminder, type ChatCharLite, type PlayerPersonaLite } from './chat-prompt';
+import { RULE_ADULT, RULE_R18_LEXICON } from './shared-rules';
 import { pickStory, writeStoryMd, type Story } from './story-md';
 import { runWD14, categorizeTags, REF_SCENE_SYSTEM, buildRefSceneUser } from './ref-tag';
 import { toCard, fromCard, embedCardInPng, extractCardFromPng, makeSolidPng, type NovelChar } from './card-v2';
@@ -118,7 +119,13 @@ const EXPAND_SYSTEM = `คุณเป็นนักเขียนนิยา
 - เสริมเฉพาะรายละเอียดบรรยายตามโหมดที่สั่ง (ฉาก / แอ็กชัน-ท่าทาง / ขยายสำนวน)
 - ถ้ามี "รายละเอียดจากรูปอ้างอิง" ให้ใช้เป็นแนวทางบรรยาย (ท่าทาง เสื้อผ้า ฉาก มุมมอง สีหน้า) แต่ห้ามเอ่ยชื่อ tag ตรงๆ ให้ร้อยเป็นภาษาเล่าเรื่องธรรมชาติ
 - รักษาน้ำเสียง/บุคลิกตัวละครและสไตล์ของเรื่อง เคารพข้อห้าม (don'ts) ที่ให้มา
-- ตอบกลับเป็นร้อยแก้วภาษาไทยล้วน ไม่ต้องอธิบาย ไม่ต้องใส่หัวข้อ/มาร์กดาวน์/คำนำ`;
+- ตอบกลับเป็นร้อยแก้วภาษาไทยล้วน ไม่ต้องอธิบาย ไม่ต้องใส่หัวข้อ/มาร์กดาวน์/คำนำ
+
+=== นโยบายอายุ (กฎกลาง — ห้ามฝ่าฝืน) ===
+${RULE_ADULT}
+
+=== คำเรียกฉาก R18 (กฎกลาง — ใช้เมื่อต้นฉบับเป็นฉากผู้ใหญ่) ===
+${RULE_R18_LEXICON}`;
 
 type Provider = 'openrouter' | 'deepseek' | 'lmstudio';
 
@@ -660,9 +667,11 @@ const app = new Elysia()
     try {
       const system = assembleSystemPrompt(b.context);
       const max_tokens = b.max_tokens ?? (b.context.mode === 'dialogue' ? 1200 : 2500);
+      // anti-drift: ย้ำกฎสำคัญท้าย user message (recency) — กันเสียง/ชุด/ฟอร์แมตหลุดตอน prose ยาว
+      const userMsg = `${b.user_input}\n\n${buildNovelReminder(b.context)}`;
       const out = await callAI({
         system,
-        user: b.user_input,
+        user: userMsg,
         model: b.model,
         provider: b.provider,
         temperature: b.temperature ?? 0.85,
@@ -673,7 +682,7 @@ const app = new Elysia()
       logCall({
         endpoint: 'generate-roleplay',
         system,
-        user: b.user_input,
+        user: userMsg,
         response: out.text,
         provider: out.provider,
         model: out.model ?? '',
@@ -683,6 +692,12 @@ const app = new Elysia()
         ok: true,
         ms,
       }).catch(() => {});
+      // structured state (opt-in): ถ้า caller ส่ง context.stateCard มา → บังคับแท็ก + พาร์ส delta + เช็ค contradiction (เหมือนแชท)
+      if (b.context.stateCard) {
+        const withTag = await ensureStateTag(out.text, b.context.stateCard, b.provider);
+        const { cleaned, next, delta, warnings } = processChatState(withTag, b.context.stateCard);
+        return { ok: true, ...out, text: cleaned, stateCard: next, stateDelta: delta, stateWarnings: warnings, prompt_chars: system.length };
+      }
       return { ok: true, ...out, prompt_chars: system.length };
     } catch (e: any) {
       const ms = Date.now() - t0;
