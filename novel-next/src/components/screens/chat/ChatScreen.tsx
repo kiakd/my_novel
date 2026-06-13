@@ -4,7 +4,7 @@ import { SectionTitle, Card, Btn, Avatar, IconBtn, Spinner, EmptyState, Modal, t
 import { pal } from '@/lib/theme';
 import { useChat } from '@/lib/store/ChatProvider';
 import { sendChat, summarizeChat, judgeRel, chatSceneImage, extractState, generatePlayerPersona } from '@/lib/chat-api';
-import { applyItem, parseRelTag, clampRel, relLevel, floorRel } from '@/lib/chat-rel';
+import { applyItem, parseRelTag, clampRel, relLevel, floorRel, stepRel } from '@/lib/chat-rel';
 import { activateLore, LORE_SCAN_DEPTH } from '@/lib/chat-lore';
 import { useChatFontSize, useChatProvider } from '@/lib/uiPrefs';
 import type { ChatChar, ChatItem, ChatMsg, ChatSession, ChatStateCard, PlayerPersona } from '@/lib/chat-types';
@@ -335,7 +335,7 @@ export function ChatScreen() {
         // ให้ "ผู้ตัดสิน" ประเมินความสัมพันธ์เสมอ (เฉพาะเทิร์นผู้เล่นจริง)
         if (judge) {
           const jr = await judgeRel({ charName: sessChar.name, mindset: sessChar.mindset, likes: sessChar.likes, dislikes: sessChar.dislikes, currentRel: baseRel, userMsg: userInput, charReply: text, provider });
-          if (jr != null) updateSession(sessionId, (s) => ({ ...s, rel: floorRel(s.rel, jr) }));
+          if (jr != null) updateSession(sessionId, (s) => ({ ...s, rel: floorRel(s.rel, stepRel(s.rel, jr)) }));
         }
       } else toast(r.error ?? 'เชื่อมต่อไม่ได้', '⚠️');
     } catch (e) { toast((e as Error).message || 'เชื่อมต่อไม่ได้', '⚠️'); }

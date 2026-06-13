@@ -183,18 +183,17 @@ export function checkContradiction(prev: StateCard | null | undefined, next: Sta
     warn.push(`ชื่อจริงเปลี่ยนจาก "${p.identity.realName}" → "${next.identity.realName}" (ชื่อจริงไม่ควรเปลี่ยน)`);
   }
 
-  // 2) กฎปลอมตัว: อยู่ที่สาธารณะแต่เป็นร่างจริง
-  // ⚠️ ยิงเฉพาะตัวละครที่ "มีกลไกปลอมตัวจริง" = มี alias (ชื่อปลอม) หรือ form ที่ "ไม่ใช่ร่างจริง"
-  // กันเคสโมเดลเผลอ set form=ร่างจริง ให้ตัวละครทั่วไป (ทอมบอย/มนุษย์ธรรมดา) แล้วโดนเตือนผิด
-  const TRUE_FORM_RE = /ร่างจริง|ตัวจริง|ร่างปกติ|true ?form|real ?form|original/i;
-  const fakeForm = (v?: string) => !!v && !TRUE_FORM_RE.test(v);
-  const hasDisguiseMechanic = !!(next.identity?.alias || p.identity?.alias || fakeForm(next.identity?.form) || fakeForm(p.identity?.form));
-  if (hasDisguiseMechanic && next.identity?.disguised === false && isPublic(next.location)) {
-    warn.push(`ปรากฏ "ร่างจริง" ในที่สาธารณะ (${next.location}) — กฎปลอมตัวกำหนดให้ต้องแปลงร่าง/ปลอมตัวก่อนเข้าที่สาธารณะ`);
+  // 2) กฎปลอมตัว: ยิงเฉพาะ "transition เพิ่งถอด/หลุดการปลอมตัว" ในที่สาธารณะ
+  // (เทิร์นก่อน disguised=true → ตอนนี้ false ในที่สาธารณะ = เผยตัวจริงทั้งที่ยังควรปิดบัง)
+  // ⚠️ ตัวละครทั่วไปที่ไม่เคยปลอมตัว (disguised=false ตลอด เช่นเรย์น/เบลล์/หมาป่า/มนุษย์ธรรมดา) จะไม่ยิงเด็ดขาด —
+  //    การมี form (รูปร่างจริงของตัวเอง) ไม่นับเป็น "ปลอมตัว" อีกต่อไป (กัน false positive ที่เคยท่วมจอ)
+  const hasAlias = !!(next.identity?.alias || p.identity?.alias);
+  if (p.identity?.disguised === true && next.identity?.disguised === false && isPublic(next.location)) {
+    warn.push(`เผยร่างจริงในที่สาธารณะ (${next.location}) ขณะเพิ่งถอดการปลอมตัว — กฎปลอมตัวกำหนดให้คงร่างปลอมในที่สาธารณะ`);
   }
 
-  // 3) เพศที่ปรากฏเปลี่ยน แต่ไม่ได้ปลอมตัว (เฉพาะตัวที่มีกลไกปลอมตัว — กันทอมบอย/คนข้ามเพศที่ gender ปรากฏนิ่งอยู่แล้วโดนเตือนผิด)
-  if (hasDisguiseMechanic && p.identity?.gender && next.identity?.gender && p.identity.gender !== next.identity.gender && !next.identity.disguised) {
+  // 3) เพศที่ปรากฏเปลี่ยน โดยไม่ได้ปลอมตัว (เฉพาะตัวที่มี "ตัวตนปลอม" = มี alias — กันคนทั่วไปที่ gender นิ่งอยู่แล้วโดนเตือนผิด)
+  if (hasAlias && p.identity?.gender && next.identity?.gender && p.identity.gender !== next.identity.gender && !next.identity.disguised) {
     warn.push(`เพศที่ปรากฏเปลี่ยน "${p.identity.gender}" → "${next.identity.gender}" โดยไม่ได้อยู่ในสถานะปลอมตัว/แปลงร่าง`);
   }
 

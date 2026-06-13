@@ -242,6 +242,29 @@ async function callAI(payload: {
   };
 }
 
+// บังคับ state tag: ถ้าโมเดล (โดยเฉพาะ DeepSeek cloud) ลืมปิดท้ายด้วย [[state:]] → เรียกซ้ำแบบถูก ๆ
+// ขอ "เฉพาะบรรทัดแท็ก" จากฉากที่เพิ่งเขียน (ไม่แตะเนื้อเรื่องเดิม) ใช้ prefill '[[state:' บังคับฟอร์แมต
+async function ensureStateTag(reply: string, prev: StateCard | null | undefined, provider?: string): Promise<string> {
+  if (/\[\[\s*state\s*:/i.test(reply)) return reply;   // มีแท็กแล้ว — ไม่ต้องเรียกซ้ำ
+  try {
+    const system = 'คุณเป็นตัวแยกข้อมูลสถานะของเกมโรลเพลย์ หน้าที่: อ่าน "บัตรสถานะก่อนหน้า" + "ฉากที่เพิ่งเกิด" แล้วสรุป "เฉพาะสิ่งที่เปลี่ยนจริงในฉากนี้" เป็นแท็กบรรทัดเดียว ตอบเฉพาะแท็ก ห้ามมีคำอธิบายหรืออย่างอื่น';
+    const user =
+      `บัตรสถานะก่อนหน้า:\n${renderStateCard(prev) || '(ยังไม่มี)'}\n\n` +
+      `ฉากที่เพิ่งเกิด:\n${reply}\n\n` +
+      'สรุปสิ่งที่เปลี่ยนเป็นแท็กเดียว รูปแบบ [[state: คีย์=ค่า; คีย์=ค่า]] — ⚠️ คั่นแต่ละคีย์ด้วยเครื่องหมาย ; เสมอ. ' +
+      'คีย์ตั้งค่า: time= location= outfit= form= alias= gender= disguised=true/false realname= ; คีย์รายการ: +inv= -inv= +cond= -cond= +power= -power= +fact= ' +
+      '(cond=สภาพกายเท่านั้น ห้ามเอาอารมณ์มาใส่ · ใส่เฉพาะคีย์ที่เปลี่ยนจริง). ' +
+      'ตัวอย่าง: [[state: time=เช้า; location=สวนหลังคฤหาสน์; outfit=ชุดบางๆ]] · ถ้าไม่มีอะไรเปลี่ยนเลยตอบ [[state: none]]';
+    const r = await callAI({ system, user, provider, prefill: '[[state:', temperature: 0.2, max_tokens: 120 });
+    const firstLine = r.text.trim().split('\n')[0].trim();
+    const closed = firstLine.match(/\[\[\s*state\s*:[\s\S]*?\]\]/i);
+    if (closed) return reply.trimEnd() + '\n' + closed[0];
+    // เผื่อโมเดลไม่ปิด ]] — เติมให้
+    if (/^\[\[\s*state\s*:/i.test(firstLine)) return reply.trimEnd() + '\n' + (/\]\]\s*$/.test(firstLine) ? firstLine : firstLine + ']]');
+  } catch { /* เงียบ — ปล่อยให้ไม่มีแท็ก ดีกว่าทำคำตอบพัง */ }
+  return reply;
+}
+
 /* ============================================================
    AI Prompt Logger
    ============================================================ */
@@ -746,7 +769,9 @@ const app = new Elysia()
       }).catch(() => {});
       // structured state: พาร์ส delta จากท้ายคำตอบ → strip ออก → apply → เช็ค contradiction (deterministic ไม่เรียก LLM)
       if (trackState) {
-        const { cleaned, next, delta, warnings } = processChatState(out.text, b.stateCard);
+        // บังคับ state tag: ถ้าไม่มีแท็กในคำตอบ → เรียกซ้ำขอเฉพาะบรรทัดแท็ก (กัน DeepSeek ลืมใส่ ~24%)
+        const withTag = await ensureStateTag(out.text, b.stateCard, b.provider);
+        const { cleaned, next, delta, warnings } = processChatState(withTag, b.stateCard);
         return { ok: true, ...out, text: cleaned, stateCard: next, stateDelta: delta, stateWarnings: warnings };
       }
       return { ok: true, ...out };
