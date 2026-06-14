@@ -85,7 +85,8 @@ export interface NovelContext {
   vocabPalette?: string; // คำเฉพาะ/คำที่ให้ใช้ตรงๆ/คำห้ามใช้ (จาก Story.vocabPalette) — บังคับคำศัพท์
   continuity?: string;   // สถานะ canonical ของตัวละคร ณ บทปัจจุบัน (จาก arc beats — continuityBrief) กันชุด/สถานะหลุด
   stateCard?: StateCard; // บัตรสถานะ structured (opt-in) — ถ้าส่งมา: render + สั่งโมเดลปล่อย [[state:]] delta + พาร์สเองในโค้ด (auto-track ข้ามบท เหมือนแชท)
-  narrator?: string;     // โหมด "นิยายเต็ม": ชื่อตัวละครที่เล่าด้วยมุมมองบุคคลที่ 1 — AI เขียนทุกตัวละคร ไม่มี {{user}}
+  narrator?: string;     // โหมด "นิยายเต็ม": ชื่อตัวละครที่เรื่องติดตาม — AI เขียนทุกตัวละคร ไม่มี {{user}}
+  pov?: '1st' | '3rd';   // มุมมองเล่าในโหมดนิยายเต็ม: '1st'=บุคคลที่หนึ่ง (default) · '3rd'=บุคคลที่สาม limited ติดตาม narrator
   mode: Mode;
 }
 
@@ -234,11 +235,18 @@ function eventOrderBlock(order?: string[]): string {
   return `\n=== ลำดับเหตุการณ์ที่ผ่านมา ===\n${order.map((e, i) => `${i + 1}. ${e}`).join('\n')}`;
 }
 
-function novelFrame(narrator: string): string {
-  return `=== โหมด: นิยายเต็ม (มุมมองบุคคลที่หนึ่ง) ===
+function novelFrame(narrator: string, pov: '1st' | '3rd' = '1st'): string {
+  const povBlock = pov === '3rd'
+    ? `=== โหมด: นิยายเต็ม (มุมมองบุคคลที่สาม — limited ติดตาม "${narrator}") ===
+- เรื่องนี้เป็น "นิยาย" ไม่ใช่แชตโรลเพลย์ — คุณคือผู้เขียน เขียน prose เล่าทั้งเรื่องเอง
+- เล่าด้วย "บุคคลที่สาม" ที่กล้องติดตาม "${narrator}": บรรยายเขา/เธอด้วยชื่อหรือสรรพนามบุรุษที่ 3 (เขา/เธอ/นาง) — เห็นได้เฉพาะสิ่งที่ ${narrator} รับรู้/มองเห็น/รู้สึกเท่านั้น ห้ามกระโดดเข้าหัวตัวละครอื่น
+- สรรพนามบุรุษที่ 1 ของ ${narrator} (เช่น ผม/ฉัน/กู) ใช้ได้ "เฉพาะในบทพูดและความคิดในใจ" เท่านั้น — ส่วนบรรยายให้ใช้บุรุษที่ 3 เสมอ
+- ตัวละครอื่นทุกตัว คุณเขียนคำพูด/การกระทำ/สีหน้าให้ได้ (เห็นจากภายนอกผ่านสายตา ${narrator}) แต่ห้ามบรรยาย "ความคิดภายใน" ของพวกเขาตรง ๆ`
+    : `=== โหมด: นิยายเต็ม (มุมมองบุคคลที่หนึ่ง) ===
 - เรื่องนี้เป็น "นิยาย" ไม่ใช่แชตโรลเพลย์ — คุณคือผู้เขียน เขียน prose เล่าทั้งเรื่องเอง
 - เล่าจากมุมมองบุคคลที่หนึ่งของ "${narrator}" (ใช้สรรพนามตามที่กำหนดในตัวละคร) — ความคิด/การกระทำของ ${narrator} เขียนได้เต็มที่
-- ตัวละครอื่นทุกตัว คุณเขียนการกระทำ/คำพูด/ปฏิกิริยาให้ได้ทั้งหมด
+- ตัวละครอื่นทุกตัว คุณเขียนการกระทำ/คำพูด/ปฏิกิริยาให้ได้ทั้งหมด`;
+  return `${povBlock}
 - ไม่มี "{{user}}"/ผู้เล่นในโหมดนี้ — กฎเหล็กข้อ 2 (เรื่อง {{user}}) ไม่นำมาใช้`;
 }
 
@@ -251,12 +259,18 @@ export function buildNovelReminder(ctx: NovelContext): string {
     : ctx.mode === 'r18'
       ? 'บรรยาย 65% บทพูด 35% + เรียกอวัยวะด้วยคำดิบเมื่อถึงฉากสัมผัส/สอดใส่'
       : 'บรรยาย 70% บทพูด 30% เน้นประสาทสัมผัส';
+  const povNote = ctx.narrator
+    ? ctx.pov === '3rd'
+      ? `เล่าบุคคลที่ 3 ติดตาม "${who}" (บรรยายใช้เขา/เธอ · สรรพนามบุรุษ 1 เฉพาะบทพูด/ความคิด)`
+      : `เล่าบุคคลที่ 1 ของ "${who}"`
+    : `คงเสียง/บุคลิก/สรรพนามของ "${who}"`;
   const bits = [
     'ภาษาไทยล้วน',
-    `คงเสียง/บุคลิก/สรรพนามของ "${who}" ให้คงเส้นคงวา`,
+    `${povNote} ให้คงเส้นคงวา`,
     'ยึด "สถานะปัจจุบัน" ล่าสุด (ชุด/ตำแหน่ง/สิ่งที่เพิ่งเกิด) ห้ามย้อนสภาพจุดเริ่มต้น',
     `ออกตามโครงสร้าง+อัตราส่วนของโหมด (${ratio})`,
   ];
+  if (ctx.stateCard?.time) bits.push('หัวฉาก ⏰/📅 อิงเวลาจากสถานะปัจจุบัน ห้ามแต่งวันที่เอง');
   if (ctx.stateCard) bits.push('ปิดท้ายด้วยแท็ก [[state: ...]] สรุปสิ่งที่เปลี่ยน (ไม่เปลี่ยน=none)');
   return `[ย้ำก่อนเขียน: ${bits.join(' · ')}]`;
 }
@@ -264,7 +278,7 @@ export function buildNovelReminder(ctx: NovelContext): string {
 export function assembleSystemPrompt(ctx: NovelContext): string {
   const parts: string[] = [BASE_RULES];
   if (ctx.narrator && ctx.narrator.trim()) {
-    parts.push('', novelFrame(ctx.narrator.trim()));
+    parts.push('', novelFrame(ctx.narrator.trim(), ctx.pov ?? '1st'));
   }
   parts.push(
     '',
@@ -311,6 +325,13 @@ export function assembleSystemPrompt(ctx: NovelContext): string {
   const liveState = renderStateCard(ctx.stateCard);
   if (liveState) {
     parts.push('', '=== สถานะปัจจุบัน (live — ข้อเท็จจริงล่าสุดแบบ field ยึดเด็ดขาด ห้ามย้อน) ===', liveState);
+    // หัวฉาก [📅|⏰|📍] = canonical จากบัตรสถานะ ไม่ให้โมเดลแต่งวันที่/เวลาเอง (กันวันที่เพี้ยนข้ามบท)
+    if (ctx.stateCard?.time || ctx.stateCard?.location) {
+      const hdr: string[] = [];
+      if (ctx.stateCard.time) hdr.push(`⏰/📅 ใช้ "${ctx.stateCard.time}" (เลื่อนต่อได้ถ้าเวลาผ่านไปในฉาก แล้วอัปเดตผ่าน [[state: time=...]])`);
+      if (ctx.stateCard.location) hdr.push(`📍 ใช้ "${ctx.stateCard.location}"`);
+      parts.push(`⚠️ หัวฉาก [📅วันที่ | ⏰เวลา | 📍สถานที่] ให้อิงค่าจากสถานะปัจจุบันนี้ ห้ามแต่งวันที่/เวลาขึ้นใหม่เอง — ${hdr.join(' · ')}`);
+    }
   }
 
   parts.push('', '=== เหตุการณ์ปัจจุบันที่ต้องเขียน ===', ctx.eventCurrent);
