@@ -4,7 +4,7 @@ import { Drawer, Btn, Spinner, toast } from '@/components/ui';
 import { pal, cx } from '@/lib/theme';
 import { useI18n } from '@/lib/i18n';
 import { useStory } from '@/lib/store/StoryProvider';
-import { expand, type ExpandMode } from '@/lib/api';
+import { expand, refToScene, type ExpandMode } from '@/lib/api';
 import { chapterRefs, continuityBrief } from '@/components/screens/timeline/arc';
 import { ImageDrop } from './ImageDrop';
 
@@ -30,9 +30,32 @@ export function ExpandPanel({ open, onClose, initialDraft, chapterNum, onInsert 
   const [result, setResult] = useState('');
   const [useCont, setUseCont] = useState(true);   // แนบ continuity ตัวละครให้ AI (กันหลุดคาแรกเตอร์)
   const [showCont, setShowCont] = useState(false);
+  const [brief, setBrief] = useState('');         // บรีฟ "ชุด/ท่า" จากรูป (อ่าน/แก้ก่อนใช้)
+  const [briefBusy, setBriefBusy] = useState(false);
 
   // sync ข้อความที่เลือกทุกครั้งที่เปิด
-  useEffect(() => { if (open) { setDraft(initialDraft); setResult(''); } }, [open, initialDraft]);
+  useEffect(() => { if (open) { setDraft(initialDraft); setResult(''); setBrief(''); } }, [open, initialDraft]);
+
+  // อ่านรูป → บรีฟไทยแยกหมวด (ชุด/ท่า/มุมกล้อง/สีหน้า/การกระทำ) ให้คนอ่าน/แก้/เอาไปใช้
+  const readBrief = async () => {
+    if (!buckets && !tags.length) return;
+    setBriefBusy(true);
+    try {
+      const r = await refToScene({
+        buckets: buckets ?? undefined,
+        tags: buckets ? undefined : tags,
+        use: { outfit: true, pose: true, action: true, camera: true, expression: true },
+      });
+      if (r.ok && r.brief) setBrief(r.brief);
+      else toast(r.error ?? t('chapters.expand.briefFailed'), '⚠️');
+    } catch (e) {
+      toast((e as Error).message || t('chapters.expand.briefFailed'), '⚠️');
+    } finally {
+      setBriefBusy(false);
+    }
+  };
+  const briefToDraft = () => { setDraft((d) => (d.trim() ? `${d.trim()}\n\n${brief}` : brief)); toast(t('chapters.expand.briefToDraft'), '↘'); };
+  const copyBrief = () => { void navigator.clipboard?.writeText(brief); toast(t('common.copied'), '📋'); };
 
   // สไตล์/ข้อห้ามของเรื่อง → ส่งเป็น context ให้ AI
   const styleContext = [
@@ -106,6 +129,30 @@ export function ExpandPanel({ open, onClose, initialDraft, chapterNum, onInsert 
               {previewTags.map((tg) => (
                 <span key={tg} className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: pal('lilac').soft, color: pal('lilac').c }}>{tg}</span>
               ))}
+            </div>
+          )}
+          {/* อ่านชุด/ท่าจากรูป → บรีฟไทยที่แก้ได้ก่อนเอาไปเขียนต่อ/กำหนด outfit */}
+          {(buckets || tags.length > 0) && (
+            <div className="mt-2">
+              <Btn variant="soft" color="lilac" className="w-full" disabled={briefBusy} onClick={readBrief}>
+                {briefBusy ? <Spinner size={14} color={pal('lilac').c} /> : '🔍'} {briefBusy ? t('chapters.expand.briefBusy') : t('chapters.expand.briefBtn')}
+              </Btn>
+              {brief && (
+                <div className="mt-2 rounded-2xl border-2 border-line bg-white px-3 py-2.5">
+                  <div className="text-[11px] font-extrabold tracking-wider uppercase text-muted mb-1">{t('chapters.expand.briefTitle')}</div>
+                  <textarea
+                    value={brief}
+                    onChange={(e) => setBrief(e.target.value)}
+                    rows={5}
+                    className="w-full rounded-xl border-2 border-line bg-cream/40 px-2.5 py-2 text-[13px] text-ink/90 leading-relaxed focus:outline-none focus:border-lilac/40 resize-y"
+                  />
+                  <p className="text-[11px] text-muted mt-1 leading-snug">{t('chapters.expand.briefHint')}</p>
+                  <div className="flex gap-2 mt-1.5">
+                    <Btn variant="primary" color="lilac" className="flex-1" onClick={briefToDraft}>↘ {t('chapters.expand.briefToDraft')}</Btn>
+                    <Btn variant="soft" color="slate" onClick={copyBrief}>📋 {t('chapters.expand.copy')}</Btn>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

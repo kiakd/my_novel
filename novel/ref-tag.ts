@@ -88,14 +88,15 @@ export function buildRefSceneUser(
   opts: { characterNames?: string[]; extra?: string } = {},
 ): string {
   const sel: string[] = [];
-  const add = (label: string, arr: string[]) => { if (arr.length) sel.push(`${label}: ${arr.join(', ')}`); };
+  // กัน buckets ที่ขาดบางหมวด (caller ส่ง partial) — undefined → ข้าม ไม่ throw
+  const add = (label: string, arr?: string[]) => { if (arr?.length) sel.push(`${label}: ${arr.join(', ')}`); };
   if (use.outfit) { add('ชุด/เครื่องแต่งกาย (outfit)', buckets.outfit); add('สภาพเปลือย (nude)', buckets.nude); }
   if (use.pose) add('ท่า/ตำแหน่ง (pose)', buckets.pose);
   if (use.action) add('การกระทำ (action)', buckets.action);
   if (use.camera) add('มุมกล้อง/ฉาก (camera)', buckets.camera);
   if (use.expression) add('สีหน้า/อารมณ์ (expression)', buckets.expression);
   // body แนบเป็น context เสมอเมื่อเลือก pose/action
-  if ((use.pose || use.action) && buckets.body.length) add('ร่างกายที่เน้น (body)', buckets.body);
+  if (use.pose || use.action) add('ร่างกายที่เน้น (body)', buckets.body);
 
   return [
     opts.characterNames?.length ? `ตัวละครในฉาก: ${opts.characterNames.join(', ')}` : '',
