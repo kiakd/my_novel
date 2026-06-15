@@ -98,3 +98,26 @@ function rowToHit(r: any): MemHit {
     ftsRank: typeof r.ftsRank === 'number' ? r.ftsRank : undefined,
   };
 }
+
+export function cosine(a: Float32Array, b: Float32Array): number {
+  let dot = 0, na = 0, nb = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+  if (na === 0 || nb === 0) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+export interface VecQuery {
+  scopeId: string; queryVec: Float32Array; activeChar: string;
+  narratorMode: boolean; excludeFromIdx: number; limit: number;
+}
+
+export function vectorSearch(db: Database, q: VecQuery): MemHit[] {
+  const vis = visibilitySql(q.narratorMode, q.activeChar);
+  const sql = `SELECT m.* FROM mem m
+    WHERE m.scopeId = ? AND m.turnIdx < ? AND m.embedding IS NOT NULL AND ${vis.clause}`;
+  const rows = db.query(sql).all(q.scopeId, q.excludeFromIdx, ...vis.params) as any[];
+  const hits = rows.map(rowToHit).map((h) => ({ ...h, cos: h.embedding ? cosine(q.queryVec, h.embedding) : 0 }));
+  hits.sort((x, y) => (y.cos ?? 0) - (x.cos ?? 0));
+  return hits.slice(0, q.limit);
+}
