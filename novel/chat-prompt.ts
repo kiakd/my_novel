@@ -68,8 +68,14 @@ function stateSection(state?: string): string {
   return `\n=== สถานะปัจจุบัน (ข้อเท็จจริงล่าสุด — ยึดตามนี้เด็ดขาด ห้ามขัด/ห้ามย้อนกลับ) ===\n${state.trim()}\n`;
 }
 
+/** section ความจำที่ recall มา (RAG) — วางใกล้ lore (อิทธิพลสูง แต่ไม่ทับ "สถานะปัจจุบัน") */
+function recalledSection(recalled?: string[]): string {
+  if (!recalled?.length) return '';
+  return `\n=== ความทรงจำที่เกี่ยวข้องกับตอนนี้ (กู้จากเหตุการณ์เก่า — ถือว่าเกิดขึ้นจริง ให้สอดคล้อง) ===\n${recalled.map((m) => `- ${m.trim()}`).join('\n')}\n`;
+}
+
 /** compact = โมเดล local ctx/token น้อย — สั่งความยาวสั้นลงให้พอดี max_tokens ไม่โดนตัดกลางประโยค */
-export function assembleChatPrompt(c: ChatCharLite, rel: number, summary?: string, compact = false, lore?: string[], state?: string, emitStateDelta = false, player?: PlayerPersonaLite): string {
+export function assembleChatPrompt(c: ChatCharLite, rel: number, summary?: string, compact = false, lore?: string[], state?: string, emitStateDelta = false, player?: PlayerPersonaLite, recalled?: string[]): string {
   const paras = compact ? '2-4' : '3-6';
   const lvl = relLevel(rel);
   const guard = typeof c.guard === 'number' ? c.guard : 40;
@@ -132,7 +138,7 @@ ${standing
 - เมื่อ "ไม่ได้" ใช้อำนาจ (ข้อความธรรมดา) คุณมีเจตจำนงเสรีตามปกติ ปฏิเสธ/ต่อรอง/ทำตามระดับความสัมพันธ์ได้เต็มที่`}
 - ไม่ว่ากรณีใด "หัวใจ/ความสัมพันธ์" ยังเพิ่ม/ลดตามจริงเสมอ: ถูกบังคับสิ่งที่ไม่เต็มใจ → ยอมแต่กายใจไม่ยอม ความสัมพันธ์ลด; อ่อนโยน/ทำให้เต็มใจ → ความสัมพันธ์เพิ่ม` : ''}
 
-${loreSection(lore)}${stateSection(state)}${emitStateDelta ? STATE_DELTA_INSTRUCTION + '\n' : ''}
+${recalledSection(recalled)}${loreSection(lore)}${stateSection(state)}${emitStateDelta ? STATE_DELTA_INSTRUCTION + '\n' : ''}
 ให้ "แสดงออก" ตามนิสัยและสิ่งที่ชอบ/ไม่ชอบเสมอ (ถูกใจ = อบอุ่นขึ้น, ไม่พอใจ = เย็นชา/ถอยห่าง) — ระบบจะประเมินค่าความสัมพันธ์ให้เองภายนอก
 
 ตอบเป็น "${c.name}" ต่อจากบทสนทนาด้านล่าง อย่างเป็นธรรมชาติตามนิสัยและระดับความสัมพันธ์ปัจจุบัน (ไม่ต้องใส่ตัวเลข/แท็กใด ๆ ระบบประเมินความสัมพันธ์ให้เอง)`;
