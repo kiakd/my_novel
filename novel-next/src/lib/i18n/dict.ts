@@ -112,6 +112,7 @@ const en = {
       donts: "Do / Don't list",
     },
     placeholder: "What's the {label}?",
+    pov: { label: 'Narration POV', hint: 'used by Continue / Expand', first: '1st person', third: '3rd limited' },
   },
   characters: {
     title: 'Characters',
@@ -429,6 +430,7 @@ const th: typeof en = {
       donts: 'Do / Don\'t',
     },
     placeholder: '{label} คืออะไร?',
+    pov: { label: 'มุมมองการเล่า', hint: 'ใช้ตอนเขียนต่อ/ขยาย', first: 'บุรุษ 1 (ผม/ฉัน)', third: 'บุรุษ 3 limited' },
   },
   characters: {
     title: 'ตัวละคร',

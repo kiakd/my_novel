@@ -74,6 +74,7 @@ export function buildNovelContext(story: Story, opts: BuildOpts) {
     eventOrder: prev.length ? prev : undefined,
     eventCurrent: opts.eventCurrent,
     narrator: protagonist?.name,   // โหมดนิยายเต็ม: เล่าจากมุมมองตัวเอก AI เขียนทุกตัวละคร ไม่มี {{user}}
+    pov: story.pov,                // ส่งต่อมุมมองให้ backend (ไม่ตั้ง → backend default '1st') กัน "เขียนต่อ" หลุดเป็น pov 1
     mode: opts.mode,
   };
 }
