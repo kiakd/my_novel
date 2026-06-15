@@ -6,7 +6,7 @@ import { logRequest, logActivity, logError, ensureLogIndexes, APP_LOG_COLLECTION
 import { assembleSystemPrompt, buildNovelReminder, type NovelContext } from './prompts';
 import { assembleChatPrompt, assembleNarratorPrompt, buildPersonaReminder, type ChatCharLite, type PlayerPersonaLite } from './chat-prompt';
 import { getMemDb, ingestMemory, recall, type MemRow } from './chat-memory';
-import { embedTexts, embedOne } from './embed';
+import { embedTexts, embedOne, embedConfigured } from './embed';
 import { RULE_ADULT, RULE_R18_LEXICON } from './shared-rules';
 import { pickStory, writeStoryMd, type Story } from './story-md';
 import { runWD14, categorizeTags, REF_SCENE_SYSTEM, buildRefSceneUser } from './ref-tag';
@@ -854,6 +854,24 @@ const app = new Elysia()
       const memories = hits.map((h) => `[เทิร์น ${h.turnIdx}] ${h.text.slice(0, 300)}`);
       return { ok: true, memories };
     } catch (e: any) { return { ok: false, error: e.message, memories: [] }; }
+  })
+
+  // --- RAG memory: status (เช็คบน prod ว่า hybrid เปิดไหม + มีข้อมูลกี่แถว) — ไม่มี secret/เนื้อหา ---
+  .get('/api/chat/memory/status', () => {
+    try {
+      const db = getMemDb();
+      const total = (db.query('SELECT count(*) c FROM mem').get() as any).c as number;
+      const embedded = (db.query('SELECT count(*) c FROM mem WHERE embedding IS NOT NULL').get() as any).c as number;
+      const scopes = (db.query('SELECT count(DISTINCT scopeId) c FROM mem').get() as any).c as number;
+      return {
+        ok: true,
+        mode: embedConfigured() ? 'hybrid (semantic + FTS)' : 'fts-only (keyword)',
+        embeddingConfigured: embedConfigured(),
+        embedModel: process.env.EMBED_MODEL ?? null,
+        embedDim: Number(process.env.EMBED_DIM ?? 512),
+        rows: total, embeddedRows: embedded, scopes,
+      };
+    } catch (e: any) { return { ok: false, error: e.message }; }
   })
 
   // --- AI: ฉากแชท → SD prompt (อังกฤษ) → ComfyUI → รูปประกอบ ---
