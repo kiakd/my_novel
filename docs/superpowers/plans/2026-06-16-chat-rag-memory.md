@@ -10,6 +10,8 @@
 
 **ตัดสิน §7 ของ spec:** recall ทำ **ฝั่ง client** (เรียก endpoint แยก) เพื่อให้สอดคล้องกับ `buildMemory`/`pickLore` ที่ client orchestrate อยู่แล้ว — `/api/chat` แค่รับ `recalled[]` ส่งต่อ. embedding ทำ **ฝั่ง server ทั้งหมด** (client ไม่แตะเวกเตอร์).
 
+> **แก้หลัง code review Task 1:** field โหมดผู้เรียกใน `FtsQuery`/`VecQuery`/`RecallQuery` เปลี่ยนชื่อจาก `secret` → **`narratorMode`** (เลี่ยงชนกับ `MemRow.secret` ที่เป็นข้อมูล "แถวนี้เป็นฉากลับ"). โค้ดบล็อกด้านล่าง (Task 2/3/5) เขียน `secret` ไว้ — เวลา implement ให้ใช้ `narratorMode` แทนทุกที่ในพารามของ query (Task 1 ใน repo ใช้ `narratorMode` แล้ว). `MemRow.secret` คงเดิม.
+
 **หมายเหตุการรัน:** ทุกคำสั่งรันใน `novel/` (ฝั่ง backend) เว้นแต่ระบุ `novel-next/`. test รันด้วย `bun test <file>`.
 
 ---
