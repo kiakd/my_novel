@@ -121,3 +121,33 @@ export function vectorSearch(db: Database, q: VecQuery): MemHit[] {
   hits.sort((x, y) => (y.cos ?? 0) - (x.cos ?? 0));
   return hits.slice(0, q.limit);
 }
+
+export interface RecallQuery {
+  scopeId: string; query: string; queryVec: Float32Array | null; activeChar: string;
+  narratorMode: boolean; excludeFromIdx: number; k: number; wFts: number; wVec: number;
+}
+
+/** hybrid: FTS + (optional) vector → normalize → weighted rerank → top-K */
+export function recall(db: Database, q: RecallQuery): MemHit[] {
+  const N = Math.max(q.k * 3, 12); // ดึงผู้สมัครเผื่อ rerank
+  const ftsHits = ftsSearch(db, { scopeId: q.scopeId, query: q.query, activeChar: q.activeChar, narratorMode: q.narratorMode, excludeFromIdx: q.excludeFromIdx, limit: N });
+  const vecHits = q.queryVec
+    ? vectorSearch(db, { scopeId: q.scopeId, queryVec: q.queryVec, activeChar: q.activeChar, narratorMode: q.narratorMode, excludeFromIdx: q.excludeFromIdx, limit: N })
+    : [];
+
+  const score = new Map<string, { hit: MemHit; s: number }>();
+  // FTS: คะแนนตามอันดับ (อันดับแรก = สูงสุด)
+  ftsHits.forEach((h, i) => {
+    const s = q.wFts * (1 - i / Math.max(ftsHits.length, 1));
+    score.set(h.id, { hit: h, s });
+  });
+  // vector: cosine [−1,1] → [0,1]
+  vecHits.forEach((h) => {
+    const cs = q.wVec * (((h.cos ?? 0) + 1) / 2);
+    const ex = score.get(h.id);
+    if (ex) ex.s += cs;
+    else score.set(h.id, { hit: h, s: cs });
+  });
+
+  return [...score.values()].sort((a, b) => b.s - a.s).slice(0, q.k).map((e) => e.hit);
+}
