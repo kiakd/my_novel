@@ -17,7 +17,7 @@ export interface FtsQuery {
   scopeId: string;
   query: string;
   activeChar: string;
-  secret: boolean;       // true = narrator (เห็นฉากลับ); false = char mode (ตัด secret ออก)
+  narratorMode: boolean; // true = narrator (เห็นฉากลับทั้งหมด); false = char mode (ตัด secret ออก)
   excludeFromIdx: number; // ตัด turnIdx >= ค่านี้ (อยู่ใน raw context อยู่แล้ว)
   limit: number;
 }
@@ -74,15 +74,15 @@ export function toFtsMatch(query: string): string | null {
   return toks.map((t) => `"${t.replace(/"/g, '""')}"`).join(' OR ');
 }
 
-function visibilitySql(secret: boolean, activeChar: string): { clause: string; params: any[] } {
-  if (secret) return { clause: '1=1', params: [] }; // narrator เห็นหมด
+function visibilitySql(narratorMode: boolean, activeChar: string): { clause: string; params: any[] } {
+  if (narratorMode) return { clause: '1=1', params: [] }; // narrator เห็นหมด
   return { clause: '(m.secret = 0 AND (m.charId IS NULL OR m.charId = ?))', params: [activeChar] };
 }
 
 export function ftsSearch(db: Database, q: FtsQuery): MemHit[] {
   const match = toFtsMatch(q.query);
   if (!match) return [];
-  const vis = visibilitySql(q.secret, q.activeChar);
+  const vis = visibilitySql(q.narratorMode, q.activeChar);
   const sql = `SELECT m.*, f.rank AS ftsRank FROM mem_fts f JOIN mem m ON m.id = f.id
     WHERE mem_fts MATCH ? AND m.scopeId = ? AND m.turnIdx < ? AND ${vis.clause}
     ORDER BY f.rank LIMIT ?`;
