@@ -38,8 +38,14 @@ services:
       - LMSTUDIO_URL=${LMSTUDIO_URL:-http://host.docker.internal:1234/v1/chat/completions}
       - LMSTUDIO_MODEL=${LMSTUDIO_MODEL:-gemma-4-e4b-it-uncensored}
       - COMFYUI_URL=${COMFYUI_URL:-http://host.docker.internal:8188}
+      - MEM_DB_PATH=${MEM_DB_PATH:-/data/chat-mem.sqlite}
+      - EMBED_URL=${EMBED_URL:-}                   # RAG embedding (ว่าง = FTS keyword อย่างเดียว)
+      - EMBED_API_KEY=${EMBED_API_KEY:-}
+      - EMBED_MODEL=${EMBED_MODEL:-text-embedding-3-small}
+      - EMBED_DIM=${EMBED_DIM:-512}
     volumes:
       - ./novel/uploads:/app/uploads        # เก็บรูป/อวตารถาวร
+      - mem-data:/data                      # RAG sqlite (/data/chat-mem.sqlite)
     extra_hosts:
       - "host.docker.internal:host-gateway" # ให้ Linux เข้าถึงบริการบน host (LM Studio/ComfyUI)
     mem_limit: 512m
@@ -76,3 +82,4 @@ services:
 
 volumes:
   mongo-data:
+  mem-data:
