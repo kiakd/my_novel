@@ -62,9 +62,11 @@ export const ChapterEditor = forwardRef<ChapterEditorHandle, ChapterEditorProps>
       if (!root || !htmlStr) return;
       const frag = document.createElement('div');
       frag.innerHTML = htmlStr;
+      const firstNew = frag.firstChild as HTMLElement | null; // จำ "จุดเริ่ม" ของข้อความใหม่ไว้
       while (frag.firstChild) root.appendChild(frag.firstChild);
       emit();
-      root.scrollIntoView?.({ block: 'end' });
+      // เลื่อนไปที่ "ต้น" ข้อความใหม่ ไม่ใช่ท้ายสุดของบท — ผู้ใช้อ่านต่อได้เลย ไม่ต้องเลื่อนขึ้น (โดยเฉพาะบนมือถือ)
+      firstNew?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
     },
   }), []);
 

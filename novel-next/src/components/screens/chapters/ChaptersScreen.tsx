@@ -125,6 +125,19 @@ export function ChaptersScreen() {
     const full = htmlToText(active.content).trim();
     const intent = active.summary?.trim() ? ` [บทนี้ตั้งใจเล่า: ${active.summary.trim()}]` : '';
 
+    // anchor ต่อเนื้อจริง: เอา "ย่อหน้าสุดท้าย" ของบทเป็น prefill (assistant prefix) → บังคับโมเดล
+    // เขียนต่อจากคำของผู้ใช้เป๊ะ ๆ ไม่เอาไปเล่าใหม่/ตีความใหม่. scene = ข้ามไปฉากใหม่ จึงไม่ต้อง anchor
+    const lastParagraph = (html?: string): string => {
+      if (!html || typeof document === 'undefined') return '';
+      const d = document.createElement('div');
+      d.innerHTML = html;
+      const ps = d.querySelectorAll('p');
+      const txt = (ps.length ? ps[ps.length - 1].textContent : d.textContent) ?? '';
+      const s = txt.trim();
+      return s.length > 500 ? s.slice(-500) : s; // cap กันยาวเกิน (เป็น suffix ของบทอยู่แล้ว)
+    };
+    const prefill = kind !== 'scene' && full ? lastParagraph(active.content) : '';
+
     let eventCurrent: string;
     if (full) {
       eventCurrent =
@@ -156,9 +169,12 @@ export function ChaptersScreen() {
       const ctx = buildNovelContext(st, { mode, eventCurrent, chapterNum });
       // local ช้า + ctx เล็ก → ขอ output สั้นลง
       const maxTokens = isLocal ? (mode === 'r18' ? 1500 : 1200) : (mode === 'r18' ? 2600 : 2200);
-      const r = await generateRoleplay({ context: ctx, user_input: `เขียนต่อบท "${active.title || ''}"`, provider, max_tokens: maxTokens });
+      const r = await generateRoleplay({ context: ctx, user_input: `เขียนต่อบท "${active.title || ''}"`, provider, max_tokens: maxTokens, prefill: prefill || undefined });
       if (r.ok && r.text) {
-        editorRef.current?.insertHtmlAtEnd(textToHtml(cleanRoleplayArtifacts(r.text)));
+        // backend คืน prefill+completion (prepend ย่อหน้าเดิมกลับมา) → ตัด prefill ออก ไม่งั้นย่อหน้าสุดท้ายจะซ้ำ
+        let out = r.text;
+        if (prefill && out.startsWith(prefill)) out = out.slice(prefill.length);
+        editorRef.current?.insertHtmlAtEnd(textToHtml(cleanRoleplayArtifacts(out)));
         toast(t('chapters.continue.done'), '✨');
         setContOpen(false);
       } else {
