@@ -108,8 +108,8 @@ export function ChatScreen() {
   useEffect(() => {
     if (!sessionId || !sessChar || backfilledRef.current.has(sessionId)) return;
     const msgs = (session?.messages ?? []).filter((m) => !m.item);
+    if (!msgs.length) return;                       // empty/not-loaded: do NOT burn the ref
     backfilledRef.current.add(sessionId);
-    if (!msgs.length) return;
     const rows = msgs.map((m, i) => ({
       id: `${sessionId}:${i}`, scopeId: sessionId, charId: sessChar.name,
       secret: m.role === 'narrator' ? !!m.secret : false,
@@ -338,8 +338,9 @@ export function ChatScreen() {
       const { summary, raw } = await buildMemory(hist);
       const history = raw.map(toHist);
       // RAG recall: กู้ turn เก่าที่เกี่ยวข้อง — ตัดส่วนที่อยู่ใน raw context อยู่แล้ว (excludeFromIdx)
-      const allMsgs = (session?.messages ?? []).filter((m) => !m.item);
-      const excludeFromIdx = Math.max(0, allMsgs.length - raw.length);
+      const histNonItem = hist.filter((m) => !m.item);
+      const baseN = histNonItem.length;            // จำนวน non-item ก่อนเทิร์นนี้ (เชื่อถือได้จาก hist)
+      const excludeFromIdx = Math.max(0, baseN - raw.length);
       let recalled: string[] | undefined;
       try {
         const rc = await memRecall({ scopeId: sessionId, query: userInput, activeChar: sessChar.name, mode: 'char', excludeFromIdx, k: 4 });
@@ -351,12 +352,18 @@ export function ChatScreen() {
         const at = snapAt(r.stateCard);          // เก็บเวลา/สถานที่ ณ จังหวะคำตอบนี้
         const ts = Date.now();
         updateSession(sessionId, (s) => ({ ...s, messages: [...s.messages, { role: 'char', text, ts, ...(at ? { at } : {}) }], updatedAt: ts }));
-        // RAG: index 2 ข้อความใหม่ (turnIdx = ตำแหน่งจริงใน timeline)
-        const baseIdx = allMsgs.length; // user msg ถูก append ก่อนเรียก callModel แล้ว → index ปัจจุบัน = char reply
-        memIngest(sessionId, [
-          { id: `${sessionId}:${baseIdx - 1}`, scopeId: sessionId, charId: sessChar.name, secret: false, speaker: 'user', turnIdx: baseIdx - 1, ts: ts - 1, text: userInput },
-          { id: `${sessionId}:${baseIdx}`, scopeId: sessionId, charId: sessChar.name, secret: false, speaker: 'char', turnIdx: baseIdx, ts, text },
-        ]).catch(() => {});
+        // RAG: index ข้อความใหม่ (turnIdx = ตำแหน่งใน filtered array — ตรงกับ backfill)
+        // judge=true = เทิร์น user จริง (user ถูก append ที่ baseN, char ที่ baseN+1)
+        // judge=false = ต่อเรื่อง/regen (ไม่มี user ใหม่ — char อยู่ที่ baseN)
+        const ingestRows = judge
+          ? [
+              { id: `${sessionId}:${baseN}`, scopeId: sessionId, charId: sessChar.name, secret: false, speaker: 'user', turnIdx: baseN, ts: ts - 1, text: userInput },
+              { id: `${sessionId}:${baseN + 1}`, scopeId: sessionId, charId: sessChar.name, secret: false, speaker: 'char', turnIdx: baseN + 1, ts, text },
+            ]
+          : [
+              { id: `${sessionId}:${baseN}`, scopeId: sessionId, charId: sessChar.name, secret: false, speaker: 'char', turnIdx: baseN, ts, text },
+            ];
+        memIngest(sessionId, ingestRows).catch(() => {});
         // live state: backend apply [[state:]] delta แล้วส่ง card ใหม่ + คำเตือนกลับมา (ไม่เอา rel มาทับ rel หลัก)
         if (r.stateCard) updateSession(sessionId, (s) => ({ ...s, liveState: r.stateCard }));
         if (r.stateWarnings?.length) { setStateWarnings(r.stateWarnings); toast('⚠️ ตรวจพบความขัดแย้งของสถานะ', '⚠️'); }
