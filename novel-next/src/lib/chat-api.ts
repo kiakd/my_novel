@@ -46,11 +46,29 @@ export const sendChat = (body: {
   stateCard?: LiveState;  // structured live state — backend ส่งกลับ delta + warnings (ไม่ส่ง = พฤติกรรมเดิม)
   playerPersona?: { name?: string; role?: string; appearance?: string };  // บทบาทของผู้เล่นในแชทนี้
   mode?: 'char' | 'narrator';
+  recalled?: string[];   // ความทรงจำที่ recall มา — ฉีดเข้า prompt
   provider?: string;
   max_tokens?: number;
   temperature?: number;
   prefill?: string;
 }) => jsonFetch<ChatReply>('/api/chat', { method: 'POST', body: JSON.stringify(body) });
+
+// ---- RAG memory (ฝั่ง client เรียก server-side sqlite store) ----
+export interface MemRowInput {
+  id: string; scopeId: string; charId?: string | null; secret: boolean;
+  speaker: string; turnIdx: number; ts: number; text: string;
+}
+export const memBackfill = (scopeId: string, rows: MemRowInput[]) =>
+  jsonFetch<{ ok: boolean; count?: number; embedded?: boolean; error?: string }>(
+    '/api/chat/memory/backfill', { method: 'POST', body: JSON.stringify({ scopeId, kind: 'chat', rows }) });
+
+export const memIngest = (scopeId: string, rows: MemRowInput[]) =>
+  jsonFetch<{ ok: boolean; count?: number; embedded?: boolean; error?: string }>(
+    '/api/chat/memory/ingest', { method: 'POST', body: JSON.stringify({ scopeId, kind: 'chat', rows }) });
+
+export const memRecall = (body: { scopeId: string; query: string; activeChar: string; mode?: 'char' | 'narrator'; excludeFromIdx: number; k?: number }) =>
+  jsonFetch<{ ok: boolean; memories: string[]; error?: string }>(
+    '/api/chat/memory/recall', { method: 'POST', body: JSON.stringify(body) });
 
 // ---- AI สร้าง "บทบาทผู้เล่น" ที่เข้ากับฉากของตัวละคร (auto-fill) ----
 export const generatePlayerPersona = (body: {
