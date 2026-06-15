@@ -62,6 +62,8 @@ curl -s localhost:3001/api/health                          # → {"ok":true,...}
 **push เข้า `main`** (แตะ `novel/`, `novel-next/`, หรือ compose) → build 2 image บน GitHub → push GHCR → ssh เข้า VPS สั่ง `git pull && docker compose pull && up -d` อัตโนมัติ
 
 ### Secrets ที่ต้องตั้ง (repo → Settings → Secrets and variables → Actions)
+> วิธีสร้าง SSH key + deploy key (`VPS_SSH_KEY`) + ก๊อป public key ขึ้น VPS → ดู [SSH.md](SSH.md)
+
 | Secret | คือ | หมายเหตุ |
 |---|---|---|
 | `VPS_HOST` | IP/โฮสต์ VPS | |
