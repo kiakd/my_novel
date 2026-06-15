@@ -12,6 +12,10 @@ export const isDevoted = (rel: number) => rel >= DEVOTED;
 /** กันความสัมพันธ์ลดจากบทสนทนา: ถ้าเคยถึง devoted แล้ว ห้ามต่ำกว่า DEVOTED */
 export const floorRel = (prev: number, next: number) => (prev >= DEVOTED ? Math.max(next, DEVOTED) : next);
 
+/** เพดานกันค่าเด้งมั่วต่อเทิร์น — ไม่ใช่ลิมิตดีไซน์: ปล่อยให้ judge ขยับใหญ่ได้ตามเหตุการณ์จริง (โมเมนต์สำคัญ +30 / ทรยศ -45)
+ *  แค่ตัดค่าที่กระโดดเกินจริงแบบ noise (เช่น Gemma 80→15 = -65 ในเทิร์นเดียวโดยไม่มีเหตุ) ให้อยู่ในกรอบ ±40 */
+export const stepRel = (prev: number, next: number, max = 40) => clampRel(Math.max(prev - max, Math.min(prev + max, next)));
+
 /** ระดับความสัมพันธ์ → ป้าย + สี (ตรงกับ backend relLevel) */
 export function relLevel(rel: number): { label: string; color: ColorKey } {
   if (rel <= -50) return { label: 'ศัตรู', color: 'coral' };

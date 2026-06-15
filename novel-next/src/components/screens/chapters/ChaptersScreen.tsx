@@ -66,10 +66,10 @@ export function ChaptersScreen() {
 
   const patchActive = (patch: Partial<{ title: string; content: string; status: ChapterStatus; summary: string }>) => {
     if (!active) return;
-    mutateStory((s) => ({ ...s, chapters: s.chapters.map((c) => (c.id === active.id ? { ...c, ...patch } : c)) }));
+    mutateStory((s) => ({ ...s, chapters: (s.chapters ?? []).map((c) => (c.id === active.id ? { ...c, ...patch } : c)) }));
   };
   const patchChapter = (id: string, patch: Partial<{ summary: string }>) =>
-    mutateStory((s) => ({ ...s, chapters: s.chapters.map((c) => (c.id === id ? { ...c, ...patch } : c)) }));
+    mutateStory((s) => ({ ...s, chapters: (s.chapters ?? []).map((c) => (c.id === id ? { ...c, ...patch } : c)) }));
   const setBody = (v: string) => patchActive({ content: v, status: statusOf(v, active?.status) });
 
   // ---- สรุปบท = ความจำข้ามบท (กลไกเดียวกับ rolling summary ของแชท — หน่วยพับคือ "บท") ----
@@ -150,7 +150,7 @@ export function ChaptersScreen() {
         const s = await summarizeChapter(c);
         if (s) {
           patchChapter(c.id, { summary: s });
-          st = { ...st, chapters: st.chapters.map((x) => (x.id === c.id ? { ...x, summary: s } : x)) };
+          st = { ...st, chapters: (st.chapters ?? []).map((x) => (x.id === c.id ? { ...x, summary: s } : x)) };
         }
       }
       const ctx = buildNovelContext(st, { mode, eventCurrent, chapterNum });
@@ -172,7 +172,7 @@ export function ChaptersScreen() {
   };
   const addChapter = () => {
     const id = 'c' + Date.now();
-    mutateStory((s) => ({ ...s, chapters: [...s.chapters, { id, title: '', order: s.chapters.length, content: '', status: 'empty' }] }));
+    mutateStory((s) => ({ ...s, chapters: [...(s.chapters ?? []), { id, title: '', order: (s.chapters ?? []).length, content: '', status: 'empty' }] }));
     setActiveId(id);
     toast(t('toast.chapterAdded'), '📖');
   };

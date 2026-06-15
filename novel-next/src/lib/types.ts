@@ -99,6 +99,8 @@ export interface Story {
   dontList?: string;       // = donts
   styleGuide?: string;     // = style
   vocabPalette?: string;   // = vocab
+  pov?: '1st' | '3rd';     // มุมมองเล่าโหมดนิยายเต็ม: '3rd'=บุคคลที่สาม limited ติดตามตัวเอก · ไม่ตั้ง=backend default '1st'
+  track?: string;          // เส้นเรื่อง (เช่น 'dark'/'novel') — เผื่ออ้างอิง
   characters: Char[];
   chapters: Chapter[];
   timeline: TLEvent[];

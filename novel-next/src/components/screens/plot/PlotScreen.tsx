@@ -1,5 +1,5 @@
 'use client';
-import { SectionTitle } from '@/components/ui';
+import { SectionTitle, Btn } from '@/components/ui';
 import { SaveIndicator } from '@/components/layout/SaveIndicator';
 import { useI18n } from '@/lib/i18n';
 import { useStory } from '@/lib/store/StoryProvider';
@@ -26,10 +26,25 @@ export function PlotScreen() {
   const onChange = (prop: string, v: string) =>
     mutateStory((s) => ({ ...s, [prop]: v }));
 
+  // มุมมองการเล่า — ไม่ตั้ง = backend default '1st'; โชว์ค่าจริงที่ใช้เจน
+  const pov = story?.pov ?? '1st';
+  const setPov = (v: '1st' | '3rd') => mutateStory((s) => ({ ...s, pov: v }));
+
   return (
     <div className="max-w-3xl mx-auto">
       <SectionTitle emoji="📝" color="grape" title={t('plot.title')} sub={t('plot.sub')} right={<SaveIndicator status={status} variant="pill" />} />
       <div className="flex flex-col gap-6 pb-10">
+        <div className="anim-rise">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-lg">👁️</span>
+            <span className="font-display text-[17px] font-medium text-ink">{t('plot.pov.label')}</span>
+            <span className="text-[12px] text-ink/40">{t('plot.pov.hint')}</span>
+          </div>
+          <div className="flex gap-2">
+            <Btn variant={pov === '1st' ? 'primary' : 'outline'} color="grape" size="sm" onClick={() => setPov('1st')}>{t('plot.pov.first')}</Btn>
+            <Btn variant={pov === '3rd' ? 'primary' : 'outline'} color="grape" size="sm" onClick={() => setPov('3rd')}>{t('plot.pov.third')}</Btn>
+          </div>
+        </div>
         {FIELDS.map((f) => (
           <PlotField key={f.prop} f={f} value={(story?.[f.prop as keyof Story] as string) || ''} onChange={onChange} />
         ))}

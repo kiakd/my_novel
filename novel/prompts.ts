@@ -1,5 +1,6 @@
 // Khui-style prompt assembler — รวม base + mode + character + setting → system prompt
-import { RULE_ADULT, RULE_NO_META, RULE_R18_LEXICON } from './shared-rules';
+import { RULE_ADULT, RULE_NO_META, RULE_R18_LEXICON, RULE_CONTINUITY } from './shared-rules';
+import { renderStateCard, STATE_DELTA_INSTRUCTION, type StateCard } from './state-card';
 
 export type Mode = 'novel' | 'dialogue' | 'r18';
 
@@ -83,7 +84,9 @@ export interface NovelContext {
   dontList?: string;     // ทิศทาง/ข้อห้าม (จาก Story.dontList) — กฎที่โมเดลต้องทำตามเสมอ
   vocabPalette?: string; // คำเฉพาะ/คำที่ให้ใช้ตรงๆ/คำห้ามใช้ (จาก Story.vocabPalette) — บังคับคำศัพท์
   continuity?: string;   // สถานะ canonical ของตัวละคร ณ บทปัจจุบัน (จาก arc beats — continuityBrief) กันชุด/สถานะหลุด
-  narrator?: string;     // โหมด "นิยายเต็ม": ชื่อตัวละครที่เล่าด้วยมุมมองบุคคลที่ 1 — AI เขียนทุกตัวละคร ไม่มี {{user}}
+  stateCard?: StateCard; // บัตรสถานะ structured (opt-in) — ถ้าส่งมา: render + สั่งโมเดลปล่อย [[state:]] delta + พาร์สเองในโค้ด (auto-track ข้ามบท เหมือนแชท)
+  narrator?: string;     // โหมด "นิยายเต็ม": ชื่อตัวละครที่เรื่องติดตาม — AI เขียนทุกตัวละคร ไม่มี {{user}}
+  pov?: '1st' | '3rd';   // มุมมองเล่าในโหมดนิยายเต็ม: '1st'=บุคคลที่หนึ่ง (default) · '3rd'=บุคคลที่สาม limited ติดตาม narrator
   mode: Mode;
 }
 
@@ -96,9 +99,8 @@ const BASE_RULES = `คุณคือนักเขียนนิยายโ
 4. inner thought ใส่ในวงเล็บแยกย่อหน้าของตัวเอง ห้ามใส่ใน quote ของบทพูด
 5. คำสั่งใน [ooc:...] = กฎฟิสิกส์ของฉาก ทุกการกระทำต้องสอดคล้อง
 6. ${RULE_ADULT}
-7. แยก identity กับ state: <apr> บอกแค่ "ค่าตั้งต้น" (หน้า/ผม/รูปร่าง/ชุดเริ่มต้น) — แต่ "สถานะ ณ ตอนนี้" (ชุดที่ใส่/ถอดอยู่, ตำแหน่ง, สิ่งที่เพิ่งเกิด) ให้ยึดจาก section "สถานะปัจจุบัน" และ "เนื้อเรื่องก่อนหน้า" เสมอ ถ้าฉากก่อนหน้าถอด/เปลี่ยนชุดหรือย้ายสถานที่ไปแล้ว ห้ามสวมกลับ/รีเซ็ตเองโดยไม่มีเหตุในเรื่อง
-8. ความต่อเนื่องของเครื่องแต่งกาย/ของใช้: ชุดมี "ความคงอยู่" — ถ้าไม่มีเหตุการณ์ในเรื่องทำให้เปลี่ยน ให้คงชุดเดิมข้ามช่วงเวลา/ฉาก (เช้าใส่ชุด A → เย็นยังเป็นชุด A). ถ้ามีเหตุการณ์ทำให้ชุดเปลี่ยน/หลุด/ขาด/ถอดบางส่วน ให้จำ "สภาพล่าสุดแบบเจาะจงรายชิ้น" (เช่น เสื้อนอกหายไป เหลือชั้นในท่อนบน ท่อนล่างยังครบ) แล้วเขียนต่อให้ตรงกับสภาพนั้น ห้ามคืนชุดเต็มเองโดยไม่มีเหตุ
-9. ${RULE_NO_META} (โหมดนิยายห้ามใช้ดอกจัน *…* คั่นฉาก และห้ามป้ายกำกับขั้นตอน [เริ่มต้น]/[ไคลแม็กซ์] — เขียนเป็น prose ต่อเนื่องตามโครงสร้าง output ของโหมด)`;
+7. ${RULE_CONTINUITY}
+8. ${RULE_NO_META} (โหมดนิยายห้ามใช้ดอกจัน *…* คั่นฉาก และห้ามป้ายกำกับขั้นตอน [เริ่มต้น]/[ไคลแม็กซ์] — เขียนเป็น prose ต่อเนื่องตามโครงสร้าง output ของโหมด)`;
 
 const MODE_NOVEL = `=== Mode: นิยาย (prose ยาว) ===
 - ความยาว: 5-8 ย่อหน้า ประมาณ 1500-2000 ตัวอักษร ห้ามสั้นกว่านี้
@@ -233,18 +235,50 @@ function eventOrderBlock(order?: string[]): string {
   return `\n=== ลำดับเหตุการณ์ที่ผ่านมา ===\n${order.map((e, i) => `${i + 1}. ${e}`).join('\n')}`;
 }
 
-function novelFrame(narrator: string): string {
-  return `=== โหมด: นิยายเต็ม (มุมมองบุคคลที่หนึ่ง) ===
+function novelFrame(narrator: string, pov: '1st' | '3rd' = '1st'): string {
+  const povBlock = pov === '3rd'
+    ? `=== โหมด: นิยายเต็ม (มุมมองบุคคลที่สาม — limited ติดตาม "${narrator}") ===
+- เรื่องนี้เป็น "นิยาย" ไม่ใช่แชตโรลเพลย์ — คุณคือผู้เขียน เขียน prose เล่าทั้งเรื่องเอง
+- เล่าด้วย "บุคคลที่สาม" ที่กล้องติดตาม "${narrator}": บรรยายเขา/เธอด้วยชื่อหรือสรรพนามบุรุษที่ 3 (เขา/เธอ/นาง) — เห็นได้เฉพาะสิ่งที่ ${narrator} รับรู้/มองเห็น/รู้สึกเท่านั้น ห้ามกระโดดเข้าหัวตัวละครอื่น
+- สรรพนามบุรุษที่ 1 ของ ${narrator} (เช่น ผม/ฉัน/กู) ใช้ได้ "เฉพาะในบทพูดและความคิดในใจ" เท่านั้น — ส่วนบรรยายให้ใช้บุรุษที่ 3 เสมอ
+- ตัวละครอื่นทุกตัว คุณเขียนคำพูด/การกระทำ/สีหน้าให้ได้ (เห็นจากภายนอกผ่านสายตา ${narrator}) แต่ห้ามบรรยาย "ความคิดภายใน" ของพวกเขาตรง ๆ`
+    : `=== โหมด: นิยายเต็ม (มุมมองบุคคลที่หนึ่ง) ===
 - เรื่องนี้เป็น "นิยาย" ไม่ใช่แชตโรลเพลย์ — คุณคือผู้เขียน เขียน prose เล่าทั้งเรื่องเอง
 - เล่าจากมุมมองบุคคลที่หนึ่งของ "${narrator}" (ใช้สรรพนามตามที่กำหนดในตัวละคร) — ความคิด/การกระทำของ ${narrator} เขียนได้เต็มที่
-- ตัวละครอื่นทุกตัว คุณเขียนการกระทำ/คำพูด/ปฏิกิริยาให้ได้ทั้งหมด
+- ตัวละครอื่นทุกตัว คุณเขียนการกระทำ/คำพูด/ปฏิกิริยาให้ได้ทั้งหมด`;
+  return `${povBlock}
 - ไม่มี "{{user}}"/ผู้เล่นในโหมดนี้ — กฎเหล็กข้อ 2 (เรื่อง {{user}}) ไม่นำมาใช้`;
+}
+
+/** เตือนความจำสั้นแทรก "ท้าย" user message ทุกครั้ง (recency anti-drift) — คู่กับ buildPersonaReminder ของแชท
+ *  system prompt ยาว → โมเดลดริฟต์เสียง/ชุด/ฟอร์แมตตอน prose ยาว ๆ การย้ำท้ายสุด (ตำแหน่งอิทธิพลสูง) ช่วยตรึง */
+export function buildNovelReminder(ctx: NovelContext): string {
+  const who = ctx.narrator?.trim() || ctx.protagonist.name;
+  const ratio = ctx.mode === 'dialogue'
+    ? 'บทพูด 75% บรรยาย 25%'
+    : ctx.mode === 'r18'
+      ? 'บรรยาย 65% บทพูด 35% + เรียกอวัยวะด้วยคำดิบเมื่อถึงฉากสัมผัส/สอดใส่'
+      : 'บรรยาย 70% บทพูด 30% เน้นประสาทสัมผัส';
+  const povNote = ctx.narrator
+    ? ctx.pov === '3rd'
+      ? `เล่าบุคคลที่ 3 ติดตาม "${who}" (บรรยายใช้เขา/เธอ · สรรพนามบุรุษ 1 เฉพาะบทพูด/ความคิด)`
+      : `เล่าบุคคลที่ 1 ของ "${who}"`
+    : `คงเสียง/บุคลิก/สรรพนามของ "${who}"`;
+  const bits = [
+    'ภาษาไทยล้วน',
+    `${povNote} ให้คงเส้นคงวา`,
+    'ยึด "สถานะปัจจุบัน" ล่าสุด (ชุด/ตำแหน่ง/สิ่งที่เพิ่งเกิด) ห้ามย้อนสภาพจุดเริ่มต้น',
+    `ออกตามโครงสร้าง+อัตราส่วนของโหมด (${ratio})`,
+  ];
+  if (ctx.stateCard?.time) bits.push('หัวฉาก ⏰/📅 อิงเวลาจากสถานะปัจจุบัน ห้ามแต่งวันที่เอง');
+  if (ctx.stateCard) bits.push('ปิดท้ายด้วยแท็ก [[state: ...]] สรุปสิ่งที่เปลี่ยน (ไม่เปลี่ยน=none)');
+  return `[ย้ำก่อนเขียน: ${bits.join(' · ')}]`;
 }
 
 export function assembleSystemPrompt(ctx: NovelContext): string {
   const parts: string[] = [BASE_RULES];
   if (ctx.narrator && ctx.narrator.trim()) {
-    parts.push('', novelFrame(ctx.narrator.trim()));
+    parts.push('', novelFrame(ctx.narrator.trim(), ctx.pov ?? '1st'));
   }
   parts.push(
     '',
@@ -287,7 +321,25 @@ export function assembleSystemPrompt(ctx: NovelContext): string {
     parts.push('', '=== สถานะปัจจุบัน (canonical — ตัวละครต้องคงตามนี้ ห้ามขัดแย้ง/ย้อนกลับ) ===', ctx.continuity.trim());
   }
 
+  // บัตรสถานะ structured (opt-in) — live state ที่อัปเดตทุกบทผ่าน [[state:]] delta (auto-track เหมือนแชท)
+  const liveState = renderStateCard(ctx.stateCard);
+  if (liveState) {
+    parts.push('', '=== สถานะปัจจุบัน (live — ข้อเท็จจริงล่าสุดแบบ field ยึดเด็ดขาด ห้ามย้อน) ===', liveState);
+    // หัวฉาก [📅|⏰|📍] = canonical จากบัตรสถานะ ไม่ให้โมเดลแต่งวันที่/เวลาเอง (กันวันที่เพี้ยนข้ามบท)
+    if (ctx.stateCard?.time || ctx.stateCard?.location) {
+      const hdr: string[] = [];
+      if (ctx.stateCard.time) hdr.push(`⏰/📅 ใช้ "${ctx.stateCard.time}" (เลื่อนต่อได้ถ้าเวลาผ่านไปในฉาก แล้วอัปเดตผ่าน [[state: time=...]])`);
+      if (ctx.stateCard.location) hdr.push(`📍 ใช้ "${ctx.stateCard.location}"`);
+      parts.push(`⚠️ หัวฉาก [📅วันที่ | ⏰เวลา | 📍สถานที่] ให้อิงค่าจากสถานะปัจจุบันนี้ ห้ามแต่งวันที่/เวลาขึ้นใหม่เอง — ${hdr.join(' · ')}`);
+    }
+  }
+
   parts.push('', '=== เหตุการณ์ปัจจุบันที่ต้องเขียน ===', ctx.eventCurrent);
+
+  // ถ้ามี stateCard → สั่งโมเดลปิดท้ายด้วยแท็ก [[state:]] สรุปสิ่งที่เปลี่ยน (server พาร์สเอง)
+  if (ctx.stateCard) {
+    parts.push('', STATE_DELTA_INSTRUCTION);
+  }
 
   return parts.join('\n');
 }

@@ -1,5 +1,6 @@
 // ============ API client ของระบบแชท RP (แยกจาก api.ts ของเนื้อเรื่อง) ============
-import type { ChatMeta, ChatMetaWithRev, ChatSession, ChatSessionWithRev, ChatChar, ChatMsg, ChatStateCard, ChatMemFact } from './chat-types';
+import type { ChatMeta, ChatMetaWithRev, ChatSession, ChatSessionWithRev, ChatChar, ChatMsg, ChatStateCard, ChatMemFact, PlayerPersona } from './chat-types';
+import type { LiveState } from './live-state';
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
@@ -28,7 +29,12 @@ export const deleteChatSession = (id: string) =>
   jsonFetch<{ ok: boolean }>(`/api/chat-session/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
 // ---- ส่งข้อความแชท (หลายเทิร์น) ----
-export interface ChatReply { ok: boolean; text?: string; error?: string; provider?: string; model?: string }
+export interface ChatReply {
+  ok: boolean; text?: string; error?: string; provider?: string; model?: string;
+  stateCard?: LiveState;      // live state ที่ backend apply delta แล้ว (เมื่อส่ง stateCard มาในคำขอ)
+  stateDelta?: unknown;       // delta ที่พาร์สได้ (ดีบั๊ก)
+  stateWarnings?: string[];   // คำเตือนความขัดแย้ง deterministic (ว่าง = ไม่มีปัญหา)
+}
 export const sendChat = (body: {
   char: Partial<ChatChar> & { name: string };
   history: { role: ChatMsg['role']; content: string }[];
@@ -37,12 +43,22 @@ export const sendChat = (body: {
   summary?: string;
   lore?: string[];
   state?: string;        // บัตรสถานะปัจจุบัน (ข้อความ format แล้ว) — ฉีดใกล้ท้าย system prompt
+  stateCard?: LiveState;  // structured live state — backend ส่งกลับ delta + warnings (ไม่ส่ง = พฤติกรรมเดิม)
+  playerPersona?: { name?: string; role?: string; appearance?: string };  // บทบาทของผู้เล่นในแชทนี้
   mode?: 'char' | 'narrator';
   provider?: string;
   max_tokens?: number;
   temperature?: number;
   prefill?: string;
 }) => jsonFetch<ChatReply>('/api/chat', { method: 'POST', body: JSON.stringify(body) });
+
+// ---- AI สร้าง "บทบาทผู้เล่น" ที่เข้ากับฉากของตัวละคร (auto-fill) ----
+export const generatePlayerPersona = (body: {
+  char: { name: string; appearance?: string; description?: string; scenario?: string };
+  provider?: string;
+}) => jsonFetch<{ ok: boolean; persona?: { name: string; role: string; appearance: string }; error?: string }>(
+  '/api/chat/generate-persona', { method: 'POST', body: JSON.stringify(body) },
+);
 
 // ---- สรุปบทสนทนาช่วงเก่า (rolling summary) ผ่าน endpoint generate ทั่วไป ----
 const SUMMARY_SYSTEM =
@@ -131,8 +147,19 @@ export const chatSceneImage = (body: {
 // ---- ผู้ตัดสินความสัมพันธ์ (fallback เมื่อโมเดลแชทไม่ใส่แท็ก [[rel:NN]]) ----
 const JUDGE_SYSTEM =
   'คุณเป็นผู้ประเมิน "ระดับความสัมพันธ์" ของตัวละครต่อผู้เล่นในเกมโรลเพลย์ สเกล -100..100. ' +
-  'พิจารณาข้อความล่าสุดของผู้เล่นและการตอบสนองของตัวละคร เทียบกับนิสัยและสิ่งที่ชอบ/ไม่ชอบ. ' +
-  'ขยับจากค่าเดิม "ทีละน้อย" เท่านั้น (ปกติ -8 ถึง +8) ห้ามกระโดด: ถูกใจ/จริงใจ→บวก, หยาบ/ไม่เคารพ/ลามกไม่ดูจังหวะ/บังคับ→ลบ (ติดลบได้), เฉย ๆ→ใกล้ค่าเดิม. ' +
+  'หน้าที่: ดูเหตุการณ์ในเทิร์นล่าสุด (ผู้เล่นทำอะไร + ตัวละครรู้สึก/ตอบสนองยังไง) แล้วให้ค่าใหม่ที่ "สะท้อนน้ำหนักของเหตุการณ์จริง" — ไม่ใช่ขยับเท่ากันทุกครั้ง. ' +
+  '⚠️ หัวใจสำคัญ: ตัดสิน "ผ่านแว่นนิสัย + สิ่งที่ชอบ/ไม่ชอบของตัวละครตัวนี้" เสมอ — การกระทำเดียวกันให้ค่าต่างกันได้ตามตัวละคร. ' +
+  'เช่น จีบตรง ๆ/แตะตัว = บวกมากกับคนเปิดเผยขี้เล่น แต่ = ลบกับคนเย็นชา/ถือตัว/เกลียดความทะลึ่ง · พูดห้วน ๆ = ลบกับคนอ่อนไหว แต่เฉย ๆ กับคนชอบตรงไปตรงมา. ' +
+  'ก่อนให้ค่า ถามตัวเองว่า "ด้วยนิสัยและสิ่งที่ชอบ/ไม่ชอบของเขา เขารู้สึกยังไงกับสิ่งนี้จริง ๆ" แล้วค่อยจัดหมวด. ' +
+  'ขนาดการขยับ (เป็นฐาน — ปรับตามว่าเหตุการณ์ "โดน" นิสัย/ความชอบของเขาแค่ไหน): ' +
+  'คุยเล่น/ทั่วไป/ไม่มีอะไรพิเศษ → ±0–4 · ' +
+  'ถูกใจ/อบอุ่น/ตรงจริตเขา → +5–12 · ' +
+  'โมเมนต์สำคัญจริงสำหรับเขา (ปกป้อง เสียสละ ซื่อสัตย์ในจุดเป็นตาย ใกล้ชิดลึกซึ้งที่ยินยอมเต็มใจ คำสัญญาที่มีความหมาย ตรงสิ่งที่เขาโหยหา) → +13–30 · ' +
+  'ขัดใจ/หยาบ/ไม่เคารพ/แตะเรื่องที่เขาไม่ชอบ → -5–12 · ' +
+  'ทรยศ ทำร้าย หักหลัง บังคับ/ละเมิดที่ไม่ยินยอม ดูถูกศักดิ์ศรี/เหยียบจุดที่เขาแคร์ที่สุด → -20–45 (ดิ่งแรงได้) · ' +
+  'เฉย ๆ/ไม่ชัด → ใกล้ค่าเดิม. ' +
+  'หลักสำคัญ: ถ้าเหตุการณ์ "โดนใจเขามาก" ขึ้นเร็วได้ ไม่ต้องฝืนช้า — แต่ห้ามขยับโดยไม่มีเหตุในบท. ' +
+  'คนเย็นชา/ขี้ระแวง/guard สูง ขยับบวกยากกว่าและไวต่อด้านลบ · คนใจง่าย/ขี้เหงา ขยับบวกไวกว่า. ' +
   'ตอบเป็น JSON บรรทัดเดียวเท่านั้น ห้ามมีอย่างอื่น: {"rel": <ตัวเลขใหม่>}';
 
 export async function judgeRel(body: {
@@ -144,7 +171,7 @@ export async function judgeRel(body: {
     `นิสัย: ${body.mindset ?? '-'}\nชอบ: ${body.likes ?? '-'}\nไม่ชอบ: ${body.dislikes ?? '-'}\n` +
     `ระดับความสัมพันธ์เดิม: ${body.currentRel}\n\n` +
     `ผู้เล่นพูด: ${body.userMsg}\nตัวละครตอบ: ${body.charReply}\n\n` +
-    `ให้ค่าระดับความสัมพันธ์ใหม่ (ขยับจาก ${body.currentRel} ทีละน้อย) เป็น JSON {"rel": NN}`;
+    `ให้ค่าระดับความสัมพันธ์ใหม่ (ขยับจาก ${body.currentRel} ตามน้ำหนักเหตุการณ์ในเทิร์นนี้) เป็น JSON {"rel": NN}`;
   try {
     const r = await jsonFetch<{ ok: boolean; text?: string }>('/api/generate', {
       method: 'POST',

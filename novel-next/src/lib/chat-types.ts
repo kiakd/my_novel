@@ -1,6 +1,7 @@
 // ============ โมเดลข้อมูลของ "แชท RP" — แยกออกจาก story ทั้งหมด (ไม่ปนกัน) ============
 // เก็บใน Mongo เป็น state ก้อนแยก (_id 'chat' ใน workspace) ผ่าน ChatProvider
 import type { ColorKey } from './theme';
+import type { LiveState } from './live-state';
 
 /** รายการ lorebook — ข้อเท็จจริงที่ถูกแทรกเข้า prompt "เฉพาะเมื่อ keyword โผล่ในบทสนทนาล่าสุด" (จ่าย token เฉพาะที่เกี่ยวกับฉาก) */
 export interface LoreEntry {
@@ -38,6 +39,15 @@ export interface ChatChar {
   lore?: LoreEntry[];     // lorebook: ความรู้เฉพาะฉาก แทรกเมื่อ keyword โผล่ (Phase 2 anti-drift)
 }
 
+/** บทบาทของ "ผู้เล่น" ในแชท — มินิการ์ดฝั่งผู้เล่น (ชื่อ/บทบาท/รูปลักษณ์) ฉีดเข้า prompt ให้ตัวละครรู้จัก+โต้ตอบตามบท
+ *  เก็บเป็นคลัง (ChatState.personas) reuse ข้ามแชทได้ · แต่ละแชทถือ snapshot (ChatSession.playerPersona) แก้เฉพาะแชทได้ */
+export interface PlayerPersona {
+  id: string;
+  name: string;          // ชื่อ/ที่ตัวละครเรียกผู้เล่น
+  role?: string;         // บทบาท/สถานะ เช่น "ทายาทตระกูลใหญ่", "นักล่าปีศาจ", "รุ่นน้องที่ออฟฟิศ"
+  appearance?: string;   // รูปลักษณ์/การแต่งตัวของผู้เล่น
+}
+
 export interface ChatMsg {
   role: 'user' | 'char' | 'narrator';   // narrator = บทบรรยาย/ผู้เล่าเรื่อง (ฉาก/บุคคลที่ 3/NPC)
   text: string;
@@ -46,6 +56,7 @@ export interface ChatMsg {
   secret?: boolean;       // (narrator) ตัวละครหลัก "ไม่รับรู้" เหตุการณ์นี้ → ตัดออกจาก context ตอนแชท
   power?: boolean;        // (user) ข้อความนี้ "ใช้อำนาจ" บังคับร่างกายตัวละคร
   image?: string;         // url รูปประกอบฉาก (เจนจาก ComfyUI)
+  at?: { time?: string; place?: string }; // snapshot เวลา/สถานที่ ณ ตอนสร้างข้อความ — โชว์ "ป้ายฉาก" เมื่อเปลี่ยน (ช่วยจับจังหวะเวลา/สถานที่ตอนเรื่องเดินเร็ว)
 }
 
 /** ไอเท็ม/ของโกง — ปรับความสัมพันธ์โดยตรง (ข้ามการพัฒนาปกติ) */
@@ -88,8 +99,10 @@ export interface ChatSession {
   summarizedCount?: number; // จำนวนข้อความ (ไม่นับไอเท็ม) ที่ถูกรวมเข้า summary แล้ว
   secretSummary?: string;        // rolling summary ของ "ฉากลับ" (narrator+secret) — ฉีดเฉพาะโหมดผู้เล่าเรื่อง ตัวละครหลักไม่เห็น
   secretSummarizedCount?: number; // จำนวนฉากลับที่ถูกรวมเข้า secretSummary แล้ว
+  playerPersona?: PlayerPersona; // บทบาทของผู้เล่นในแชทนี้ (snapshot — แก้เฉพาะแชทได้ ไม่กระทบคลัง) · บังคับตั้งก่อนเล่น
   stateCard?: ChatStateCard;     // บัตรสถานะปัจจุบัน — อัปเดตจาก "ช่วงล่าสุด" ทุก ~6 เทิร์น, แก้มือได้ในหน้า ⚙️
   stateCardAt?: number;          // ตำแหน่งไทม์ไลน์ (นับ non-item) ที่ stateCard สะท้อนถึง — decouple จาก summarizedCount กัน stateCard ค้าง
+  liveState?: LiveState;         // structured live state อัปเดตทุกเทิร์นผ่าน [[state:]] delta (ไม่เพิ่ม LLM call) — แยกจาก stateCard (extractState)
   memFacts?: ChatMemFact[];      // ความจำแยกหมวดสะสม (รอ Phase 4 vector retrieval)
   createdAt?: number;
   updatedAt?: number;
@@ -99,10 +112,11 @@ export interface ChatSession {
 export interface ChatState {
   chars: ChatChar[];
   items: ChatItem[];      // คลังไอเท็ม/ของโกง (ใช้ร่วมทุกตัวละคร)
+  personas?: PlayerPersona[];  // คลังบทบาทผู้เล่น — reuse ข้ามแชทได้ (หยิบมาแก้ชื่อ/รายละเอียดก่อนเล่นแชทใหม่)
   sessions: ChatSession[];
 }
 
 /** ส่วน meta (chars+items) — เก็บใน doc 'chat'; ส่วน sessions แยกเก็บ doc ละอันใน chat_sessions */
-export type ChatMeta = Pick<ChatState, 'chars' | 'items'>;
+export type ChatMeta = Pick<ChatState, 'chars' | 'items' | 'personas'>;
 export type ChatMetaWithRev = ChatMeta & { __rev: number };
 export type ChatSessionWithRev = ChatSession & { __rev: number };
