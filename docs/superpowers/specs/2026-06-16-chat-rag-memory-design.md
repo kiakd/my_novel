@@ -83,7 +83,8 @@ CREATE TABLE mem (
   embedding BLOB                     -- Float32 512 มิติ; NULL ถ้า degrade เป็น FTS-only
 );
 CREATE INDEX idx_mem_scope ON mem(scopeId, turnIdx);
-CREATE VIRTUAL TABLE mem_fts USING fts5(text, content='mem', content_rowid='rowid', tokenize='trigram');
+-- หมายเหตุ (ตามที่ implement จริง): ใช้ FTS5 แบบ standalone (ไม่ใช่ contentless) เพื่อเลี่ยง trigger sync
+CREATE VIRTUAL TABLE mem_fts USING fts5(id UNINDEXED, text, tokenize='trigram');
 ```
 
 ### Visibility (แก้ปัญหา "สลับตัวละคร")
@@ -154,3 +155,10 @@ recall(scopeId, query, activeChar, mode, excludeTurnIdx[], k=4):
 ## 10. แผนเฟส
 - **เฟส 1 (สเปคนี้):** chat RAG — `kind='chat'`, scope=sessionId
 - **เฟส 2:** novel RAG — `kind='novel'`, scope=storyId, ingest=บท/ฉาก, inject ใน `prompts.ts` — reuse `chat-memory.ts`+`embed.ts` ทั้งหมด
+
+## 11. ข้อจำกัดที่รู้ตัว (Phase 1 — จาก final review, รับได้/เลื่อนเป็น Phase 2)
+- **โหมดผู้เล่าเรื่อง (narrator) ยังไม่ recall** — `runNarrate` ไม่เรียก `memRecall` (พึ่ง rolling summary + `buildSecretMemory` เดิม) — เป็น scope ตั้งใจของ Phase 1
+- **narrator turn สด ยังไม่ ingest ทันที** — `runNarrate` ไม่เรียก `memIngest`; turn พวกนี้จะถูก index แบบ lazy ตอนเปิด session ใหม่แล้ว re-backfill เท่านั้น
+- **ไม่มี re-embed ของแถวเดิม** — ถ้าเปิด `EMBED_*` ทีหลังจากที่มีแถว FTS-only อยู่แล้ว แถวเก่าจะไม่มีเวกเตอร์ถาวร (`backfilledRef` รันครั้งเดียว/เปิด session; embedding UPDATE คุมเฉพาะ batch ปัจจุบัน) → Phase 2 ควรมีปุ่ม "re-embed session"
+- **store drift ตอน edit/delete** — `INSERT OR IGNORE` + ไม่มี DELETE → ข้อความที่ถูกแก้/ลบทิ้ง mem row เก่าค้าง; re-backfill เก็บ text เก่าเพราะ id (อิง turnIdx) ชนกัน → ความจำที่ recall อาจล้าหลัง transcript (soft-quality ไม่พังแชท). Phase 2: DELETE by scopeId ตอน edit/delete หรือใช้ INSERT OR REPLACE + rebuild FTS
+- **dimension mismatch degrade เงียบ** — เวกเตอร์ต่างมิติ (cosine over min-length) ลดคุณภาพ recall แต่ไม่ corrupt/crash
