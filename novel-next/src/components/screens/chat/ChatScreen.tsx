@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { SectionTitle, Card, Btn, Avatar, IconBtn, Spinner, EmptyState, Modal, toast } from '@/components/ui';
 import { pal } from '@/lib/theme';
 import { useChat } from '@/lib/store/ChatProvider';
-import { sendChat, summarizeChat, judgeRel, chatSceneImage, extractState, generatePlayerPersona } from '@/lib/chat-api';
+import { sendChat, summarizeChat, judgeRel, chatSceneImage, extractState, generatePlayerPersona, memBackfill, memIngest, memRecall } from '@/lib/chat-api';
 import { applyItem, parseRelTag, clampRel, relLevel, floorRel, stepRel } from '@/lib/chat-rel';
 import { activateLore, LORE_SCAN_DEPTH } from '@/lib/chat-lore';
 import { useChatFontSize, useChatProvider } from '@/lib/uiPrefs';
@@ -102,6 +102,21 @@ export function ChatScreen() {
     else setPersonaDraft(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, sessionId]);
+
+  // RAG: backfill ความจำของ session ครั้งแรกที่เปิด (idempotent ฝั่ง server ด้วย INSERT OR IGNORE)
+  const backfilledRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!sessionId || !sessChar || backfilledRef.current.has(sessionId)) return;
+    const msgs = (session?.messages ?? []).filter((m) => !m.item);
+    backfilledRef.current.add(sessionId);
+    if (!msgs.length) return;
+    const rows = msgs.map((m, i) => ({
+      id: `${sessionId}:${i}`, scopeId: sessionId, charId: sessChar.name,
+      secret: m.role === 'narrator' ? !!m.secret : false,
+      speaker: m.role, turnIdx: i, ts: m.ts ?? i, text: m.text,
+    }));
+    memBackfill(sessionId, rows).catch(() => {});
+  }, [sessionId, sessChar, session?.messages]);
 
   // ---- template CRUD ----
   const addChar = () => { const id = 'cc' + Date.now(); mutate((st) => ({ ...st, chars: [...st.chars, { id, name: 'ตัวละครใหม่', color: 'coral', guard: 40, relStart: 0 }] })); setEditId(id); };
@@ -322,12 +337,26 @@ export function ChatScreen() {
     try {
       const { summary, raw } = await buildMemory(hist);
       const history = raw.map(toHist);
-      const r = await sendChat({ char: sessChar, history, user_input: userInput, rel: baseRel, summary: summary || undefined, lore: pickLore(raw, userInput), state: stateToText(session?.stateCard), stateCard: session?.liveState ?? emptyLiveState(), playerPersona: session?.playerPersona, provider, max_tokens: maxTok ?? 1500 });
+      // RAG recall: กู้ turn เก่าที่เกี่ยวข้อง — ตัดส่วนที่อยู่ใน raw context อยู่แล้ว (excludeFromIdx)
+      const allMsgs = (session?.messages ?? []).filter((m) => !m.item);
+      const excludeFromIdx = Math.max(0, allMsgs.length - raw.length);
+      let recalled: string[] | undefined;
+      try {
+        const rc = await memRecall({ scopeId: sessionId, query: userInput, activeChar: sessChar.name, mode: 'char', excludeFromIdx, k: 4 });
+        recalled = rc.memories.length ? rc.memories : undefined;
+      } catch { /* degrade: ไม่มี recall ก็ส่งปกติ */ }
+      const r = await sendChat({ char: sessChar, history, user_input: userInput, rel: baseRel, summary: summary || undefined, lore: pickLore(raw, userInput), state: stateToText(session?.stateCard), stateCard: session?.liveState ?? emptyLiveState(), playerPersona: session?.playerPersona, provider, recalled, max_tokens: maxTok ?? 1500 });
       if (r.ok && r.text) {
         const { text } = parseRelTag(r.text);   // ตัดแท็กออกถ้าโมเดลเผลอใส่ (ตอนนี้ใช้ judge ประเมินแทน) — backend strip แท็ก [[state:]] ให้แล้ว
         const at = snapAt(r.stateCard);          // เก็บเวลา/สถานที่ ณ จังหวะคำตอบนี้
         const ts = Date.now();
         updateSession(sessionId, (s) => ({ ...s, messages: [...s.messages, { role: 'char', text, ts, ...(at ? { at } : {}) }], updatedAt: ts }));
+        // RAG: index 2 ข้อความใหม่ (turnIdx = ตำแหน่งจริงใน timeline)
+        const baseIdx = allMsgs.length; // user msg ถูก append ก่อนเรียก callModel แล้ว → index ปัจจุบัน = char reply
+        memIngest(sessionId, [
+          { id: `${sessionId}:${baseIdx - 1}`, scopeId: sessionId, charId: sessChar.name, secret: false, speaker: 'user', turnIdx: baseIdx - 1, ts: ts - 1, text: userInput },
+          { id: `${sessionId}:${baseIdx}`, scopeId: sessionId, charId: sessChar.name, secret: false, speaker: 'char', turnIdx: baseIdx, ts, text },
+        ]).catch(() => {});
         // live state: backend apply [[state:]] delta แล้วส่ง card ใหม่ + คำเตือนกลับมา (ไม่เอา rel มาทับ rel หลัก)
         if (r.stateCard) updateSession(sessionId, (s) => ({ ...s, liveState: r.stateCard }));
         if (r.stateWarnings?.length) { setStateWarnings(r.stateWarnings); toast('⚠️ ตรวจพบความขัดแย้งของสถานะ', '⚠️'); }
