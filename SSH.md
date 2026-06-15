@@ -124,7 +124,26 @@ ssh novel "cd ~/my_novel && docker compose ps"
 ```
 
 ## 9) แก้ปัญหาที่เจอบ่อย
-- **Permission denied (publickey)** → public key ยังไม่อยู่ใน `~/.ssh/authorized_keys` บน VPS หรือ permission ผิด (`chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys`)
+
+### ก๊อป pubkey แล้ว "ยังถาม password" (server ปฏิเสธคีย์)
+รัน `ssh -v -i ...key... USER@VPS_IP` ดู log — ถ้าเห็น:
+```
+Offering public key: ...id_ed25519 ...
+Authentications that can continue: publickey,password   ← คีย์ถูกเสนอแล้วแต่ server ไม่รับ
+```
+แปลว่า (1) `authorized_keys` ไม่มีคีย์นี้ หรือ (2) **permission `/root` หรือ `~/.ssh` กว้างไป → sshd StrictModes เมินคีย์เงียบๆ** (เจอบ่อยสุดบน VPS root)
+
+**แก้จบในคำสั่งเดียว** (PowerShell — ถาม password ครั้งเดียว):
+```powershell
+$pub = Get-Content $env:USERPROFILE\.ssh\id_ed25519.pub
+ssh USER@VPS_IP "install -d -m700 ~/.ssh; grep -qxF '$pub' ~/.ssh/authorized_keys 2>/dev/null || echo '$pub' >> ~/.ssh/authorized_keys; chmod 600 ~/.ssh/authorized_keys; chmod 700 ~/.ssh; chmod go-w ~; chown -R root:root ~/.ssh; echo '--- keys in authorized_keys ---'; ssh-keygen -lf ~/.ssh/authorized_keys; echo OK-FIXED"
+```
+ทำให้ครบในชอตเดียว: สร้าง `~/.ssh` (700) → เพิ่มคีย์ถ้ายังไม่มี → ตั้ง perm 600 → **ตัด write ของ group/other ออกจาก home** (ตัวที่ทำให้ StrictModes เมิน) → โชว์ fingerprint คีย์ในไฟล์
+- ต้องเห็น fingerprint ของคีย์เรา (จาก `ssh -v` บรรทัด Offering) อยู่ในรายการ + ปิดท้าย `OK-FIXED`
+- แล้วลองใหม่: `ssh -i $env:USERPROFILE\.ssh\id_ed25519 USER@VPS_IP` → ไม่ถาม password แล้ว
+
+### อื่นๆ
+- **Permission denied (publickey)** → public key ยังไม่อยู่ใน `~/.ssh/authorized_keys` บน VPS หรือ permission ผิด (ใช้คำสั่งแก้จบด้านบนได้เลย)
 - **REMOTE HOST IDENTIFICATION HAS CHANGED** (หลังติดตั้ง VPS ใหม่ IP เดิม) → ลบ host key เก่า:
   ```powershell
   ssh-keygen -R VPS_IP
