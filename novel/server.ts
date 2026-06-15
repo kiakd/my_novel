@@ -5,6 +5,8 @@ import { getDb } from './db';
 import { logRequest, logActivity, logError, ensureLogIndexes, APP_LOG_COLLECTION } from './logger';
 import { assembleSystemPrompt, buildNovelReminder, type NovelContext } from './prompts';
 import { assembleChatPrompt, assembleNarratorPrompt, buildPersonaReminder, type ChatCharLite, type PlayerPersonaLite } from './chat-prompt';
+import { getMemDb, ingestMemory, recall, type MemRow } from './chat-memory';
+import { embedTexts, embedOne } from './embed';
 import { RULE_ADULT, RULE_R18_LEXICON } from './shared-rules';
 import { pickStory, writeStoryMd, type Story } from './story-md';
 import { runWD14, categorizeTags, REF_SCENE_SYSTEM, buildRefSceneUser } from './ref-tag';
@@ -732,6 +734,7 @@ const app = new Elysia()
       stateCard?: StateCard;  // บัตรสถานะแบบ structured — ถ้าส่งมา: render เอง + สั่งโมเดลปล่อย [[state:]] delta + เช็ค contradiction
       playerPersona?: PlayerPersonaLite;  // บทบาทของผู้เล่นในแชทนี้ — ฉีดให้ตัวละครรู้จัก+โต้ตอบตามบท
       mode?: 'char' | 'narrator';
+      recalled?: string[];   // RAG: ความทรงจำที่ client recall มาแล้ว — ฉีดเข้า prompt
       provider?: string;
       prefill?: string;
       temperature?: number;
@@ -752,7 +755,7 @@ const app = new Elysia()
       const stateText = [liveText, b.state].filter(Boolean).join('\n') || undefined;
       const system = b.mode === 'narrator'
         ? assembleNarratorPrompt(b.char, b.summary, compact, b.lore, stateText, b.playerPersona)
-        : assembleChatPrompt(b.char, rel, b.summary, compact, b.lore, stateText, trackState, b.playerPersona);
+        : assembleChatPrompt(b.char, rel, b.summary, compact, b.lore, stateText, trackState, b.playerPersona, b.recalled);
       const history = (b.history ?? []).map((m) => ({
         role: m.role === 'char' ? ('assistant' as const) : ('user' as const),
         content: m.content,
@@ -798,6 +801,59 @@ const app = new Elysia()
       }).catch(() => {});
       return { ok: false, error: e.message };
     }
+  })
+
+  // --- RAG memory: backfill (index session ทั้งก้อนครั้งเดียว — FTS ทันที + embedding best-effort) ---
+  .post('/api/chat/memory/backfill', async ({ body }) => {
+    const b = body as { scopeId: string; kind?: 'chat' | 'novel'; rows: Omit<MemRow, 'embedding' | 'kind'>[] };
+    if (!b?.scopeId || !Array.isArray(b.rows)) return { ok: false, error: 'missing scopeId/rows' };
+    try {
+      const db = getMemDb();
+      const rows: MemRow[] = b.rows.map((r) => ({ ...r, kind: b.kind ?? 'chat', embedding: null }));
+      ingestMemory(db, rows);   // FTS sync ทันที (ฟรี/เร็ว) — ยังไม่ใส่ embedding
+      const vecs = await embedTexts(rows.map((r) => r.text));   // embedding best-effort
+      if (vecs) {
+        const upd = db.prepare('UPDATE mem SET embedding = ? WHERE id = ?');
+        const tx = db.transaction(() => rows.forEach((r, i) => {
+          const v = vecs[i]; upd.run(Buffer.from(v.buffer, v.byteOffset, v.byteLength), r.id);
+        }));
+        tx();
+      }
+      return { ok: true, count: rows.length, embedded: !!vecs };
+    } catch (e: any) { return { ok: false, error: e.message }; }
+  })
+
+  // --- RAG memory: ingest turn ใหม่ (เรียกหลังได้คำตอบ) ---
+  .post('/api/chat/memory/ingest', async ({ body }) => {
+    const b = body as { scopeId: string; kind?: 'chat' | 'novel'; rows: Omit<MemRow, 'embedding' | 'kind'>[] };
+    if (!b?.scopeId || !Array.isArray(b.rows)) return { ok: false, error: 'missing scopeId/rows' };
+    try {
+      const db = getMemDb();
+      const vecs = await embedTexts(b.rows.map((r) => r.text));
+      const rows: MemRow[] = b.rows.map((r, i) => ({ ...r, kind: b.kind ?? 'chat', embedding: vecs ? vecs[i] : null }));
+      ingestMemory(db, rows);
+      return { ok: true, count: rows.length, embedded: !!vecs };
+    } catch (e: any) { return { ok: false, error: e.message }; }
+  })
+
+  // --- RAG memory: recall (เรียกก่อน sendChat) — คืน top-K ข้อความความจำที่เกี่ยวข้อง ---
+  .post('/api/chat/memory/recall', async ({ body }) => {
+    const b = body as {
+      scopeId: string; query: string; activeChar: string;
+      mode?: 'char' | 'narrator'; excludeFromIdx: number; k?: number;
+    };
+    if (!b?.scopeId || !b?.query) return { ok: true, memories: [] };
+    try {
+      const db = getMemDb();
+      const queryVec = await embedOne(b.query);
+      const hits = recall(db, {
+        scopeId: b.scopeId, query: b.query, queryVec, activeChar: b.activeChar,
+        narratorMode: b.mode === 'narrator', excludeFromIdx: b.excludeFromIdx, k: b.k ?? 4, wFts: 0.5, wVec: 0.5,
+      });
+      // budget ~600 token ≈ ตัด text ที่ยาวเกิน 400 ตัวอักษร/ก้อน
+      const memories = hits.map((h) => `[เทิร์น ${h.turnIdx}] ${h.text.slice(0, 400)}`);
+      return { ok: true, memories };
+    } catch (e: any) { return { ok: false, error: e.message, memories: [] }; }
   })
 
   // --- AI: ฉากแชท → SD prompt (อังกฤษ) → ComfyUI → รูปประกอบ ---
