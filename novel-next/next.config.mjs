@@ -6,6 +6,9 @@ const BACKEND = process.env.BACKEND_URL ?? 'http://127.0.0.1:3000';
 
 const nextConfig = {
   reactStrictMode: true,
+  // standalone = build server เล็ก รันด้วย `node server.js` (image บาง + RAM น้อย เหมาะ VPS 3GB)
+  // ⚠️ rewrites ด้านล่างถูก "ฝัง" ตอน build → ต้องส่ง BACKEND_URL เป็น build ARG ด้วย (ดู Dockerfile/compose)
+  output: 'standalone',
   async rewrites() {
     return [
       { source: '/api/:path*', destination: `${BACKEND}/api/:path*` },

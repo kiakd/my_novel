@@ -1,19 +1,32 @@
-# สแตกครบ: MongoDB + backend (novel) + frontend (novel-next)
-# ใช้: cp .env.docker.example .env  → แก้คีย์ → docker compose up -d --build
-# เปิดเว็บที่ http://localhost:3001  (frontend proxy /api,/uploads → backend อัตโนมัติ)
+# สแตกครบ: MongoDB + backend (novel) + frontend (novel-next) — จูนสำหรับ VPS 3GB
 #
-# LM Studio (Gemma) และ ComfyUI รันบน "เครื่อง host" → ใช้ host.docker.internal เข้าถึง
-# ถ้า host ไม่มี GPU/ไม่รัน 2 ตัวนี้ ก็ใช้ DeepSeek (cloud) เป็น provider แทนได้เลย
+# โหมดใช้งาน:
+#   • Local/dev (build เอง):     docker compose up -d --build
+#   • VPS (pull image จาก CI):   docker compose pull && docker compose up -d
+#       └ ตั้ง REGISTRY/TAG ใน .env ให้ชี้ GHCR (ค่า default = ghcr.io/kiakd)
+#
+# เปิดเว็บที่ http://<host>:3001  (frontend proxy /api,/uploads → backend อัตโนมัติ)
+# LM Studio (Gemma) / ComfyUI รันบน host เท่านั้น (ต้อง GPU) → ใช้ host.docker.internal
+# บน VPS ไม่มี GPU ก็ใช้ DeepSeek (cloud) เป็น provider แทนได้เลย
 
 services:
   mongo:
     image: mongo:7
     restart: unless-stopped
+    command: ["--wiredTigerCacheSizeGB", "0.5"]   # cap cache กัน mongo กินครึ่งแรมบนเครื่องเล็ก
     volumes:
       - mongo-data:/data/db
+    mem_limit: 768m
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     # ไม่ publish port ออกนอก — เข้าถึงได้เฉพาะใน network ของ compose (ปลอดภัยกว่า)
 
   novel:
+    image: ${REGISTRY:-ghcr.io/kiakd}/novel:${TAG:-latest}
     build: ./novel
     restart: unless-stopped
     environment:
@@ -29,23 +42,30 @@ services:
       - ./novel/uploads:/app/uploads        # เก็บรูป/อวตารถาวร
     extra_hosts:
       - "host.docker.internal:host-gateway" # ให้ Linux เข้าถึงบริการบน host (LM Studio/ComfyUI)
+    mem_limit: 512m
     depends_on:
-      - mongo
+      mongo:
+        condition: service_healthy
 
   web:
-    build: ./novel-next
+    image: ${REGISTRY:-ghcr.io/kiakd}/novel-next:${TAG:-latest}
+    build:
+      context: ./novel-next
+      args:
+        BACKEND_URL: http://novel:3000     # ฝังลง rewrites ตอน build (ชื่อ service "novel")
     restart: unless-stopped
     environment:
-      - BACKEND_URL=http://novel:3000        # next.config rewrites /api,/uploads → backend
       - NEXT_TELEMETRY_DISABLED=1
     ports:
-      - "3001:3001"                          # << เปิดเว็บ local ที่นี่
+      - "3001:3001"                          # << เปิดเว็บที่นี่ (ชี้ reverse proxy/tunnel มาที่นี่)
+    mem_limit: 640m
     depends_on:
-      - novel
+      novel:
+        condition: service_healthy
 
-  # Cloudflare Tunnel — เปิดแอปออกเน็ตผ่านโดเมนคุณ โดยไม่ต้อง forward port / เปิด firewall
-  # opt-in: รันด้วย  docker compose --profile tunnel up -d
-  # ใน Cloudflare dashboard ตั้ง Public Hostname → Service = http://web:3001 (cloudflared อยู่เน็ตเวิร์กเดียวกัน)
+  # Cloudflare Tunnel — เปิดแอปออกเน็ตผ่านโดเมน โดยไม่ต้อง forward port / เปิด firewall
+  # opt-in:  docker compose --profile tunnel up -d
+  # ใน Cloudflare dashboard ตั้ง Public Hostname → Service = http://web:3001
   cloudflared:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
