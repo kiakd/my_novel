@@ -848,10 +848,10 @@ const app = new Elysia()
       const queryVec = await embedOne(b.query);
       const hits = recall(db, {
         scopeId: b.scopeId, query: b.query, queryVec, activeChar: b.activeChar,
-        narratorMode: b.mode === 'narrator', excludeFromIdx: b.excludeFromIdx ?? 0, k: b.k ?? 4, wFts: 0.5, wVec: 0.5,
+        narratorMode: b.mode === 'narrator', excludeFromIdx: b.excludeFromIdx ?? 0, k: b.k ?? 6, wFts: 0.5, wVec: 0.5,
       });
-      // budget ~600 token ≈ ตัด text ที่ยาวเกิน 400 ตัวอักษร/ก้อน
-      const memories = hits.map((h) => `[เทิร์น ${h.turnIdx}] ${h.text.slice(0, 400)}`);
+      // budget ~600 token ≈ ตัด text ที่ยาวเกิน 300 ตัวอักษร/ก้อน (k=6 × 300 ≈ คงงบเดิม)
+      const memories = hits.map((h) => `[เทิร์น ${h.turnIdx}] ${h.text.slice(0, 300)}`);
       return { ok: true, memories };
     } catch (e: any) { return { ok: false, error: e.message, memories: [] }; }
   })

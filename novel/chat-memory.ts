@@ -136,16 +136,20 @@ export function recall(db: Database, q: RecallQuery): MemHit[] {
     : [];
 
   const score = new Map<string, { hit: MemHit; s: number }>();
-  // FTS: คะแนนตามอันดับ (อันดับแรก = สูงสุด)
-  ftsHits.forEach((h, i) => {
-    const s = q.wFts * (1 - i / Math.max(ftsHits.length, 1));
-    score.set(h.id, { hit: h, s });
+  // FTS: normalize bm25 rank → [0,1] (rank ของ FTS5 ยิ่ง "ติดลบมาก" ยิ่งตรง — ใช้ magnitude จริง
+  // แทนตำแหน่งอันดับ เพื่อให้ exact/near match ของ "ชื่อเฉพาะ" ได้คะแนนเด่นกว่า match อ่อน ๆ)
+  const ranks = ftsHits.map((h) => h.ftsRank ?? 0);
+  const best = Math.min(...ranks), worst = Math.max(...ranks); // best = ติดลบสุด
+  ftsHits.forEach((h) => {
+    const r = h.ftsRank ?? 0;
+    const norm = worst === best ? 1 : (worst - r) / (worst - best); // best→1, worst→0
+    score.set(h.id, { hit: h, s: q.wFts * norm });
   });
   // vector: cosine [−1,1] → [0,1]
   vecHits.forEach((h) => {
     const cs = q.wVec * (((h.cos ?? 0) + 1) / 2);
     const ex = score.get(h.id);
-    if (ex) ex.s += cs;
+    if (ex) { ex.s += cs; ex.hit = { ...ex.hit, cos: h.cos }; } // match ทั้งสองทาง: รวมคะแนน + ติด cos ไว้ด้วย
     else score.set(h.id, { hit: h, s: cs });
   });
 

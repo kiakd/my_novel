@@ -8,6 +8,8 @@
 !*.example
 # ไฟล์ backup (มัก copy มาจาก .env จริง)
 *.bak
+# mongodb dump ที่ดึงจาก server (อย่า commit ข้อมูลจริง)
+backup-novel-*.gz
 
 # deps / build
 node_modules/
@@ -44,3 +46,6 @@ output/
 # os / editor
 .DS_Store
 .claude/
+
+# RAG long-term memory store (runtime data — อย่า commit)
+chat-mem.sqlite*
