@@ -125,33 +125,67 @@ export function vectorSearch(db: Database, q: VecQuery): MemHit[] {
 export interface RecallQuery {
   scopeId: string; query: string; queryVec: Float32Array | null; activeChar: string;
   narratorMode: boolean; excludeFromIdx: number; k: number; wFts: number; wVec: number;
+  wRecency?: number; // ถ่วงความจำที่สดกว่าเล็กน้อย (turnIdx สูง = ใหม่). default 0 = ปิด
 }
 
 /** hybrid: FTS + (optional) vector → normalize → weighted rerank → top-K */
 export function recall(db: Database, q: RecallQuery): MemHit[] {
-  const N = Math.max(q.k * 3, 12); // ดึงผู้สมัครเผื่อ rerank
+  const N = Math.max(q.k * 5, 20); // ดึงผู้สมัครเผื่อ rerank (กว้างพอให้ dedup FTS∩vector แล้วยังเหลือ rerank)
   const ftsHits = ftsSearch(db, { scopeId: q.scopeId, query: q.query, activeChar: q.activeChar, narratorMode: q.narratorMode, excludeFromIdx: q.excludeFromIdx, limit: N });
   const vecHits = q.queryVec
     ? vectorSearch(db, { scopeId: q.scopeId, queryVec: q.queryVec, activeChar: q.activeChar, narratorMode: q.narratorMode, excludeFromIdx: q.excludeFromIdx, limit: N })
     : [];
 
+  // FTS-only (queryVec=null): ให้ FTS กินน้ำหนักเต็ม [0,1] ไม่งั้นคะแนนสูงสุดถูกตรึงที่ wFts (เช่น 0.35)
+  const wFts = q.queryVec ? q.wFts : 1;
+  const wVec = q.queryVec ? q.wVec : 0;
+  const wRec = q.wRecency ?? 0;
+
   const score = new Map<string, { hit: MemHit; s: number }>();
   // FTS: normalize bm25 rank → [0,1] (rank ของ FTS5 ยิ่ง "ติดลบมาก" ยิ่งตรง — ใช้ magnitude จริง
   // แทนตำแหน่งอันดับ เพื่อให้ exact/near match ของ "ชื่อเฉพาะ" ได้คะแนนเด่นกว่า match อ่อน ๆ)
-  const ranks = ftsHits.map((h) => h.ftsRank ?? 0);
-  const best = Math.min(...ranks), worst = Math.max(...ranks); // best = ติดลบสุด
-  ftsHits.forEach((h) => {
-    const r = h.ftsRank ?? 0;
-    const norm = worst === best ? 1 : (worst - r) / (worst - best); // best→1, worst→0
-    score.set(h.id, { hit: h, s: q.wFts * norm });
-  });
+  if (ftsHits.length > 0) {
+    const ranks = ftsHits.map((h) => h.ftsRank ?? 0);
+    const best = Math.min(...ranks), worst = Math.max(...ranks); // best = ติดลบสุด
+    ftsHits.forEach((h) => {
+      const r = h.ftsRank ?? 0;
+      const norm = worst === best ? 1 : (worst - r) / (worst - best); // best→1, worst→0
+      score.set(h.id, { hit: h, s: wFts * norm });
+    });
+  }
   // vector: cosine [−1,1] → [0,1]
   vecHits.forEach((h) => {
-    const cs = q.wVec * (((h.cos ?? 0) + 1) / 2);
+    const cs = wVec * (((h.cos ?? 0) + 1) / 2);
     const ex = score.get(h.id);
     if (ex) { ex.s += cs; ex.hit = { ...ex.hit, cos: h.cos }; } // match ทั้งสองทาง: รวมคะแนน + ติด cos ไว้ด้วย
     else score.set(h.id, { hit: h, s: cs });
   });
 
+  // recency tiebreak: บูสต์ความจำที่สดกว่าเล็กน้อย (กันของเก่าที่ keyword ซ้ำ แย่งอันดับจากเหตุการณ์ล่าสุด)
+  if (wRec > 0 && score.size > 1) {
+    const idxs = [...score.values()].map((e) => e.hit.turnIdx);
+    const maxIdx = Math.max(...idxs), minIdx = Math.min(...idxs);
+    if (maxIdx > minIdx) {
+      score.forEach((e) => { e.s += wRec * ((e.hit.turnIdx - minIdx) / (maxIdx - minIdx)); });
+    }
+  }
+
   return [...score.values()].sort((a, b) => b.s - a.s).slice(0, q.k).map((e) => e.hit);
+}
+
+/** ลบความจำตาม id (ใช้ตอน regen/แก้ข้อความ — ลบของเก่าก่อน ingest ใหม่ ให้ข้อความใหม่ชนะ) */
+export function deleteMemory(db: Database, ids: string[]): void {
+  if (!ids.length) return;
+  const delMem = db.prepare('DELETE FROM mem WHERE id = ?');
+  const delFts = db.prepare('DELETE FROM mem_fts WHERE id = ?');
+  const tx = db.transaction((items: string[]) => {
+    for (const id of items) { delMem.run(id); delFts.run(id); }
+  });
+  tx(ids);
+}
+
+/** ลบความจำทั้ง scope (ใช้ตอนลบข้อความใน session — ให้ backfill สร้าง index ใหม่ กัน id เพี้ยนหลังเลื่อน index) */
+export function deleteScope(db: Database, scopeId: string): void {
+  const ids = (db.query('SELECT id FROM mem WHERE scopeId = ?').all(scopeId) as { id: string }[]).map((r) => r.id);
+  deleteMemory(db, ids);
 }
