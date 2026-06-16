@@ -4,7 +4,7 @@ import { Modal, Avatar, Btn, IconBtn, Input, Textarea, Field, toast } from '@/co
 import { pal, type ColorKey } from '@/lib/theme';
 import { keysToText, textToKeys } from '@/lib/chat-lore';
 import { exportCardPng, exportCardJson, importCardFile } from '@/lib/card-client';
-import { generateCharFields } from '@/lib/chat-api';
+import { generateCharFields, translateCharFields } from '@/lib/chat-api';
 import { useChatProvider } from '@/lib/uiPrefs';
 import type { ChatChar, LoreEntry } from '@/lib/chat-types';
 
@@ -28,6 +28,8 @@ export function ChatCharModal({ char, onClose, onSave, onDelete }: Props) {
   const [brief, setBrief] = useState('');           // ไอเดียคร่าว ๆ ที่ผู้ใช้พิมพ์
   const [genBusy, setGenBusy] = useState(false);     // กำลังเจนแบบ bulk
   const [fieldBusy, setFieldBusy] = useState<string | null>(null); // key ที่กำลังเจนรายช่อง
+  const [transBusy, setTransBusy] = useState(false);  // กำลังแปลเป็นไทย
+  const [keepNames, setKeepNames] = useState(true);   // คงชื่อเดิม (ไม่ถอดเสียงชื่อเป็นไทย)
 
   // มีข้อมูลตัวละครพอจะเจนไหม (ใช้เช็คตอน bulk — เผื่อทั้ง brief และตัวละครว่างเปล่า)
   const charHasContent = Object.values(char as unknown as Record<string, unknown>)
@@ -72,6 +74,27 @@ export function ChatCharModal({ char, onClose, onSave, onDelete }: Props) {
     }
   };
 
+  // แปลฟิลด์ตัวละครเป็นไทย — เขียนทับเนื้อหาเดิม (เป็นการแปลโดยตั้งใจ ไม่ใช่เติมช่องว่าง)
+  const TRANSLATABLE = ['name', 'appearance', 'outfit', 'description', 'mindset', 'behavior', 'speechTone', 'voiceExamples', 'scenario', 'greeting', 'likes', 'dislikes', 'power'];
+  const translateToThai = async () => {
+    if (transBusy) return;
+    const rec = d as unknown as Record<string, unknown>;
+    const hasText = TRANSLATABLE.some((k) => String(rec[k] ?? '').trim());
+    if (!hasText) { toast('ยังไม่มีเนื้อหาให้แปล', '⚠️'); return; }
+    setTransBusy(true);
+    try {
+      const res = await translateCharFields({ char: rec, keepNames, provider });
+      if (!res.ok || !res.translated) { toast(res.error || 'แปลไม่สำเร็จ', '⚠️'); return; }
+      const t = res.translated;
+      setD((x) => ({ ...x, ...(t as Partial<ChatChar>) }));
+      toast('แปลเป็นไทยแล้ว', '🌐');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'แปลไม่สำเร็จ', '⚠️');
+    } finally {
+      setTransBusy(false);
+    }
+  };
+
   // ปุ่ม ✨ เล็ก ๆ สำหรับวางใน slot `hint` ของ Field (เจนช่องนั้นช่องเดียว)
   const GenBtn = ({ k }: { k: string }) => (
     <IconBtn type="button" color={d.color ?? 'coral'} active={fieldBusy === k}
@@ -93,6 +116,12 @@ export function ChatCharModal({ char, onClose, onSave, onDelete }: Props) {
       const patch = await importCardFile(file);
       setD((x) => ({ ...x, ...patch, id: x.id, color: x.color, relStart: x.relStart })); // เขียนทับฟิลด์โปรไฟล์จากการ์ด, เก็บ id/color/relStart เดิม
       toast('นำเข้าการ์ดแล้ว', '📥');
+      // เดาว่าการ์ดเป็นภาษาอังกฤษไหม (คำนวณจาก patch โดยตรง เพราะ state อัปเดตแบบ async) — ถ้าใช่ ชวนให้กดปุ่มแปล
+      const pr = patch as Record<string, unknown>;
+      const sample = `${pr.description ?? ''} ${pr.appearance ?? ''} ${pr.scenario ?? ''}`;
+      const latin = (sample.match(/[A-Za-z]/g) ?? []).length;
+      const thai = (sample.match(/[฀-๿]/g) ?? []).length;
+      if (latin > thai && latin > 20) toast('การ์ดนี้เป็นภาษาอังกฤษ — กดปุ่ม 🌐 แปลเป็นไทย ได้เลย', '🌐');
     } catch (err) {
       toast(err instanceof Error ? err.message : 'นำเข้าการ์ดไม่สำเร็จ', '⚠️');
     }
@@ -221,6 +250,10 @@ export function ChatCharModal({ char, onClose, onSave, onDelete }: Props) {
           <Btn variant="ghost" onClick={() => fileRef.current?.click()}>⬆️ นำเข้าการ์ด</Btn>
           <Btn variant="ghost" onClick={onExportPng}>⬇️ การ์ด PNG</Btn>
           <Btn variant="ghost" onClick={onExportJson}>⬇️ JSON</Btn>
+          <Btn variant="ghost" disabled={transBusy || genBusy} onClick={translateToThai}>{transBusy ? 'กำลังแปล…' : '🌐 แปลเป็นไทย'}</Btn>
+          <label className="flex items-center gap-1 text-[11px] font-bold text-muted shrink-0 cursor-pointer select-none" title="ไม่ถอดเสียงชื่อตัวละครเป็นไทย (คงชื่อเดิม)">
+            <input type="checkbox" checked={keepNames} onChange={(e) => setKeepNames(e.target.checked)} className="accent-grape" /> คงชื่อเดิม
+          </label>
           <Btn variant="ghost" onClick={onClose}>ยกเลิก</Btn>
           <Btn variant="primary" color={d.color ?? 'coral'} onClick={() => { if (!d.name.trim()) { toast('ใส่ชื่อตัวละครก่อน', '⚠️'); return; } onSave(d); onClose(); toast('บันทึกแล้ว', '💾'); }}>บันทึก</Btn>
         </div>

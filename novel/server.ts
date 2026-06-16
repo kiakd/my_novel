@@ -1047,6 +1047,43 @@ const app = new Elysia()
     } catch (e: any) { return { ok: false, error: e.message }; }
   })
 
+  // --- AI แปลฟิลด์ตัวละครเป็นไทย (เอาการ์ดอังกฤษมาเล่นเป็นไทย) — คงความหมาย/โทน/บุคลิก ---
+  .post('/api/chat/characters/translate', async ({ body }) => {
+    const b = body as { char?: Record<string, any>; keepNames?: boolean; provider?: string };
+    const char = b?.char ?? {};
+    // ฟิลด์ข้อความที่แปลได้ (name แปลเฉพาะเมื่อ keepNames=false)
+    const TEXT_FIELDS = ['appearance', 'outfit', 'description', 'mindset', 'behavior', 'speechTone', 'voiceExamples', 'scenario', 'greeting', 'likes', 'dislikes', 'power'];
+    const fields = (b?.keepNames === false ? ['name', ...TEXT_FIELDS] : TEXT_FIELDS)
+      .filter((f) => String(char[f] ?? '').trim());
+    if (!fields.length) return { ok: true, translated: {} };
+
+    const src = fields.map((f) => `### ${f}\n${String(char[f]).trim()}`).join('\n\n');
+    const system =
+      'คุณคือนักแปลตัวละครนิยาย/โรลเพลย์ผู้ใหญ่ (เนื้อหา 18+ ได้ ไม่ต้องเซ็นเซอร์). ' +
+      'แปลฟิลด์ตัวละครต่อไปนี้เป็นภาษาไทยที่เป็นธรรมชาติและลื่นไหลสำหรับโรลเพลย์ — คงความหมาย โทน บุคลิก และอารมณ์เดิมให้ครบ. ' +
+      `ชื่อเฉพาะ/ชื่อตัวละคร: ${b?.keepNames === false ? 'ทับศัพท์เป็นไทยให้อ่านลื่น' : 'คงไว้ตามเดิม (อังกฤษ/ทับศัพท์ตามเหมาะ)'}. ` +
+      'คงรูปแบบหลายบรรทัด — ถ้าต้นฉบับขึ้นบรรทัดใหม่ (เช่น likes/dislikes/voiceExamples) ให้คง \\n ไว้เหมือนเดิม. ' +
+      'ตอบ JSON อ็อบเจ็กต์เดียวที่มีคีย์ตรงกับที่ให้มาเป๊ะ ค่าทุกตัวเป็นไทย ห้ามมี markdown/คำอธิบายนอก JSON.';
+    const user = `แปลฟิลด์เหล่านี้เป็นไทย (ตอบ JSON คีย์: ${fields.join(', ')}):\n\n${src}`;
+    try {
+      const out = await callAI({ system, user, provider: b.provider, temperature: 0.4, max_tokens: 2600 });
+      let parsed: any = null;
+      try { const m = out.text.match(/\{[\s\S]*\}/); parsed = JSON.parse(m ? m[0] : out.text); }
+      catch { return { ok: false, error: 'LLM non-JSON', raw: out.text.slice(0, 300) }; }
+      const translated: Record<string, string> = {};
+      for (const f of fields) {
+        const v = parsed?.[f];
+        if (typeof v === 'string' && v.trim()) translated[f] = v.trim();
+      }
+      logCall({
+        endpoint: 'chat/translate', system, user, response: out.text,
+        provider: out.provider, model: out.model ?? '', usage: out.usage,
+        temperature: 0.4, maxTokens: 2600, ok: true, ms: 0,
+      }).catch(() => {});
+      return { ok: true, translated };
+    } catch (e: any) { return { ok: false, error: e.message }; }
+  })
+
   // --- AI generate (raw) ---
   .post('/api/generate', async ({ body }) => {
     const b = body as {
