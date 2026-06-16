@@ -12,8 +12,12 @@ export function SettingsScreen() {
       <div className="flex flex-col gap-5 pb-10">
         <Card className="p-6">
           <div className="font-display text-lg font-medium text-ink mb-4 flex items-center gap-2">🔑 {t('settings.providerKeys')}</div>
-          <div className="flex flex-col gap-4">
-            {PROVIDERS.map((p) => <Field key={p} label={p}><Input type="password" defaultValue="sk-••••••••••••••••" /></Field>)}
+          {/* honest note: keys ตั้งผ่าน env ของเซิร์ฟเวอร์เท่านั้น — ช่องนี้ยังไม่ wiring เข้าระบบ */}
+          <div className="mb-4 rounded-xl bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-[12.5px] leading-relaxed text-amber-800">
+            ⚠️ ตั้งค่า API key ผ่าน environment ของเซิร์ฟเวอร์ (.env) เท่านั้น — ช่องด้านล่างยังไม่บันทึกเข้าระบบ
+          </div>
+          <div className="flex flex-col gap-4 opacity-60">
+            {PROVIDERS.map((p) => <Field key={p} label={p}><Input type="password" placeholder="ตั้งค่าผ่าน .env บนเซิร์ฟเวอร์" disabled /></Field>)}
           </div>
         </Card>
         <Card className="p-6">
