@@ -117,7 +117,10 @@ export function vectorSearch(db: Database, q: VecQuery): MemHit[] {
   const sql = `SELECT m.* FROM mem m
     WHERE m.scopeId = ? AND m.turnIdx < ? AND m.embedding IS NOT NULL AND ${vis.clause}`;
   const rows = db.query(sql).all(q.scopeId, q.excludeFromIdx, ...vis.params) as any[];
-  const hits = rows.map(rowToHit).map((h) => ({ ...h, cos: h.embedding ? cosine(q.queryVec, h.embedding) : 0 }));
+  const hits = rows.map(rowToHit).map((h) => ({
+    ...h,
+    cos: h.embedding && h.embedding.length === q.queryVec.length ? cosine(q.queryVec, h.embedding) : 0,
+  }));
   hits.sort((x, y) => (y.cos ?? 0) - (x.cos ?? 0));
   return hits.slice(0, q.limit);
 }
@@ -188,4 +191,48 @@ export function deleteMemory(db: Database, ids: string[]): void {
 export function deleteScope(db: Database, scopeId: string): void {
   const ids = (db.query('SELECT id FROM mem WHERE scopeId = ?').all(scopeId) as { id: string }[]).map((r) => r.id);
   deleteMemory(db, ids);
+}
+
+export interface SyncStats { added: number; updated: number; deleted: number; unchanged: number }
+
+/** reconcile ทั้ง scope ให้ตรงกับ rows ปัจจุบัน (heal edit/ลบ/regen/สลับลำดับ).
+ *  เทียบ text ที่เก็บไว้กับ text ใหม่ = content hash โดยพฤตินัย — ไม่ต้อง migrate schema.
+ *  คืน toEmbed = แถวที่ต้อง embed (ใหม่ + เนื้อเปลี่ยน + unchanged แต่ embedding ยัง NULL) เพื่อให้ caller ยิง embed ทีเดียว */
+export function syncScope(db: Database, scopeId: string, rows: MemRow[]): { toEmbed: MemRow[]; stats: SyncStats } {
+  const existing = new Map<string, { text: string; hasEmb: boolean }>();
+  for (const r of db.query('SELECT id, text, (embedding IS NOT NULL) AS hasEmb FROM mem WHERE scopeId = ?').all(scopeId) as any[]) {
+    existing.set(r.id, { text: r.text, hasEmb: !!r.hasEmb });
+  }
+  const incoming = new Set(rows.map((r) => r.id));
+  const insMem = db.prepare(
+    `INSERT INTO mem (id, scopeId, kind, charId, secret, speaker, turnIdx, ts, text, embedding)
+     VALUES (?,?,?,?,?,?,?,?,?,NULL)`);
+  const updMem = db.prepare('UPDATE mem SET kind=?, charId=?, secret=?, speaker=?, turnIdx=?, ts=?, text=?, embedding=NULL WHERE id=?');
+  const insFts = db.prepare('INSERT INTO mem_fts (id, text) VALUES (?, ?)');
+  const delFts = db.prepare('DELETE FROM mem_fts WHERE id = ?');
+  const delMem = db.prepare('DELETE FROM mem WHERE id = ?');
+  const toEmbed: MemRow[] = [];
+  const stats: SyncStats = { added: 0, updated: 0, deleted: 0, unchanged: 0 };
+  const tx = db.transaction(() => {
+    for (const r of rows) {
+      const ex = existing.get(r.id);
+      if (!ex) {
+        insMem.run(r.id, r.scopeId, r.kind, r.charId ?? null, r.secret ? 1 : 0, r.speaker, r.turnIdx, r.ts, r.text);
+        insFts.run(r.id, r.text);
+        toEmbed.push(r); stats.added++;
+      } else if (ex.text !== r.text) {
+        updMem.run(r.kind, r.charId ?? null, r.secret ? 1 : 0, r.speaker, r.turnIdx, r.ts, r.text, r.id);
+        delFts.run(r.id); insFts.run(r.id, r.text);
+        toEmbed.push(r); stats.updated++;
+      } else {
+        stats.unchanged++;
+        if (!ex.hasEmb) toEmbed.push(r); // re-embed แถวที่ยังไม่มีเวกเตอร์ (เปิด EMBED ทีหลัง)
+      }
+    }
+    for (const id of existing.keys()) {
+      if (!incoming.has(id)) { delMem.run(id); delFts.run(id); stats.deleted++; }
+    }
+  });
+  tx();
+  return { toEmbed, stats };
 }
