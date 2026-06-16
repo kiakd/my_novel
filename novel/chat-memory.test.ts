@@ -153,3 +153,23 @@ test('vectorSearch: ข้ามแถวที่มิติเวกเตอ
   expect(hits[0].turnIdx).toBe(1);                 // มิติตรงเท่านั้นได้คะแนน
   expect(hits.find((h) => h.turnIdx === 0)?.cos ?? 0).toBe(0); // มิติไม่ตรง → 0
 });
+
+test('recall (rrf): ก้อนที่ติดทั้ง FTS+vector ชนะก้อนที่เด่นทางเดียว', () => {
+  const db = openMemDb(':memory:');
+  ingestMemory(db, [
+    // s1:0 ติดทั้ง keyword 'ความมืด' + vector ใกล้ query · s1:1 ใกล้ vector แต่ไม่มี keyword (ติดทางเดียว)
+    { id: 's1:0', scopeId: 's1', kind: 'chat', charId: 'a', secret: false, speaker: 'char', turnIdx: 0, ts: 1, text: 'ความมืด', embedding: new Float32Array([1, 0, 0]) },
+    { id: 's1:1', scopeId: 's1', kind: 'chat', charId: 'a', secret: false, speaker: 'char', turnIdx: 1, ts: 2, text: 'แสงแดดยามเช้า', embedding: new Float32Array([0.9, 0.1, 0]) },
+  ]);
+  const hits = recall(db, { scopeId: 's1', query: 'ความมืด', queryVec: new Float32Array([1, 0, 0]), activeChar: 'a', narratorMode: false, excludeFromIdx: 999, k: 2, wFts: 0.5, wVec: 0.5, fusion: 'rrf' });
+  expect(hits[0].turnIdx).toBe(0); // ติดทั้ง FTS + vector → ชนะก้อนที่ติด vector อย่างเดียว
+});
+
+test('recall: fusion default (weighted) ยังทำงานเมื่อไม่ระบุ fusion', () => {
+  const db = openMemDb(':memory:');
+  ingestMemory(db, [
+    { id: 's1:0', scopeId: 's1', kind: 'chat', charId: 'a', secret: false, speaker: 'char', turnIdx: 0, ts: 1, text: 'มังกรไฟพ่นเปลวเพลิง' },
+  ]);
+  const hits = recall(db, { scopeId: 's1', query: 'มังกร', queryVec: null, activeChar: 'a', narratorMode: false, excludeFromIdx: 999, k: 5, wFts: 0.5, wVec: 0.5 });
+  expect(hits[0].turnIdx).toBe(0);
+});
