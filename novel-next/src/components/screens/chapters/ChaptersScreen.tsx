@@ -271,6 +271,9 @@ export function ChaptersScreen() {
             speaker: 'narrator', turnIdx: baseIdx + j, ts: now + j, text,
           }));
           if (rows.length) memIngestNovel(sid, rows).catch(() => {});
+          // เขียนต่อบทกลางทำให้ดัชนีย่อหน้าของบทหลัง ๆ เลื่อน — ingest แบบ positional ข้างบนไม่ heal ให้
+          // เคลียร์ story นี้ออกจาก gate → effect backfill (syncScope) รันใหม่ reconcile ทั้งเรื่อง
+          backfilledRef.current.delete(sid);
         }
         toast(t('chapters.continue.done'), '✨');
         setContOpen(false);
