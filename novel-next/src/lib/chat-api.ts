@@ -101,6 +101,16 @@ export const generateCharFields = (body: {
   '/api/chat/characters/generate-fields', { method: 'POST', body: JSON.stringify(body) },
 );
 
+// ---- AI แปลฟิลด์ตัวละครเป็นไทย (เอาการ์ดอังกฤษมาเล่นเป็นไทย) — คงความหมาย/โทน ----
+// keepNames=true (default ฝั่ง server) คงชื่อเดิม · false = ทับศัพท์ชื่อเป็นไทยด้วย
+export const translateCharFields = (body: {
+  char: Record<string, unknown>;
+  keepNames?: boolean;
+  provider?: string;
+}) => jsonFetch<{ ok: boolean; translated?: Record<string, string>; error?: string }>(
+  '/api/chat/characters/translate', { method: 'POST', body: JSON.stringify(body) },
+);
+
 // ---- สรุปบทสนทนาช่วงเก่า (rolling summary) ผ่าน endpoint generate ทั่วไป ----
 const SUMMARY_SYSTEM =
   'คุณคือผู้ช่วยสรุปบทสนทนาโรลเพลย์เป็น "ความทรงจำ" ของตัวละคร ให้ครบและแม่นยำ (กันเรื่องเพี้ยนตอนแชทยาว). ' +
