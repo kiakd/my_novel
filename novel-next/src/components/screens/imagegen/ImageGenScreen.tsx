@@ -13,14 +13,17 @@ export function ImageGenScreen() {
   const [pose, setPose] = useState(0);
   const [provider, setProvider] = useState('NovelAI');
 
+  // โหมดตัวอย่าง: ยังไม่ได้เชื่อมต่อ ComfyUI/แบ็กเอนด์จริง (/api/scene-to-image-prompt, /api/image/generate)
   const generate = () => {
-    setTiles((tl) => ['loading', ...tl]);
-    toast(t('toast.generating'), '✦');
-    setTimeout(() => { setTiles((tl) => tl.map((x, i) => (i === 0 ? 'done' : x))); toast(t('toast.imageReady'), '🖼️'); }, 1600);
+    toast('โหมดตัวอย่าง — ยังไม่ได้เชื่อมต่อแบ็กเอนด์เจนรูป', '⚠️');
   };
 
   return (
     <div className="max-w-6xl mx-auto">
+      {/* honest banner: หน้านี้ยัง mock อยู่ */}
+      <div className="mb-4 rounded-xl bg-amber-50 border border-amber-200 px-4 py-2.5 text-[12.5px] leading-relaxed text-amber-800">
+        ⚠️ โหมดตัวอย่าง — ยังไม่ได้เชื่อมต่อ ComfyUI/แบ็กเอนด์จริง รูปที่เห็นเป็นตัวอย่าง (mock)
+      </div>
       <SectionTitle
         emoji="🖼️"
         color="lilac"
@@ -54,7 +57,7 @@ export function ImageGenScreen() {
               ))}
             </div>
           </div>
-          <Btn variant="primary" color="lilac" size="lg" className="w-full" onClick={generate}>✦ {t('imagegen.generate')}</Btn>
+          <Btn variant="primary" color="lilac" size="lg" className="w-full" onClick={generate} disabled title="ยังไม่ได้เชื่อมต่อแบ็กเอนด์เจนรูป">✦ ตัวอย่าง (ยังไม่เชื่อมต่อ)</Btn>
         </Card>
         <div>
           <div className="flex items-center justify-between mb-3">

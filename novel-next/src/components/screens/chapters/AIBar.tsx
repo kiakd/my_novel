@@ -5,16 +5,15 @@ import { pal } from '@/lib/theme';
 import type { BtnVariant } from '@/components/ui/Btn';
 
 interface AIBarProps {
-  onAct: (id: string, label: string) => void;
+  onAct: (id: string) => void;
   onExpand: () => void;
   onContinue: () => void;
   busy: boolean;
 }
 
-/** แถบ AI ลอยล่างจอ (ขยาย/เขียนต่อ/รีวิว/สรุป) */
+/** แถบ AI ลอยล่างจอ (ขยาย/เขียนต่อ/รีวิว/สรุป) — review+summary ทำงานจริงผ่าน /api/generate */
 export function AIBar({ onAct, onExpand, onContinue, busy }: AIBarProps) {
   const { t } = useI18n();
-  // summary ทำงานจริงแล้ว (สรุปบท → ความจำข้ามบท) — review ยังเป็น placeholder (stub)
   const acts: [string, string, BtnVariant][] = [
     ['review', `🔍 ${t('chapters.aiReview')}`, 'soft'],
     ['summary', `📝 ${t('chapters.aiSummary')}`, 'soft'],
@@ -28,7 +27,7 @@ export function AIBar({ onAct, onExpand, onContinue, busy }: AIBarProps) {
         <Btn variant="primary" color="sky" size="sm" className="shrink-0" disabled={busy} onClick={onContinue}>▶ {t('chapters.aiContinue')}</Btn>
         <Btn variant="primary" color="lilac" size="sm" className="shrink-0" disabled={busy} onClick={onExpand}>✨ {t('chapters.aiExpand')}</Btn>
         {acts.map(([id, lbl, v]) => (
-          <Btn key={id} variant={v} color="sky" size="sm" className="shrink-0" disabled={busy} onClick={() => onAct(id, lbl)}>{lbl}</Btn>
+          <Btn key={id} variant={v} color="sky" size="sm" className="shrink-0" disabled={busy} onClick={() => onAct(id)}>{lbl}</Btn>
         ))}
       </div>
     </div>

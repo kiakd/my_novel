@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { openMemDb, ingestMemory, ftsSearch, cosine, vectorSearch, recall } from './chat-memory';
+import { openMemDb, ingestMemory, ftsSearch, cosine, vectorSearch, recall, deleteMemory, deleteScope } from './chat-memory';
 
 test('ingest + fts trigram จับคำไทยได้', () => {
   const db = openMemDb(':memory:');
@@ -60,4 +60,36 @@ test('recall: degrade เป็น FTS-only เมื่อ queryVec = null', ()
   const hits = recall(db, { scopeId: 's1', query: 'มังกร', queryVec: null, activeChar: 'a', narratorMode: false, excludeFromIdx: 999, k: 5, wFts: 0.5, wVec: 0.5 });
   expect(hits.length).toBe(1);
   expect(hits[0].turnIdx).toBe(0);
+});
+
+test('recall: recency tiebreak — ข้อความสดกว่า (turnIdx สูง) มาก่อนเมื่อ relevance เท่ากัน', () => {
+  const db = openMemDb(':memory:');
+  ingestMemory(db, [
+    { id: 's1:0', scopeId: 's1', kind: 'chat', charId: 'a', secret: false, speaker: 'char', turnIdx: 0, ts: 1, text: 'มังกรไฟ' },
+    { id: 's1:5', scopeId: 's1', kind: 'chat', charId: 'a', secret: false, speaker: 'char', turnIdx: 5, ts: 2, text: 'มังกรไฟ' },
+  ]);
+  const hits = recall(db, { scopeId: 's1', query: 'มังกรไฟ', queryVec: null, activeChar: 'a', narratorMode: false, excludeFromIdx: 999, k: 5, wFts: 1, wVec: 0, wRecency: 0.5 });
+  expect(hits[0].turnIdx).toBe(5);
+});
+
+test('deleteMemory: ลบ id ออกจากทั้ง mem และ mem_fts', () => {
+  const db = openMemDb(':memory:');
+  ingestMemory(db, [
+    { id: 's1:0', scopeId: 's1', kind: 'chat', charId: 'a', secret: false, speaker: 'char', turnIdx: 0, ts: 1, text: 'เรย์นกลัวความมืด' },
+  ]);
+  deleteMemory(db, ['s1:0']);
+  const hits = ftsSearch(db, { scopeId: 's1', query: 'ความมืด', activeChar: 'a', narratorMode: false, excludeFromIdx: 999, limit: 5 });
+  expect(hits.length).toBe(0);
+  expect((db.query('SELECT count(*) c FROM mem').get() as any).c).toBe(0);
+});
+
+test('deleteScope: ลบทั้ง scope แต่ไม่แตะ scope อื่น', () => {
+  const db = openMemDb(':memory:');
+  ingestMemory(db, [
+    { id: 's1:0', scopeId: 's1', kind: 'chat', charId: 'a', secret: false, speaker: 'char', turnIdx: 0, ts: 1, text: 'มังกรไฟตัวที่หนึ่ง' },
+    { id: 's2:0', scopeId: 's2', kind: 'chat', charId: 'a', secret: false, speaker: 'char', turnIdx: 0, ts: 1, text: 'มังกรไฟตัวที่สอง' },
+  ]);
+  deleteScope(db, 's1');
+  expect(ftsSearch(db, { scopeId: 's1', query: 'มังกร', activeChar: 'a', narratorMode: false, excludeFromIdx: 999, limit: 5 }).length).toBe(0);
+  expect(ftsSearch(db, { scopeId: 's2', query: 'มังกร', activeChar: 'a', narratorMode: false, excludeFromIdx: 999, limit: 5 }).length).toBe(1);
 });

@@ -87,6 +87,7 @@ export interface NovelContext {
   stateCard?: StateCard; // บัตรสถานะ structured (opt-in) — ถ้าส่งมา: render + สั่งโมเดลปล่อย [[state:]] delta + พาร์สเองในโค้ด (auto-track ข้ามบท เหมือนแชท)
   narrator?: string;     // โหมด "นิยายเต็ม": ชื่อตัวละครที่เรื่องติดตาม — AI เขียนทุกตัวละคร ไม่มี {{user}}
   pov?: '1st' | '3rd';   // มุมมองเล่าในโหมดนิยายเต็ม: '1st'=บุคคลที่หนึ่ง (default) · '3rd'=บุคคลที่สาม limited ติดตาม narrator
+  recalled?: string[];   // RAG long-term memory: เหตุการณ์เก่าที่กู้คืนตามความเกี่ยวข้อง (เฟส 2 — scope=storyId) จัดอันดับ "ใต้" live state
   mode: Mode;
 }
 
@@ -230,9 +231,23 @@ function relationsXml(rels?: Relation[], solo = false): string {
   return `<relate>\n${items.join('\n')}\n</relate>`;
 }
 
+// cap กันโอเวอร์โฟลว์ context (โดยเฉพาะ Gemma 8K): เก็บบทล่าสุด MAX_EVENTS + ตัดความยาวต่อรายการ
+// (ฝั่ง client ควรเลือกบท pivotal มาเองด้วย — นี่เป็น safety net ฝั่ง prompt)
+const MAX_EVENT_ORDER = 40;
+const MAX_EVENT_CHARS = 500;
 function eventOrderBlock(order?: string[]): string {
   if (!order || order.length === 0) return '';
-  return `\n=== ลำดับเหตุการณ์ที่ผ่านมา ===\n${order.map((e, i) => `${i + 1}. ${e}`).join('\n')}`;
+  const kept = order.length > MAX_EVENT_ORDER ? order.slice(-MAX_EVENT_ORDER) : order;
+  const offset = order.length - kept.length; // คงเลขลำดับเดิมให้ตรงบท
+  const lines = kept.map((e, i) => `${offset + i + 1}. ${e.length > MAX_EVENT_CHARS ? e.slice(0, MAX_EVENT_CHARS) + '…' : e}`);
+  const note = offset > 0 ? `\n(แสดง ${kept.length} บทล่าสุดจากทั้งหมด ${order.length})` : '';
+  return `\n=== ลำดับเหตุการณ์ที่ผ่านมา ===${note}\n${lines.join('\n')}`;
+}
+
+// RAG recalled memory (เฟส 2) — เหตุการณ์เก่าที่กู้คืนตามความเกี่ยวข้อง วางใต้ live state แต่เหนือ eventCurrent
+function recalledBlock(recalled?: string[]): string {
+  if (!recalled || recalled.length === 0) return '';
+  return `\n=== ความทรงจำที่เกี่ยวข้องกับตอนนี้ (กู้จากบทเก่า — ใช้เป็นข้อมูลอ้างอิง ห้ามคัดลอกคำต่อคำ) ===\n${recalled.map((r) => `- ${r}`).join('\n')}`;
 }
 
 function novelFrame(narrator: string, pov: '1st' | '3rd' = '1st'): string {
@@ -333,6 +348,10 @@ export function assembleSystemPrompt(ctx: NovelContext): string {
       parts.push(`⚠️ หัวฉาก [📅วันที่ | ⏰เวลา | 📍สถานที่] ให้อิงค่าจากสถานะปัจจุบันนี้ ห้ามแต่งวันที่/เวลาขึ้นใหม่เอง — ${hdr.join(' · ')}`);
     }
   }
+
+  // RAG recalled — ใต้ live state (live state ยึดเด็ดขาดกว่า) แต่เหนือ eventCurrent
+  const recalled = recalledBlock(ctx.recalled);
+  if (recalled) parts.push('', recalled.trim());
 
   parts.push('', '=== เหตุการณ์ปัจจุบันที่ต้องเขียน ===', ctx.eventCurrent);
 

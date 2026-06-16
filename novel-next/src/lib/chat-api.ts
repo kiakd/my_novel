@@ -58,17 +58,29 @@ export interface MemRowInput {
   id: string; scopeId: string; charId?: string | null; secret: boolean;
   speaker: string; turnIdx: number; ts: number; text: string;
 }
+// resp ของ ingest/backfill — มี embedConfigured/embedError เพื่อเตือน client ว่า embedding ใช้งานได้ไหม
+export interface MemWriteResult { ok: boolean; count?: number; embedded?: boolean; embedConfigured?: boolean; embedError?: string; error?: string }
 export const memBackfill = (scopeId: string, rows: MemRowInput[]) =>
-  jsonFetch<{ ok: boolean; count?: number; embedded?: boolean; error?: string }>(
+  jsonFetch<MemWriteResult>(
     '/api/chat/memory/backfill', { method: 'POST', body: JSON.stringify({ scopeId, kind: 'chat', rows }) });
 
 export const memIngest = (scopeId: string, rows: MemRowInput[]) =>
-  jsonFetch<{ ok: boolean; count?: number; embedded?: boolean; error?: string }>(
+  jsonFetch<MemWriteResult>(
     '/api/chat/memory/ingest', { method: 'POST', body: JSON.stringify({ scopeId, kind: 'chat', rows }) });
 
 export const memRecall = (body: { scopeId: string; query: string; activeChar: string; mode?: 'char' | 'narrator'; excludeFromIdx: number; k?: number }) =>
   jsonFetch<{ ok: boolean; memories: string[]; error?: string }>(
     '/api/chat/memory/recall', { method: 'POST', body: JSON.stringify(body) });
+
+// ลบ row ความจำ: ส่ง ids[] เพื่อลบเฉพาะ turn (regen) · ส่ง scopeId เพื่อล้างทั้ง session
+export const memDelete = (body: { scopeId?: string; ids?: string[] }) =>
+  jsonFetch<{ ok: boolean; error?: string }>(
+    '/api/chat/memory/delete', { method: 'POST', body: JSON.stringify(body) });
+
+// สถานะระบบความจำ (embedding ตั้งไว้ไหม/จำนวน row/ฯลฯ)
+export const memStatus = () =>
+  jsonFetch<{ ok: boolean; mode?: string; embeddingConfigured?: boolean; embedModel?: string; embedDim?: number; rows?: number; embeddedRows?: number; scopes?: number; embedError?: string }>(
+    '/api/chat/memory/status');
 
 // ---- AI สร้าง "บทบาทผู้เล่น" ที่เข้ากับฉากของตัวละคร (auto-fill) ----
 export const generatePlayerPersona = (body: {

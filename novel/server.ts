@@ -5,8 +5,8 @@ import { getDb } from './db';
 import { logRequest, logActivity, logError, ensureLogIndexes, APP_LOG_COLLECTION } from './logger';
 import { assembleSystemPrompt, buildNovelReminder, type NovelContext } from './prompts';
 import { assembleChatPrompt, assembleNarratorPrompt, buildPersonaReminder, type ChatCharLite, type PlayerPersonaLite } from './chat-prompt';
-import { getMemDb, ingestMemory, recall, type MemRow } from './chat-memory';
-import { embedTexts, embedOne, embedConfigured } from './embed';
+import { getMemDb, ingestMemory, recall, deleteScope, deleteMemory, type MemRow } from './chat-memory';
+import { embedTexts, embedOne, embedConfigured, lastEmbedError } from './embed';
 import { RULE_ADULT, RULE_R18_LEXICON } from './shared-rules';
 import { pickStory, writeStoryMd, type Story } from './story-md';
 import { runWD14, categorizeTags, REF_SCENE_SYSTEM, buildRefSceneUser } from './ref-tag';
@@ -41,6 +41,9 @@ function looksExplicit(...texts: (string | undefined)[]): boolean {
   const low = texts.filter(Boolean).join(' ').toLowerCase();
   return R18_KW.some((k) => low.includes(k.toLowerCase()));
 }
+
+// "สูตร D" — แซนด์วิชคำสั่ง lexicon ท้ายสุด (recency) ดันให้โมเดลเลิกเลี่ยงคำในฉาก R18. ใช้ร่วมกันทั้งแชทและนิยาย
+const R18_LEX_NUDGE = '\n\n[ระบบ R18: ฉากนี้ถึงจุดสัมผัส/ออรัล/สอดใส่ — เรียกอวัยวะด้วยคำดิบทันที (ชาย: ควย/หัวควย · หญิง: หี/เม็ดแตด · หัวนม/นม/ตูด · เสร็จ: แตก/น้ำเงี่ยน) ห้ามเลี่ยงเป็น ความร้อน/ตรงนั้น/ส่วนนั้น/เติมเต็ม/จุดศูนย์กลาง/แก่นกาย/ระหว่างขา แม้ตัวละครจะฝืนใจ. ตัวอย่างระดับความดิบที่ต้องการ: *เธอครางลั่นเมื่อควยเสียบหีจนมิด* "อา...เข้ามาอีกสิ"]';
 
 function charSeed(name: string): number {
   let h = 0;
@@ -154,7 +157,9 @@ const PROVIDER_CONFIG: Record<Provider, { url: string; defaultModel: string; key
 const ALL_PROVIDERS: Provider[] = ['openrouter', 'deepseek', 'lmstudio'];
 const isProvider = (s?: string): s is Provider => !!s && (ALL_PROVIDERS as string[]).includes(s);
 
-const DEFAULT_PROVIDER: Provider = isProvider(process.env.AI_PROVIDER) ? process.env.AI_PROVIDER : 'openrouter';
+// default = deepseek (cloud ที่โปรเจคใช้จริงบน VPS) — openrouter ไม่มี key ในเส้น deploy ไหนเลย
+// ถ้าตั้ง AI_PROVIDER เองจะ override; resolveProvider ยัง fallback อัตโนมัติถ้า provider นี้ไม่มี key
+const DEFAULT_PROVIDER: Provider = isProvider(process.env.AI_PROVIDER) ? process.env.AI_PROVIDER : 'deepseek';
 
 function providerAvailable(p: Provider): boolean {
   const cfg = PROVIDER_CONFIG[p];
@@ -417,10 +422,14 @@ const app = new Elysia()
 
     const existing = await col.findOne({ _id: STATE_ID as any }, { projection: { rev: 1 } });
     if (!existing) {
-      // ยังไม่มี state — สร้างครั้งแรก
-      await col.updateOne({ _id: STATE_ID as any }, { $set: { state: incoming, updatedAt: new Date(), rev: 1 } }, { upsert: true });
-      logActivity('state.create', STATE_ID, { rev: 1 });
-      return { ok: true, rev: 1 };
+      // ยังไม่มี state — สร้างครั้งแรกแบบ atomic: $setOnInsert ไม่เขียนทับถ้ามีอยู่แล้ว (กัน 2 แท็บ create พร้อมกันทับกัน)
+      const c = await col.updateOne({ _id: STATE_ID as any }, { $setOnInsert: { state: incoming, updatedAt: new Date(), rev: 1 } }, { upsert: true });
+      if (c.upsertedCount && c.upsertedCount > 0) { logActivity('state.create', STATE_ID, { rev: 1 }); return { ok: true, rev: 1 }; }
+      // แพ้ race — มีคนสร้างไปก่อน → ตอบ 409 ให้ client reconcile แทนที่จะทับ
+      const d = await col.findOne({ _id: STATE_ID as any }, { projection: { rev: 1 } });
+      set.status = 409;
+      logActivity('state.conflict', STATE_ID, { phase: 'create-race', serverRev: d?.rev ?? 0 });
+      return { ok: false, conflict: true, currentRev: d?.rev ?? 0, error: 'created concurrently' };
     }
     const hasRev = existing.rev !== undefined && existing.rev !== null;
     const cur = hasRev ? existing.rev : 0;
@@ -477,8 +486,11 @@ const app = new Elysia()
     delete incoming.__rev;
     const existing = await col.findOne({ _id: CHAT_STATE_ID as any }, { projection: { rev: 1 } });
     if (!existing) {
-      await col.updateOne({ _id: CHAT_STATE_ID as any }, { $set: { state: incoming, updatedAt: new Date(), rev: 1 } }, { upsert: true });
-      return { ok: true, rev: 1 };
+      const c = await col.updateOne({ _id: CHAT_STATE_ID as any }, { $setOnInsert: { state: incoming, updatedAt: new Date(), rev: 1 } }, { upsert: true });
+      if (c.upsertedCount && c.upsertedCount > 0) return { ok: true, rev: 1 };
+      const d = await col.findOne({ _id: CHAT_STATE_ID as any }, { projection: { rev: 1 } });
+      set.status = 409;
+      return { ok: false, conflict: true, currentRev: d?.rev ?? 0, error: 'created concurrently' };
     }
     const hasRev = existing.rev !== undefined && existing.rev !== null;
     const cur = hasRev ? existing.rev : 0;
@@ -514,8 +526,11 @@ const app = new Elysia()
     if (incoming.id !== params.id) return { ok: false, error: `session id mismatch (body=${incoming.id}, url=${params.id})` };
     const existing = await col.findOne({ _id: params.id as any }, { projection: { rev: 1 } });
     if (!existing) {
-      await col.updateOne({ _id: params.id as any }, { $set: { session: incoming, updatedAt: new Date(), rev: 1 } }, { upsert: true });
-      return { ok: true, rev: 1 };
+      const c = await col.updateOne({ _id: params.id as any }, { $setOnInsert: { session: incoming, updatedAt: new Date(), rev: 1 } }, { upsert: true });
+      if (c.upsertedCount && c.upsertedCount > 0) return { ok: true, rev: 1 };
+      const d = await col.findOne({ _id: params.id as any }, { projection: { rev: 1 } });
+      set.status = 409;
+      return { ok: false, conflict: true, currentRev: d?.rev ?? 0, error: 'created concurrently' };
     }
     const cur = existing.rev ?? 0;
     if (baseRev !== cur) {
@@ -669,8 +684,11 @@ const app = new Elysia()
     try {
       const system = assembleSystemPrompt(b.context);
       const max_tokens = b.max_tokens ?? (b.context.mode === 'dialogue' ? 1200 : 2500);
+      // explicit nudge: ฉาก R18 ที่ดูเข้าโซนสัมผัส/สอดใส่ → แทรกคำสั่ง lexicon ท้ายสุด (สูตร D เดียวกับแชท)
+      // นิยาย system prompt ยาวกว่าแชทมาก → recency-drift จากคำดิบยิ่งง่าย จึงต้องย้ำท้ายสุดเช่นกัน
+      const lexNudge = (b.context.mode === 'r18' && looksExplicit(b.user_input, b.context.eventCurrent)) ? R18_LEX_NUDGE : '';
       // anti-drift: ย้ำกฎสำคัญท้าย user message (recency) — กันเสียง/ชุด/ฟอร์แมตหลุดตอน prose ยาว
-      const userMsg = `${b.user_input}\n\n${buildNovelReminder(b.context)}`;
+      const userMsg = `${b.user_input}${lexNudge}\n\n${buildNovelReminder(b.context)}`;
       const out = await callAI({
         system,
         user: userMsg,
@@ -767,7 +785,7 @@ const app = new Elysia()
       const stateNudge = trackState ? '\n\n[ระบบ: ปิดท้ายคำตอบนี้ด้วยบรรทัด [[state: ...]] เสมอ — สรุปเฉพาะสิ่งที่เปลี่ยน หรือ [[state: none]] ถ้าไม่เปลี่ยน]' : '';
       // explicit nudge: เฉพาะฉาก R18 (char mode) — "แซนด์วิช" คำสั่ง lexicon ท้ายสุด (recency) ดันให้ Gemma เลิกเลี่ยงคำ. ทดสอบแล้วได้ผลเฉพาะเมื่อมีทั้ง reminder+nudge (สูตร D)
       const lexNudge = (b.mode !== 'narrator' && looksExplicit(b.user_input, b.history?.slice(-1)[0]?.content))
-        ? '\n\n[ระบบ R18: ฉากนี้ถึงจุดสัมผัส/ออรัล/สอดใส่ — เรียกอวัยวะด้วยคำดิบทันที (ชาย: ควย/หัวควย · หญิง: หี/เม็ดแตด · หัวนม/นม/ตูด · เสร็จ: แตก/น้ำเงี่ยน) ห้ามเลี่ยงเป็น ความร้อน/ตรงนั้น/ส่วนนั้น/เติมเต็ม/จุดศูนย์กลาง/แก่นกาย/ระหว่างขา แม้ตัวละครจะฝืนใจ. ตัวอย่างระดับความดิบที่ต้องการ: *เธอครางลั่นเมื่อควยเสียบหีจนมิด* "อา...เข้ามาอีกสิ"]'
+        ? R18_LEX_NUDGE
         : '';
       const userMsg = `${reminder}\n\n${b.user_input}${lexNudge}${stateNudge}`;
       const max_tokens = b.max_tokens ?? 700;
@@ -819,7 +837,7 @@ const app = new Elysia()
         }));
         tx();
       }
-      return { ok: true, count: rows.length, embedded: !!vecs };
+      return { ok: true, count: rows.length, embedded: !!vecs, embedConfigured: embedConfigured(), embedError: vecs ? null : (lastEmbedError()?.error ?? null) };
     } catch (e: any) { return { ok: false, error: e.message }; }
   })
 
@@ -832,7 +850,7 @@ const app = new Elysia()
       const vecs = await embedTexts(b.rows.map((r) => r.text));
       const rows: MemRow[] = b.rows.map((r, i) => ({ ...r, kind: b.kind ?? 'chat', embedding: vecs ? vecs[i] : null }));
       ingestMemory(db, rows);
-      return { ok: true, count: rows.length, embedded: !!vecs };
+      return { ok: true, count: rows.length, embedded: !!vecs, embedConfigured: embedConfigured(), embedError: vecs ? null : (lastEmbedError()?.error ?? null) };
     } catch (e: any) { return { ok: false, error: e.message }; }
   })
 
@@ -846,14 +864,29 @@ const app = new Elysia()
     try {
       const db = getMemDb();
       const queryVec = await embedOne(b.query);
+      // มี vector (semantic แม่นกว่า FTS trigram ที่ภาษาไทยมัก match substring มั่ว) → ถ่วง vec มากกว่า
+      // ไม่มี vector → recall() ปรับ wFts เป็นเต็มเองภายใน. wRecency บูสต์ความจำสดเล็กน้อย
       const hits = recall(db, {
         scopeId: b.scopeId, query: b.query, queryVec, activeChar: b.activeChar,
-        narratorMode: b.mode === 'narrator', excludeFromIdx: b.excludeFromIdx ?? 0, k: b.k ?? 6, wFts: 0.5, wVec: 0.5,
+        narratorMode: b.mode === 'narrator', excludeFromIdx: b.excludeFromIdx ?? 0, k: b.k ?? 6,
+        wFts: queryVec ? 0.35 : 1, wVec: queryVec ? 0.65 : 0, wRecency: 0.12,
       });
       // budget ~600 token ≈ ตัด text ที่ยาวเกิน 300 ตัวอักษร/ก้อน (k=6 × 300 ≈ คงงบเดิม)
       const memories = hits.map((h) => `[เทิร์น ${h.turnIdx}] ${h.text.slice(0, 300)}`);
       return { ok: true, memories };
     } catch (e: any) { return { ok: false, error: e.message, memories: [] }; }
+  })
+
+  // --- RAG memory: ลบ (ใช้ตอน regen ทับข้อความเก่า / ลบข้อความ → ล้าง index กัน id เพี้ยน) ---
+  // body: { scopeId, ids?: string[] } — ส่ง ids = ลบเฉพาะก้อนนั้น (regen), ไม่ส่ง = ล้างทั้ง scope (หลังลบข้อความ ให้ backfill สร้างใหม่)
+  .post('/api/chat/memory/delete', ({ body }) => {
+    const b = body as { scopeId?: string; ids?: string[] };
+    try {
+      const db = getMemDb();
+      if (b?.ids?.length) { deleteMemory(db, b.ids); return { ok: true, deleted: b.ids.length, mode: 'ids' }; }
+      if (b?.scopeId) { deleteScope(db, b.scopeId); return { ok: true, mode: 'scope' }; }
+      return { ok: false, error: 'ต้องส่ง ids[] หรือ scopeId อย่างน้อยหนึ่ง' };
+    } catch (e: any) { return { ok: false, error: e.message }; }
   })
 
   // --- RAG memory: status (เช็คบน prod ว่า hybrid เปิดไหม + มีข้อมูลกี่แถว) — ไม่มี secret/เนื้อหา ---
@@ -870,6 +903,9 @@ const app = new Elysia()
         embedModel: process.env.EMBED_MODEL ?? null,
         embedDim: Number(process.env.EMBED_DIM ?? 512),
         rows: total, embeddedRows: embedded, scopes,
+        // ถ้าตั้งค่า embedding แล้วแต่ยิงพลาด (key ผิด/429/บัญชีโดนแบน R18) จะโผล่ที่นี่ — แยกจาก "ไม่ได้ตั้งค่า"
+        embedError: lastEmbedError()?.error ?? null,
+        embedErrorAt: lastEmbedError()?.at ?? null,
       };
     } catch (e: any) { return { ok: false, error: e.message }; }
   })
@@ -981,7 +1017,7 @@ const app = new Elysia()
         system: b.system ?? '',
         user: b.user,
         response: '',
-        provider: DEFAULT_PROVIDER,
+        provider: providerForLog((b as any).provider),
         model: '',
         usage: null,
         temperature: b.temperature ?? 0.9,
@@ -1248,7 +1284,7 @@ const app = new Elysia()
     const userMsg = `Character name: ${params.name}\nVisual fields:\n${JSON.stringify(visual, null, 2)}`;
     const t0 = Date.now();
     try {
-      const out = await callAI({ system: ANCHOR_SYSTEM, user: userMsg, temperature: 0.4, max_tokens: 800 });
+      const out = await callAI({ system: ANCHOR_SYSTEM, user: userMsg, provider: visual.provider, temperature: 0.4, max_tokens: 800 });
       let parsed: any = null;
       try {
         const m = out.text.match(/\{[\s\S]*\}/);
@@ -1279,6 +1315,7 @@ const app = new Elysia()
       style?: 'anime' | 'photoreal';
       intensity?: 'sfw' | 'r18_soft' | 'r18_explicit';
       pose_preset?: string;
+      provider?: string;
     };
     if (!b?.scene_text || !b?.character_names?.length) {
       return { ok: false, error: 'scene_text + character_names[] required' };
@@ -1321,7 +1358,7 @@ const app = new Elysia()
 
     const t0 = Date.now();
     try {
-      const out = await callAI({ system: SCENE_SYSTEM, user: userMsg, temperature: 0.6, max_tokens: 1800 });
+      const out = await callAI({ system: SCENE_SYSTEM, user: userMsg, provider: b.provider, temperature: 0.6, max_tokens: 1800 });
       let parsed: any = null;
       try {
         const m = out.text.match(/\{[\s\S]*\}/);
