@@ -513,6 +513,8 @@ export function ChatScreen() {
       }
       return next;
     });
+    // RAG: เคลียร์ session ออกจาก gate → backfill effect รันใหม่ → syncScope ลบ row ที่หายไป (heal การลบ)
+    backfilledRef.current.delete(sessionId);
   };
 
   // regen "คำตอบ AI" — ลบคำตอบนั้น (และอะไรที่อยู่หลัง) แล้วยิงใหม่จากบริบทเดิม โดยคงข้อความผู้เล่นไว้
