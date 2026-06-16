@@ -866,10 +866,12 @@ const app = new Elysia()
       const queryVec = await embedOne(b.query);
       // มี vector (semantic แม่นกว่า FTS trigram ที่ภาษาไทยมัก match substring มั่ว) → ถ่วง vec มากกว่า
       // ไม่มี vector → recall() ปรับ wFts เป็นเต็มเองภายใน. wRecency บูสต์ความจำสดเล็กน้อย
+      // fusion: env MEM_FUSION = 'rrf' | 'weighted' (default weighted) — สลับเพื่อ A/B ได้โดยไม่ต้องแก้โค้ด
+      const fusion = process.env.MEM_FUSION === 'rrf' ? 'rrf' : 'weighted';
       const hits = recall(db, {
         scopeId: b.scopeId, query: b.query, queryVec, activeChar: b.activeChar,
         narratorMode: b.mode === 'narrator', excludeFromIdx: b.excludeFromIdx ?? 0, k: b.k ?? 6,
-        wFts: queryVec ? 0.35 : 1, wVec: queryVec ? 0.65 : 0, wRecency: 0.12,
+        wFts: queryVec ? 0.35 : 1, wVec: queryVec ? 0.65 : 0, wRecency: 0.12, fusion,
       });
       // budget ~600 token ≈ ตัด text ที่ยาวเกิน 300 ตัวอักษร/ก้อน (k=6 × 300 ≈ คงงบเดิม)
       const memories = hits.map((h) => `[เทิร์น ${h.turnIdx}] ${h.text.slice(0, 300)}`);

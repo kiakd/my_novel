@@ -129,9 +129,12 @@ export interface RecallQuery {
   scopeId: string; query: string; queryVec: Float32Array | null; activeChar: string;
   narratorMode: boolean; excludeFromIdx: number; k: number; wFts: number; wVec: number;
   wRecency?: number; // ถ่วงความจำที่สดกว่าเล็กน้อย (turnIdx สูง = ใหม่). default 0 = ปิด
+  fusion?: 'weighted' | 'rrf'; // วิธีรวมสัญญาณ FTS+vector. default 'weighted'. rrf = robust กว่า (ใช้อันดับ ไม่ใช่ค่าดิบ)
 }
 
-/** hybrid: FTS + (optional) vector → normalize → weighted rerank → top-K */
+const RRF_K = 60; // ค่าคงที่มาตรฐาน RRF — กันหารศูนย์ + คุมน้ำหนักของอันดับท้าย ๆ
+
+/** hybrid: FTS + (optional) vector → fuse (weighted-normalize หรือ RRF) → recency → top-K */
 export function recall(db: Database, q: RecallQuery): MemHit[] {
   const N = Math.max(q.k * 5, 20); // ดึงผู้สมัครเผื่อ rerank (กว้างพอให้ dedup FTS∩vector แล้วยังเหลือ rerank)
   const ftsHits = ftsSearch(db, { scopeId: q.scopeId, query: q.query, activeChar: q.activeChar, narratorMode: q.narratorMode, excludeFromIdx: q.excludeFromIdx, limit: N });
@@ -139,30 +142,43 @@ export function recall(db: Database, q: RecallQuery): MemHit[] {
     ? vectorSearch(db, { scopeId: q.scopeId, queryVec: q.queryVec, activeChar: q.activeChar, narratorMode: q.narratorMode, excludeFromIdx: q.excludeFromIdx, limit: N })
     : [];
 
-  // FTS-only (queryVec=null): ให้ FTS กินน้ำหนักเต็ม [0,1] ไม่งั้นคะแนนสูงสุดถูกตรึงที่ wFts (เช่น 0.35)
+  // FTS-only (queryVec=null): ให้ FTS กินน้ำหนักเต็ม ไม่งั้นคะแนนสูงสุดถูกตรึงที่ wFts (เช่น 0.35)
   const wFts = q.queryVec ? q.wFts : 1;
   const wVec = q.queryVec ? q.wVec : 0;
   const wRec = q.wRecency ?? 0;
 
   const score = new Map<string, { hit: MemHit; s: number }>();
-  // FTS: normalize bm25 rank → [0,1] (rank ของ FTS5 ยิ่ง "ติดลบมาก" ยิ่งตรง — ใช้ magnitude จริง
-  // แทนตำแหน่งอันดับ เพื่อให้ exact/near match ของ "ชื่อเฉพาะ" ได้คะแนนเด่นกว่า match อ่อน ๆ)
-  if (ftsHits.length > 0) {
-    const ranks = ftsHits.map((h) => h.ftsRank ?? 0);
-    const best = Math.min(...ranks), worst = Math.max(...ranks); // best = ติดลบสุด
-    ftsHits.forEach((h) => {
-      const r = h.ftsRank ?? 0;
-      const norm = worst === best ? 1 : (worst - r) / (worst - best); // best→1, worst→0
-      score.set(h.id, { hit: h, s: wFts * norm });
+  if (q.fusion === 'rrf') {
+    // RRF: คะแนน = w/(K+อันดับ) — ทนทานกว่า ไม่ต้อง normalize ค่าดิบ; ก้อนที่ติดทั้งสองสัญญาณรวมคะแนนเด่นขึ้น
+    // ftsHits เรียงตาม FTS rank แล้ว, vecHits เรียงตาม cosine แล้ว → ใช้ index เป็นอันดับได้ตรง
+    ftsHits.forEach((h, rank) => {
+      score.set(h.id, { hit: h, s: wFts / (RRF_K + rank) });
+    });
+    vecHits.forEach((h, rank) => {
+      const s = wVec / (RRF_K + rank);
+      const ex = score.get(h.id);
+      if (ex) { ex.s += s; ex.hit = { ...ex.hit, cos: h.cos }; }
+      else score.set(h.id, { hit: h, s });
+    });
+  } else {
+    // weighted-normalize (default): FTS bm25 rank → [0,1] (magnitude จริง ให้ชื่อเฉพาะที่ match แน่นเด่นกว่า match อ่อน)
+    if (ftsHits.length > 0) {
+      const ranks = ftsHits.map((h) => h.ftsRank ?? 0);
+      const best = Math.min(...ranks), worst = Math.max(...ranks); // best = ติดลบสุด
+      ftsHits.forEach((h) => {
+        const r = h.ftsRank ?? 0;
+        const norm = worst === best ? 1 : (worst - r) / (worst - best); // best→1, worst→0
+        score.set(h.id, { hit: h, s: wFts * norm });
+      });
+    }
+    // vector: cosine [−1,1] → [0,1]
+    vecHits.forEach((h) => {
+      const cs = wVec * (((h.cos ?? 0) + 1) / 2);
+      const ex = score.get(h.id);
+      if (ex) { ex.s += cs; ex.hit = { ...ex.hit, cos: h.cos }; } // match ทั้งสองทาง: รวมคะแนน + ติด cos
+      else score.set(h.id, { hit: h, s: cs });
     });
   }
-  // vector: cosine [−1,1] → [0,1]
-  vecHits.forEach((h) => {
-    const cs = wVec * (((h.cos ?? 0) + 1) / 2);
-    const ex = score.get(h.id);
-    if (ex) { ex.s += cs; ex.hit = { ...ex.hit, cos: h.cos }; } // match ทั้งสองทาง: รวมคะแนน + ติด cos ไว้ด้วย
-    else score.set(h.id, { hit: h, s: cs });
-  });
 
   // recency tiebreak: บูสต์ความจำที่สดกว่าเล็กน้อย (กันของเก่าที่ keyword ซ้ำ แย่งอันดับจากเหตุการณ์ล่าสุด)
   if (wRec > 0 && score.size > 1) {
