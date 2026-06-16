@@ -34,6 +34,7 @@ export interface BuildOpts {
   chapterNum: number;   // 1-based — ใช้ดึงสรุปบทก่อนหน้าเป็น eventOrder
   provider?: string;    // 'lmstudio'/local → cap eventOrder กัน ctx ล้น 8K (cloud ไม่ cap แรง)
   recalled?: string[];  // ความจำระยะยาว (RAG) ที่ recall มา → ฉีดเข้า prompt ผ่าน ctx.recalled
+  concise?: boolean;    // โหมดกระชับ — ลดพรรณนาฟุ่มเฟือย เน้นบทสนทนา/การกระทำ
 }
 
 // local (Gemma 8K) เก็บ eventOrder ได้น้อย ไม่งั้น ctx ล้น — cloud เก็บได้เยอะ
@@ -95,6 +96,7 @@ export function buildNovelContext(story: Story, opts: BuildOpts) {
       .map((r) => ({ charName: nameOf(r.from!), toUser: nameOf(r.to!), feeling: [r.type, r.feeling].filter(Boolean).join(' — ') })),
     eventOrder: prev.length ? prev : undefined,
     recalled: opts.recalled?.length ? opts.recalled : undefined,
+    concise: opts.concise || undefined,
     eventCurrent: opts.eventCurrent,
     narrator: protagonist?.name,   // โหมดนิยายเต็ม: เล่าจากมุมมองตัวเอก AI เขียนทุกตัวละคร ไม่มี {{user}}
     pov: story.pov,                // ส่งต่อมุมมองให้ backend (ไม่ตั้ง → backend default '1st') กัน "เขียนต่อ" หลุดเป็น pov 1

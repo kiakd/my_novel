@@ -1,5 +1,5 @@
 // Khui-style prompt assembler — รวม base + mode + character + setting → system prompt
-import { RULE_ADULT, RULE_NO_META, RULE_R18_LEXICON, RULE_CONTINUITY } from './shared-rules';
+import { RULE_ADULT, RULE_NO_META, RULE_R18_LEXICON, RULE_CONTINUITY, RULE_CONCISE } from './shared-rules';
 import { renderStateCard, STATE_DELTA_INSTRUCTION, type StateCard } from './state-card';
 
 export type Mode = 'novel' | 'dialogue' | 'r18';
@@ -88,6 +88,7 @@ export interface NovelContext {
   narrator?: string;     // โหมด "นิยายเต็ม": ชื่อตัวละครที่เรื่องติดตาม — AI เขียนทุกตัวละคร ไม่มี {{user}}
   pov?: '1st' | '3rd';   // มุมมองเล่าในโหมดนิยายเต็ม: '1st'=บุคคลที่หนึ่ง (default) · '3rd'=บุคคลที่สาม limited ติดตาม narrator
   recalled?: string[];   // RAG long-term memory: เหตุการณ์เก่าที่กู้คืนตามความเกี่ยวข้อง (เฟส 2 — scope=storyId) จัดอันดับ "ใต้" live state
+  concise?: boolean;     // โหมดกระชับ (opt-in): ลดพรรณนาฟุ่มเฟือย เน้นบทสนทนา+การกระทำ จังหวะเร็ว (override ratio ของ mode)
   mode: Mode;
 }
 
@@ -269,11 +270,15 @@ function novelFrame(narrator: string, pov: '1st' | '3rd' = '1st'): string {
  *  system prompt ยาว → โมเดลดริฟต์เสียง/ชุด/ฟอร์แมตตอน prose ยาว ๆ การย้ำท้ายสุด (ตำแหน่งอิทธิพลสูง) ช่วยตรึง */
 export function buildNovelReminder(ctx: NovelContext): string {
   const who = ctx.narrator?.trim() || ctx.protagonist.name;
-  const ratio = ctx.mode === 'dialogue'
-    ? 'บทพูด 75% บรรยาย 25%'
-    : ctx.mode === 'r18'
-      ? 'บรรยาย 65% บทพูด 35% + เรียกอวัยวะด้วยคำดิบเมื่อถึงฉากสัมผัส/สอดใส่'
-      : 'บรรยาย 70% บทพูด 30% เน้นประสาทสัมผัส';
+  const ratio = ctx.concise
+    ? (ctx.mode === 'r18'
+        ? 'กระชับ เน้นบทสนทนา+การกระทำ ลดพรรณนา + เรียกอวัยวะด้วยคำดิบเมื่อถึงฉากสัมผัส/สอดใส่'
+        : 'กระชับ เน้นบทสนทนา+การกระทำที่เดินเรื่อง ประโยคสั้น ลดพรรณนาฟุ่มเฟือย')
+    : ctx.mode === 'dialogue'
+      ? 'บทพูด 75% บรรยาย 25%'
+      : ctx.mode === 'r18'
+        ? 'บรรยาย 65% บทพูด 35% + เรียกอวัยวะด้วยคำดิบเมื่อถึงฉากสัมผัส/สอดใส่'
+        : 'บรรยาย 70% บทพูด 30% เน้นประสาทสัมผัส';
   const povNote = ctx.narrator
     ? ctx.pov === '3rd'
       ? `เล่าบุคคลที่ 3 ติดตาม "${who}" (บรรยายใช้เขา/เธอ · สรรพนามบุรุษ 1 เฉพาะบทพูด/ความคิด)`
@@ -298,6 +303,12 @@ export function assembleSystemPrompt(ctx: NovelContext): string {
   parts.push(
     '',
     modeBlock(ctx.mode),
+  );
+  // โหมดกระชับ: override ratio/สไตล์ของ mode ด้านบน (วางถัดจาก modeBlock ให้มีน้ำหนักทับ ratio เดิม)
+  if (ctx.concise) {
+    parts.push('', `=== ⚠️ OVERRIDE สไตล์: โหมดกระชับ (ทับ ratio/narr_style ของ Mode ด้านบน) ===\n${RULE_CONCISE}\n- ลดสัดส่วน "บรรยาย" ลง เพิ่ม "บทสนทนา/การกระทำ" · ตัด sensory_detail/literary_prose ที่ไม่จำเป็นออก · ความยาวต่อย่อหน้าสั้นลง`);
+  }
+  parts.push(
     '',
     '=== โลก/setting ===',
     settingXml(ctx.setting),

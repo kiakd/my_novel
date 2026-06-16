@@ -47,6 +47,7 @@ export const sendChat = (body: {
   playerPersona?: { name?: string; role?: string; appearance?: string };  // บทบาทของผู้เล่นในแชทนี้
   mode?: 'char' | 'narrator';
   recalled?: string[];   // ความทรงจำที่ recall มา — ฉีดเข้า prompt
+  concise?: boolean;     // โหมดกระชับ — ลดพรรณนา เน้นบทสนทนา/การกระทำ
   provider?: string;
   max_tokens?: number;
   temperature?: number;

@@ -14,6 +14,7 @@ import { ExpandPanel } from './ExpandPanel';
 import { ContinueMenu, type ContinueKind } from './ContinueMenu';
 import { generate, generateRoleplay, memBackfillNovel, memIngestNovel, memRecallNovel } from '@/lib/api';
 import { buildNovelContext, cleanRoleplayArtifacts } from '@/lib/novel-context';
+import { useConciseMode } from '@/lib/uiPrefs';
 
 const LS_LIST_OPEN = 'ns_chapterlist_open';
 const LS_PROVIDER = 'ns_gen_provider';
@@ -63,6 +64,7 @@ export function ChaptersScreen() {
   const [contOpen, setContOpen] = useState(false);
   const [listOpen, setListOpen] = useState(true);
   const [provider, setProviderState] = useState<GenProvider>('deepseek');
+  const { concise, set: setConcise } = useConciseMode();
   // รีวิว: ผลวิจารณ์บท → โชว์ใน modal (null = ปิด)
   const [review, setReview] = useState<string | null>(null);
   // RAG: backfill ความจำของเรื่องครั้งแรกที่เปิด/โหลด (idempotent ฝั่ง server) — key ด้วย story.id
@@ -249,7 +251,7 @@ export function ChaptersScreen() {
           } catch { /* degrade: ไม่มี recall ก็เจนปกติ */ }
         }
       }
-      const ctx = buildNovelContext(st, { mode, eventCurrent, chapterNum, provider, recalled });
+      const ctx = buildNovelContext(st, { mode, eventCurrent, chapterNum, provider, recalled, concise });
       // local ช้า + ctx เล็ก → ขอ output สั้นลง
       const maxTokens = isLocal ? (mode === 'r18' ? 1500 : 1200) : (mode === 'r18' ? 2600 : 2200);
       const r = await generateRoleplay({ context: ctx, user_input: `เขียนต่อบท "${active.title || ''}"`, provider, max_tokens: maxTokens, prefill: prefill || undefined });
@@ -345,7 +347,7 @@ export function ChaptersScreen() {
       </div>
       {active && <AIBar onAct={act} onExpand={openExpand} onContinue={() => setContOpen(true)} busy={busy} />}
       <ExpandPanel open={expandOpen} onClose={() => setExpandOpen(false)} initialDraft={expandDraft} chapterNum={active ? chapters.indexOf(active) + 1 : 1} onInsert={insertExpanded} />
-      <ContinueMenu open={contOpen} onClose={() => setContOpen(false)} onPick={runContinue} busy={busy} provider={provider} onProvider={setProvider} />
+      <ContinueMenu open={contOpen} onClose={() => setContOpen(false)} onPick={runContinue} busy={busy} provider={provider} onProvider={setProvider} concise={concise} onConcise={setConcise} />
       <Modal open={review != null} onClose={() => setReview(null)} size="md">
         <div className="p-6">
           <div className="flex items-center gap-2 mb-3 font-display text-xl font-semibold text-ink">🔍 {t('chapters.aiReview')}</div>

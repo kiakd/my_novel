@@ -6,7 +6,7 @@ import { useChat } from '@/lib/store/ChatProvider';
 import { sendChat, summarizeChat, judgeRel, chatSceneImage, extractState, generatePlayerPersona, memBackfill, memIngest, memRecall, memDelete } from '@/lib/chat-api';
 import { applyItem, parseRelTag, clampRel, relLevel, floorRel, stepRel } from '@/lib/chat-rel';
 import { activateLore, LORE_SCAN_DEPTH } from '@/lib/chat-lore';
-import { useChatFontSize, useChatProvider } from '@/lib/uiPrefs';
+import { useChatFontSize, useChatProvider, useConciseMode } from '@/lib/uiPrefs';
 import type { ChatChar, ChatItem, ChatMsg, ChatSession, ChatStateCard, PlayerPersona } from '@/lib/chat-types';
 import { emptyLiveState, renderLiveStateLines } from '@/lib/live-state';
 import type { LiveState } from '@/lib/live-state';
@@ -61,6 +61,7 @@ export function ChatScreen() {
   const [personaDraft, setPersonaDraft] = useState<PlayerPersona | null>(null); // draft บทบาทผู้เล่น (gate บังคับ + แก้ในsettings)
   const [personaBusy, setPersonaBusy] = useState(false);                  // กำลังให้ AI กรอกบทบาท
   const { provider, set: setProvider } = useChatProvider();
+  const { concise, set: setConcise } = useConciseMode();
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastMsgRef = useRef<HTMLDivElement>(null);   // ต้นของข้อความล่าสุด (เพื่อเลื่อนให้คำตอบ AI ขึ้นบน)
   const prevViewRef = useRef(view);
@@ -377,7 +378,7 @@ export function ChatScreen() {
         recalled = recalled.filter((mem) => !rawTexts.some((t) => t.includes(mem) || mem.includes(t)));
         if (!recalled.length) recalled = undefined;
       }
-      const r = await sendChat({ char: sessChar, history, user_input: userInput, rel: baseRel, summary: summary || undefined, lore: pickLore(raw, userInput), state: stateToText(session?.stateCard), stateCard: session?.liveState ?? emptyLiveState(), playerPersona: session?.playerPersona, provider, recalled, max_tokens: maxTok ?? 1500 });
+      const r = await sendChat({ char: sessChar, history, user_input: userInput, rel: baseRel, summary: summary || undefined, lore: pickLore(raw, userInput), state: stateToText(session?.stateCard), stateCard: session?.liveState ?? emptyLiveState(), playerPersona: session?.playerPersona, provider, recalled, concise, max_tokens: maxTok ?? 1500 });
       if (r.ok && r.text) {
         const { text } = parseRelTag(r.text);   // ตัดแท็กออกถ้าโมเดลเผลอใส่ (ตอนนี้ใช้ judge ประเมินแทน) — backend strip แท็ก [[state:]] ให้แล้ว
         const at = snapAt(r.stateCard);          // เก็บเวลา/สถานที่ ณ จังหวะคำตอบนี้
@@ -470,7 +471,7 @@ export function ChatScreen() {
         recalled = recalled.filter((mem) => !rawTexts.some((t) => t.includes(mem) || mem.includes(t)));
         if (!recalled.length) recalled = undefined;
       }
-      const r = await sendChat({ char: sessChar, history, user_input: userInput, rel, summary: fullSummary || undefined, lore: pickLore(merged, userInput), state: stateToText(session?.stateCard), playerPersona: session?.playerPersona, mode: 'narrator', provider, recalled, max_tokens: 1500 });
+      const r = await sendChat({ char: sessChar, history, user_input: userInput, rel, summary: fullSummary || undefined, lore: pickLore(merged, userInput), state: stateToText(session?.stateCard), playerPersona: session?.playerPersona, mode: 'narrator', provider, recalled, concise, max_tokens: 1500 });
       if (r.ok && r.text) {
         const { text: out } = parseRelTag(r.text);
         const at = snapAt();
@@ -784,6 +785,14 @@ export function ChatScreen() {
               </button>
             ))}
           </div>
+          {/* โหมดกระชับ — global pref (localStorage) ใช้ร่วมกับนิยาย: ลดพรรณนา เน้นบทพูด/การกระทำ */}
+          <label className="flex items-start gap-2.5 cursor-pointer select-none mt-1">
+            <input type="checkbox" checked={concise} onChange={(e) => setConcise(e.target.checked)} className="accent-grape mt-0.5" />
+            <span className="flex flex-col">
+              <span className="text-[13px] font-bold text-ink">✂️ โหมดกระชับ (ลดพรรณนา เน้นบทสนทนา)</span>
+              <span className="text-[11.5px] text-muted leading-snug">เปิดเพื่อให้ AI เขียนพรรณนาฟุ่มเฟือยน้อยลง เน้นบทพูด+การกระทำ (มีผลกับทุกแชทและการเขียนนิยาย)</span>
+            </span>
+          </label>
         </Card>
         {/* บทบาทของผู้เล่น — ตัวตนที่ผู้เล่นสวมในแชทนี้ (ฉีดเข้า prompt ให้ตัวละครโต้ตอบตามบท) */}
         <Card className="p-4 sm:p-5 flex flex-col gap-2.5 mb-3">

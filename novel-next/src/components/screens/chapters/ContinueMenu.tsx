@@ -13,6 +13,8 @@ interface ContinueMenuProps {
   busy: boolean;
   provider: GenProvider;
   onProvider: (p: GenProvider) => void;
+  concise: boolean;
+  onConcise: (v: boolean) => void;
 }
 
 const PROVIDERS: { id: GenProvider; label: string; sub: string }[] = [
@@ -21,7 +23,7 @@ const PROVIDERS: { id: GenProvider; label: string; sub: string }[] = [
 ];
 
 /** เมนูเลือกวิธีเขียนต่อบท — ปุ่มใหญ่ กดง่ายบนมือถือ */
-export function ContinueMenu({ open, onClose, onPick, busy, provider, onProvider }: ContinueMenuProps) {
+export function ContinueMenu({ open, onClose, onPick, busy, provider, onProvider, concise, onConcise }: ContinueMenuProps) {
   const { t } = useI18n();
   const opts: { kind: ContinueKind; emoji: string; color: string; title: string; sub: string }[] = [
     { kind: 'continue', emoji: '📖', color: 'sky', title: t('chapters.continue.perChapter'), sub: t('chapters.continue.perChapterSub') },
@@ -57,6 +59,15 @@ export function ContinueMenu({ open, onClose, onPick, busy, provider, onProvider
             );
           })}
         </div>
+
+        {/* โหมดกระชับ — ลดพรรณนา เน้นบทสนทนา/การกระทำ (global pref ใช้ร่วมกับแชท) */}
+        <label className="flex items-start gap-2.5 cursor-pointer select-none">
+          <input type="checkbox" checked={concise} disabled={busy} onChange={(e) => onConcise(e.target.checked)} className="accent-grape mt-0.5" />
+          <span className="flex flex-col">
+            <span className="text-[13px] font-bold text-ink">✂️ โหมดกระชับ (ลดพรรณนา เน้นบทสนทนา)</span>
+            <span className="text-[11.5px] text-muted leading-snug">เขียนพรรณนาฟุ่มเฟือยน้อยลง เน้นบทพูด+การกระทำ (มีผลกับทุกแชทและการเขียนนิยาย)</span>
+          </span>
+        </label>
 
         <div className="flex flex-col gap-2.5">
           {opts.map((o) => {

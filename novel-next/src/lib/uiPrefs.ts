@@ -46,3 +46,22 @@ export function useChatProvider() {
 
   return { provider, set };
 }
+
+// ============ โหมดกระชับ — ลดพรรณนาฟุ่มเฟือย เน้นบทสนทนา+การกระทำ (global pref) ============
+const LS_CONCISE = 'ns_concise';
+
+/** โหมดกระชับ: ให้ AI เขียนพรรณนาน้อยลง เน้นบทพูด/การกระทำ — ใช้ร่วมทั้งแชทและนิยาย เก็บถาวร (default ปิด) */
+export function useConciseMode() {
+  const [concise, setConcise] = useState(false);
+
+  useEffect(() => {
+    try { if (localStorage.getItem(LS_CONCISE) === '1') setConcise(true); } catch { /* ignore */ }
+  }, []);
+
+  const set = useCallback((v: boolean) => setConcise(() => {
+    try { localStorage.setItem(LS_CONCISE, v ? '1' : '0'); } catch { /* ignore */ }
+    return v;
+  }), []);
+
+  return { concise, set };
+}

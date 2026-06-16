@@ -13,3 +13,14 @@ test('ไม่มี recalled → ไม่มี section', () => {
   const sys = assembleChatPrompt(char, 0);
   expect(sys).not.toContain('ความทรงจำที่เกี่ยวข้อง');
 });
+
+test('concise=true → ใส่กฎโหมดกระชับ + ไม่บังคับ "ตอบยาวเสมอ"', () => {
+  const sys = assembleChatPrompt(char, 0, undefined, false, undefined, undefined, false, undefined, undefined, true);
+  expect(sys).toContain('กระชับ');
+  expect(sys).not.toContain('ต้องตอบยาว');
+});
+
+test('concise=false (default) → ยังเป็นสไตล์ยาวเดิม', () => {
+  const sys = assembleChatPrompt(char, 0);
+  expect(sys).toContain('เขียนให้ยาวและมีเนื้อ');
+});

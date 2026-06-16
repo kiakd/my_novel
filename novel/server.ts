@@ -757,6 +757,7 @@ const app = new Elysia()
       prefill?: string;
       temperature?: number;
       max_tokens?: number;
+      concise?: boolean;     // โหมดกระชับ — ลดพรรณนา เน้นบทสนทนา/การกระทำ
     };
     if (!b?.char?.name) return { ok: false, error: 'missing "char.name"' };
     if (!b?.user_input) return { ok: false, error: 'missing "user_input"' };
@@ -772,15 +773,15 @@ const app = new Elysia()
       const liveText = b.stateCard ? renderStateCard(b.stateCard) : undefined;
       const stateText = [liveText, b.state].filter(Boolean).join('\n') || undefined;
       const system = b.mode === 'narrator'
-        ? assembleNarratorPrompt(b.char, b.summary, compact, b.lore, stateText, b.playerPersona)
-        : assembleChatPrompt(b.char, rel, b.summary, compact, b.lore, stateText, trackState, b.playerPersona, b.recalled);
+        ? assembleNarratorPrompt(b.char, b.summary, compact, b.lore, stateText, b.playerPersona, b.concise)
+        : assembleChatPrompt(b.char, rel, b.summary, compact, b.lore, stateText, trackState, b.playerPersona, b.recalled, b.concise);
       const history = (b.history ?? []).map((m) => ({
         role: m.role === 'char' ? ('assistant' as const) : ('user' as const),
         content: m.content,
       }));
       // กัน persona drift: แทรกเตือนความจำ "ใกล้ท้าย" prompt ทุกเทิร์น (recency bias — ตำแหน่งท้ายมีอิทธิพลสูงสุด)
       // เป็น server-side เท่านั้น ไม่ถูกเก็บลง history ฝั่ง client
-      const reminder = buildPersonaReminder(b.char, rel, b.mode === 'narrator' ? 'narrator' : 'char', trackState, b.playerPersona);
+      const reminder = buildPersonaReminder(b.char, rel, b.mode === 'narrator' ? 'narrator' : 'char', trackState, b.playerPersona, b.concise);
       // nudge ท้าย user message: ดันให้แท็ก [[state:]] เป็นสิ่งสุดท้ายที่โมเดลเห็น (recency) — cloud อย่าง DeepSeek ลืมใส่บ่อยถ้าไม่ย้ำท้ายสุด
       const stateNudge = trackState ? '\n\n[ระบบ: ปิดท้ายคำตอบนี้ด้วยบรรทัด [[state: ...]] เสมอ — สรุปเฉพาะสิ่งที่เปลี่ยน หรือ [[state: none]] ถ้าไม่เปลี่ยน]' : '';
       // explicit nudge: เฉพาะฉาก R18 (char mode) — "แซนด์วิช" คำสั่ง lexicon ท้ายสุด (recency) ดันให้ Gemma เลิกเลี่ยงคำ. ทดสอบแล้วได้ผลเฉพาะเมื่อมีทั้ง reminder+nudge (สูตร D)
