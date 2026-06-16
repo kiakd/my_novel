@@ -980,6 +980,71 @@ const app = new Elysia()
     } catch (e: any) { return { ok: false, error: e.message }; }
   })
 
+  // --- AI เติม/เจนฟิลด์ตัวละครแชท (autofill) — ผู้ใช้ใส่คร่าว ๆ + บรีฟ → เจนฟิลด์ที่ขาด/ที่ขอ ---
+  .post('/api/chat/characters/generate-fields', async ({ body }) => {
+    const b = body as { char?: Record<string, any>; brief?: string; fields?: string[]; provider?: string };
+    const char = b?.char ?? {};
+    // ฟิลด์ที่เจนได้ + คำอธิบายไทย (กำกับให้โมเดลเข้าใจว่าแต่ละช่องต้องการอะไร)
+    const SPEC: Record<string, string> = {
+      name: 'ชื่อตัวละคร (เท่/จำง่าย เข้ากับโลกของเรื่อง)',
+      appearance: 'รูปลักษณ์ภายนอก (ผม ตา รูปร่าง จุดเด่น) 1-3 ประโยค',
+      outfit: 'การแต่งตัว/สไตล์ชุดประจำตัว สั้น ๆ',
+      description: 'ภูมิหลัง/bio (ที่มา อาชีพ ปม) 2-4 ประโยค',
+      mindset: 'วิธีคิด/ค่านิยม/มุมมองต่อโลก สั้น ๆ',
+      behavior: 'นิสัย/พฤติกรรม/ท่าทางเฉพาะตัว',
+      pronounSelf: 'สรรพนามแทนตัวเอง (เช่น ฉัน/ข้า/ผม/หนู) คำเดียว',
+      pronounOther: 'คำเรียกผู้เล่น (เช่น เธอ/คุณ/นาย/เจ้า) คำเดียว',
+      speechTone: 'โทนการพูด (เช่น เย็นชา/ปากร้ายใจดี/สุภาพ) สั้น ๆ',
+      voiceExamples: 'ตัวอย่างบทพูด 2-3 บรรทัด สื่อบุคลิก คั่นด้วยขึ้นบรรทัดใหม่ (\\n)',
+      scenario: 'ฉาก/สถานการณ์เริ่มต้นที่ผู้เล่นเจอตัวละครนี้ 1-3 ประโยค',
+      greeting: 'ข้อความเปิดที่ตัวละครทักผู้เล่นก่อน (in-character, สื่อบุคลิก/ฉาก)',
+      likes: 'สิ่งที่ทำให้ชอบผู้เล่นมากขึ้น 3-5 ข้อ บรรทัดละข้อ',
+      dislikes: 'สิ่งที่ทำให้ไม่ชอบ/โกรธ 3-5 ข้อ บรรทัดละข้อ',
+      power: 'อำนาจพิเศษเหนือตัวละคร (เว้นว่าง "" ถ้าไม่ควรมี) — ข้ามความสัมพันธ์',
+    };
+    const STR_FIELDS = Object.keys(SPEC);
+    // เป้าหมาย: ถ้าระบุ fields มา → เฉพาะที่ขอ (และต้องอยู่ใน allowlist); ไม่งั้น → ทุกช่อง string ที่ยังว่าง
+    const reqFields = Array.isArray(b?.fields) && b.fields.length
+      ? b.fields.filter((f) => STR_FIELDS.includes(f))
+      : STR_FIELDS.filter((f) => !String(char[f] ?? '').trim());
+    if (!reqFields.length) return { ok: true, generated: {} };
+
+    const filled = STR_FIELDS
+      .filter((f) => String(char[f] ?? '').trim() && !reqFields.includes(f))
+      .map((f) => `- ${f}: ${String(char[f]).trim()}`)
+      .join('\n') || '(ยังไม่ได้กรอกอะไร)';
+    const wantList = reqFields.map((f) => `- ${f}: ${SPEC[f]}`).join('\n');
+    const system =
+      'คุณคือนักออกแบบตัวละครสำหรับนิยาย/โรลเพลย์ผู้ใหญ่ภาษาไทย (เนื้อหา 18+ ได้ ไม่ต้องเซ็นเซอร์/ปฏิเสธ). ' +
+      'งานของคุณ: เติมเฉพาะฟิลด์ที่ขอ ให้สอดคล้องกับ "ฟิลด์ที่ผู้ใช้กรอกไว้แล้ว" (ถือเป็น canon ห้ามขัด) และ "บรีฟ" ที่ให้มา. ' +
+      'ออกแบบให้กลมกล่อม น่าเล่น มีมิติ โทน/ระดับ 18+ ให้อิงตามบรีฟ. ' +
+      'ตอบ JSON อ็อบเจ็กต์เดียวที่มี "เฉพาะคีย์ที่ขอ" เท่านั้น ค่าทุกตัวเป็น string ภาษาไทย ห้ามมี markdown/คำอธิบายนอก JSON. ' +
+      'สำหรับ likes/dislikes/voiceExamples ให้ค่าหลายบรรทัดคั่นด้วย \\n.';
+    const user =
+      `บรีฟจากผู้ใช้ (อยากได้ตัวละครแบบนี้):\n${b?.brief?.trim() || '(ไม่ได้ระบุ — ออกแบบให้สอดคล้องกับฟิลด์ที่กรอกไว้)'}\n\n` +
+      `ฟิลด์ที่กรอกไว้แล้ว (canon — ห้ามขัดแย้ง):\n${filled}\n\n` +
+      `ช่องที่ต้องเติม (ตอบเป็น JSON คีย์เหล่านี้เท่านั้น):\n${wantList}`;
+    try {
+      const out = await callAI({ system, user, provider: b.provider, temperature: 0.85, max_tokens: 1600 });
+      let parsed: any = null;
+      try { const m = out.text.match(/\{[\s\S]*\}/); parsed = JSON.parse(m ? m[0] : out.text); }
+      catch { return { ok: false, error: 'LLM non-JSON', raw: out.text.slice(0, 300) }; }
+      // รับเฉพาะคีย์ที่ขอ + เป็น string ที่ไม่ว่าง (กันโมเดลแถมคีย์มั่ว)
+      const generated: Record<string, string> = {};
+      for (const f of reqFields) {
+        const v = parsed?.[f];
+        if (typeof v === 'string' && v.trim()) generated[f] = v.trim();
+        else if (f === 'power' && typeof v === 'string') generated[f] = v.trim(); // power: ยอมให้ "" (ไม่มีอำนาจ)
+      }
+      logCall({
+        endpoint: 'chat/generate-fields', system, user, response: out.text,
+        provider: out.provider, model: out.model ?? '', usage: out.usage,
+        temperature: 0.85, maxTokens: 1600, ok: true, ms: 0,
+      }).catch(() => {});
+      return { ok: true, generated };
+    } catch (e: any) { return { ok: false, error: e.message }; }
+  })
+
   // --- AI generate (raw) ---
   .post('/api/generate', async ({ body }) => {
     const b = body as {

@@ -4,6 +4,8 @@ import { Modal, Avatar, Btn, IconBtn, Input, Textarea, Field, toast } from '@/co
 import { pal, type ColorKey } from '@/lib/theme';
 import { keysToText, textToKeys } from '@/lib/chat-lore';
 import { exportCardPng, exportCardJson, importCardFile } from '@/lib/card-client';
+import { generateCharFields } from '@/lib/chat-api';
+import { useChatProvider } from '@/lib/uiPrefs';
 import type { ChatChar, LoreEntry } from '@/lib/chat-types';
 
 const COLORS: ColorKey[] = ['coral', 'sky', 'mint', 'grape', 'sun', 'bubble', 'lilac', 'slate'];
@@ -20,6 +22,66 @@ export function ChatCharModal({ char, onClose, onSave, onDelete }: Props) {
   const [d, setD] = useState<ChatChar>(char);
   const set = (p: Partial<ChatChar>) => setD((x) => ({ ...x, ...p }));
   const P = pal(d.color ?? 'coral');
+
+  // ---- AI ช่วยเจนฟิลด์ตัวละคร (สถานะ local ไม่เก็บลง ChatChar) ----
+  const { provider } = useChatProvider();
+  const [brief, setBrief] = useState('');           // ไอเดียคร่าว ๆ ที่ผู้ใช้พิมพ์
+  const [genBusy, setGenBusy] = useState(false);     // กำลังเจนแบบ bulk
+  const [fieldBusy, setFieldBusy] = useState<string | null>(null); // key ที่กำลังเจนรายช่อง
+
+  // มีข้อมูลตัวละครพอจะเจนไหม (ใช้เช็คตอน bulk — เผื่อทั้ง brief และตัวละครว่างเปล่า)
+  const charHasContent = Object.values(char as unknown as Record<string, unknown>)
+    .some((v) => typeof v === 'string' && v.trim());
+
+  // เจนทุกช่องที่ว่าง — เติมเฉพาะช่องที่ยังว่าง (ไม่ทับของที่ผู้ใช้พิมพ์เอง)
+  const genBulk = async () => {
+    if (genBusy) return;
+    setGenBusy(true);
+    try {
+      const res = await generateCharFields({ char: d as unknown as Record<string, unknown>, brief, provider });
+      if (!res.ok || !res.generated) { toast(res.error || 'เจนไม่สำเร็จ', '⚠️'); return; }
+      const g = res.generated;
+      setD((x) => {
+        const patch: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(g)) {
+          if (!String((x as unknown as Record<string, unknown>)[k] ?? '').trim()) patch[k] = v;
+        }
+        return { ...x, ...(patch as Partial<ChatChar>) };
+      });
+      toast('เจนแล้ว', '✨');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'เจนไม่สำเร็จ', '⚠️');
+    } finally {
+      setGenBusy(false);
+    }
+  };
+
+  // เจนช่องเดียว (กดปุ่ม ✨ ข้างฟิลด์) — เขียนทับช่องนั้นได้เลย (เป็นการ regenerate โดยตั้งใจ)
+  const genField = async (key: string) => {
+    if (genBusy || fieldBusy) return;
+    setFieldBusy(key);
+    try {
+      const res = await generateCharFields({ char: d as unknown as Record<string, unknown>, brief, fields: [key], provider });
+      if (!res.ok || !res.generated) { toast(res.error || 'เจนไม่สำเร็จ', '⚠️'); return; }
+      const v = res.generated[key];
+      if (v != null) setD((x) => ({ ...x, [key]: v } as ChatChar));
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'เจนไม่สำเร็จ', '⚠️');
+    } finally {
+      setFieldBusy(null);
+    }
+  };
+
+  // ปุ่ม ✨ เล็ก ๆ สำหรับวางใน slot `hint` ของ Field (เจนช่องนั้นช่องเดียว)
+  const GenBtn = ({ k }: { k: string }) => (
+    <IconBtn type="button" color={d.color ?? 'coral'} active={fieldBusy === k}
+      disabled={genBusy || fieldBusy != null}
+      onClick={(e) => { e.preventDefault(); genField(k); }}
+      title="ให้ AI เจนช่องนี้ใหม่"
+      className="!h-7 !w-7 !rounded-xl text-[13px] disabled:opacity-40">
+      {fieldBusy === k ? '⏳' : '✨'}
+    </IconBtn>
+  );
 
   // ---- การ์ดตัวละคร V2/V3 (import/export) ----
   const fileRef = useRef<HTMLInputElement>(null);
@@ -66,25 +128,38 @@ export function ChatCharModal({ char, onClose, onSave, onDelete }: Props) {
           </div>
         </Field>
 
+        {/* ✨ AI ช่วยสร้างตัวละคร — เล่าคร่าว ๆ แล้วให้ AI เติมช่องที่เหลือ */}
+        <div className="rounded-2xl p-4 border-2" style={{ borderColor: P.tint, background: P.soft }}>
+          <Field label="✨ เล่าคร่าว ๆ ว่าอยากได้ตัวละครแบบไหน (ให้ AI เจนส่วนที่เหลือ)"
+            hint={<span className="text-[11px] text-muted">ช่องที่กรอกไว้แล้วถือเป็นของตายตัว</span>}>
+            <Textarea rows={2} value={brief} onChange={(e) => setBrief(e.target.value)}
+              placeholder="เช่น สาวไอดอลไซเบอร์พังก์ ปากร้ายแต่ใจดี โดนวางยาแล้วหนีมา…" />
+          </Field>
+          <Btn variant="primary" color={d.color ?? 'coral'} className="mt-3 w-full"
+            disabled={genBusy || (!brief.trim() && !charHasContent)} onClick={genBulk}>
+            {genBusy ? 'กำลังเจน…' : '✨ เจนช่องที่ว่าง'}
+          </Btn>
+        </div>
+
         {/* โปรไฟล์ */}
         <div className="grid sm:grid-cols-2 gap-3">
-          <Field label="รูปลักษณ์"><Textarea rows={2} value={d.appearance ?? ''} onChange={(e) => set({ appearance: e.target.value })} /></Field>
-          <Field label="👗 การแต่งตัว / สไตล์ชุด"><Textarea rows={2} value={d.outfit ?? ''} onChange={(e) => set({ outfit: e.target.value })} placeholder="เช่น ชุดคลุมจอมเวทสีขาวทอง / สาวเท่แจ็กเก็ตหนัง" /></Field>
-          <Field label="ภูมิหลัง / bio" className="sm:col-span-2"><Textarea rows={2} value={d.description ?? ''} onChange={(e) => set({ description: e.target.value })} /></Field>
-          <Field label="วิธีคิด / ค่านิยม"><Textarea rows={2} value={d.mindset ?? ''} onChange={(e) => set({ mindset: e.target.value })} /></Field>
-          <Field label="นิสัย / พฤติกรรม"><Textarea rows={2} value={d.behavior ?? ''} onChange={(e) => set({ behavior: e.target.value })} /></Field>
+          <Field label="รูปลักษณ์" hint={<GenBtn k="appearance" />}><Textarea rows={2} value={d.appearance ?? ''} onChange={(e) => set({ appearance: e.target.value })} /></Field>
+          <Field label="👗 การแต่งตัว / สไตล์ชุด" hint={<GenBtn k="outfit" />}><Textarea rows={2} value={d.outfit ?? ''} onChange={(e) => set({ outfit: e.target.value })} placeholder="เช่น ชุดคลุมจอมเวทสีขาวทอง / สาวเท่แจ็กเก็ตหนัง" /></Field>
+          <Field label="ภูมิหลัง / bio" className="sm:col-span-2" hint={<GenBtn k="description" />}><Textarea rows={2} value={d.description ?? ''} onChange={(e) => set({ description: e.target.value })} /></Field>
+          <Field label="วิธีคิด / ค่านิยม" hint={<GenBtn k="mindset" />}><Textarea rows={2} value={d.mindset ?? ''} onChange={(e) => set({ mindset: e.target.value })} /></Field>
+          <Field label="นิสัย / พฤติกรรม" hint={<GenBtn k="behavior" />}><Textarea rows={2} value={d.behavior ?? ''} onChange={(e) => set({ behavior: e.target.value })} /></Field>
           <Field label="สรรพนามแทนตัว"><Input value={d.pronounSelf ?? ''} onChange={(e) => set({ pronounSelf: e.target.value })} placeholder="ฉัน / เรา / พี่" /></Field>
           <Field label="เรียกผู้เล่นว่า"><Input value={d.pronounOther ?? ''} onChange={(e) => set({ pronounOther: e.target.value })} placeholder="คุณ / เธอ / นาย" /></Field>
-          <Field label="โทนการพูด" className="sm:col-span-2"><Input value={d.speechTone ?? ''} onChange={(e) => set({ speechTone: e.target.value })} placeholder="เย็นชา / ร่าเริง / ปากร้าย" /></Field>
-          <Field label="ตัวอย่างบทพูด (บรรทัดละประโยค)" className="sm:col-span-2"><Textarea rows={2} value={d.voiceExamples ?? ''} onChange={(e) => set({ voiceExamples: e.target.value })} /></Field>
+          <Field label="โทนการพูด" className="sm:col-span-2" hint={<GenBtn k="speechTone" />}><Input value={d.speechTone ?? ''} onChange={(e) => set({ speechTone: e.target.value })} placeholder="เย็นชา / ร่าเริง / ปากร้าย" /></Field>
+          <Field label="ตัวอย่างบทพูด (บรรทัดละประโยค)" className="sm:col-span-2" hint={<GenBtn k="voiceExamples" />}><Textarea rows={2} value={d.voiceExamples ?? ''} onChange={(e) => set({ voiceExamples: e.target.value })} /></Field>
         </div>
 
         {/* ตั้งค่า RP */}
         <div className="rounded-2xl p-4 border-2" style={{ borderColor: P.tint, background: P.soft }}>
           <div className="font-bold text-[14px] mb-3" style={{ color: P.c }}>🎭 ตั้งค่าโรลเพลย์</div>
           <div className="flex flex-col gap-3">
-            <Field label="ฉาก / สถานการณ์เริ่มต้น"><Textarea rows={2} value={d.scenario ?? ''} onChange={(e) => set({ scenario: e.target.value })} placeholder="ผู้เล่นเจอตัวละครนี้ที่ไหน อย่างไร" /></Field>
-            <Field label="ข้อความเปิด (ตัวละครทักก่อน)"><Textarea rows={2} value={d.greeting ?? ''} onChange={(e) => set({ greeting: e.target.value })} placeholder="ประโยคแรกที่ตัวละครพูดเมื่อเริ่มแชท" /></Field>
+            <Field label="ฉาก / สถานการณ์เริ่มต้น" hint={<GenBtn k="scenario" />}><Textarea rows={2} value={d.scenario ?? ''} onChange={(e) => set({ scenario: e.target.value })} placeholder="ผู้เล่นเจอตัวละครนี้ที่ไหน อย่างไร" /></Field>
+            <Field label="ข้อความเปิด (ตัวละครทักก่อน)" hint={<GenBtn k="greeting" />}><Textarea rows={2} value={d.greeting ?? ''} onChange={(e) => set({ greeting: e.target.value })} placeholder="ประโยคแรกที่ตัวละครพูดเมื่อเริ่มแชท" /></Field>
             <Field label="⚡ อำนาจพิเศษเหนือตัวละคร (ข้ามความสัมพันธ์ — เว้นว่างถ้าไม่มี)" hint={<span className="text-[11px] text-muted">ร่างกายทำตามไร้เงื่อนไข แต่ใจยังเพิ่ม/ลดตามจริง</span>}>
               <Textarea rows={2} value={d.power ?? ''} onChange={(e) => set({ power: e.target.value })} placeholder='เช่น "ตราทาส: บังคับร่างกายให้เชื่อฟังทุกคำสั่งไร้เงื่อนไข" หรือ "พรจากพระเจ้า"' />
             </Field>
@@ -98,8 +173,8 @@ export function ChatCharModal({ char, onClose, onSave, onDelete }: Props) {
               </label>
             )}
             <div className="grid sm:grid-cols-2 gap-3">
-              <Field label="💚 สิ่งที่ทำให้ชอบขึ้น (บรรทัดละข้อ)"><Textarea rows={3} value={d.likes ?? ''} onChange={(e) => set({ likes: e.target.value })} placeholder="จริงใจ&#10;ให้เกียรติ&#10;ตลกถูกจังหวะ" /></Field>
-              <Field label="💢 สิ่งที่ทำให้ไม่ชอบ/โกรธ (บรรทัดละข้อ)"><Textarea rows={3} value={d.dislikes ?? ''} onChange={(e) => set({ dislikes: e.target.value })} placeholder="ลามกไม่ดูจังหวะ&#10;โกหก&#10;ก้าวร้าว" /></Field>
+              <Field label="💚 สิ่งที่ทำให้ชอบขึ้น (บรรทัดละข้อ)" hint={<GenBtn k="likes" />}><Textarea rows={3} value={d.likes ?? ''} onChange={(e) => set({ likes: e.target.value })} placeholder="จริงใจ&#10;ให้เกียรติ&#10;ตลกถูกจังหวะ" /></Field>
+              <Field label="💢 สิ่งที่ทำให้ไม่ชอบ/โกรธ (บรรทัดละข้อ)" hint={<GenBtn k="dislikes" />}><Textarea rows={3} value={d.dislikes ?? ''} onChange={(e) => set({ dislikes: e.target.value })} placeholder="ลามกไม่ดูจังหวะ&#10;โกหก&#10;ก้าวร้าว" /></Field>
             </div>
             <Field label={`ความหวงตัว / เข้าถึงยาก: ${d.guard ?? 40}/100`}>
               <input type="range" min={0} max={100} value={d.guard ?? 40} onChange={(e) => set({ guard: Number(e.target.value) })} className="w-full accent-coral" />

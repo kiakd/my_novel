@@ -90,6 +90,17 @@ export const generatePlayerPersona = (body: {
   '/api/chat/generate-persona', { method: 'POST', body: JSON.stringify(body) },
 );
 
+// ---- AI เติม/เจนฟิลด์ตัวละคร (autofill) — ส่ง char ที่กรอกไว้ + บรีฟ → เจนฟิลด์ที่ขาด/ที่ขอ ----
+// fields ว่าง = เติมทุกช่องที่ยังว่าง · ส่ง fields=[ช่องเดียว] = เจน/เจนทับเฉพาะช่องนั้น
+export const generateCharFields = (body: {
+  char: Record<string, unknown>;
+  brief?: string;
+  fields?: string[];
+  provider?: string;
+}) => jsonFetch<{ ok: boolean; generated?: Record<string, string>; error?: string }>(
+  '/api/chat/characters/generate-fields', { method: 'POST', body: JSON.stringify(body) },
+);
+
 // ---- สรุปบทสนทนาช่วงเก่า (rolling summary) ผ่าน endpoint generate ทั่วไป ----
 const SUMMARY_SYSTEM =
   'คุณคือผู้ช่วยสรุปบทสนทนาโรลเพลย์เป็น "ความทรงจำ" ของตัวละคร ให้ครบและแม่นยำ (กันเรื่องเพี้ยนตอนแชทยาว). ' +
