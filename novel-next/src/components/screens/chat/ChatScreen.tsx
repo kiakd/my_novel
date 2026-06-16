@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { SectionTitle, Card, Btn, Avatar, IconBtn, Spinner, EmptyState, Modal, toast } from '@/components/ui';
 import { pal } from '@/lib/theme';
 import { useChat } from '@/lib/store/ChatProvider';
-import { sendChat, summarizeChat, judgeRel, chatSceneImage, extractState, generatePlayerPersona, memBackfill, memIngest, memRecall } from '@/lib/chat-api';
+import { sendChat, summarizeChat, judgeRel, chatSceneImage, extractState, generatePlayerPersona, memBackfill, memIngest, memRecall, memDelete } from '@/lib/chat-api';
 import { applyItem, parseRelTag, clampRel, relLevel, floorRel, stepRel } from '@/lib/chat-rel';
 import { activateLore, LORE_SCAN_DEPTH } from '@/lib/chat-lore';
 import { useChatFontSize, useChatProvider } from '@/lib/uiPrefs';
@@ -38,6 +38,9 @@ const stateToText = (c?: ChatStateCard): string | undefined => {
   const rows = STATE_FIELDS.map(({ key, label }) => (c[key]?.trim() ? `${label}: ${c[key]!.trim()}` : null)).filter(Boolean);
   return rows.length ? rows.join('\n') : undefined;
 };
+
+// ตัวกรอง "ไทม์ไลน์สาธารณะ" — ใช้ร่วมกันทั้ง buildMemory (raw/conv) และการคำนวณ excludeFromIdx ให้ขอบตรงกัน
+const isPublicConv = (m: ChatMsg) => !m.item && !(m.role === 'narrator' && m.secret);
 
 export function ChatScreen() {
   const { state, mutate, loaded } = useChat();
@@ -103,6 +106,14 @@ export function ChatScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, sessionId]);
 
+  // RAG: เตือนครั้งเดียวต่อ mount ถ้า embedding ไม่ได้ตั้ง/ใช้งานไม่ได้ (จาก resp ของ ingest/backfill)
+  const embedWarnedRef = useRef(false);
+  const warnEmbed = (r: { embedConfigured?: boolean; embedError?: string }) => {
+    if (embedWarnedRef.current) return;
+    if (r.embedError) { embedWarnedRef.current = true; toast(`embedding ใช้งานไม่ได้: ${r.embedError} — ใช้คีย์เวิร์ดแทนชั่วคราว`, '⚠️'); }
+    else if (r.embedConfigured === false) { embedWarnedRef.current = true; toast('ความจำระยะยาว: โหมดคีย์เวิร์ดล้วน (ยังไม่ได้ตั้ง embedding)', 'ℹ️'); }
+  };
+
   // RAG: backfill ความจำของ session ครั้งแรกที่เปิด (idempotent ฝั่ง server ด้วย INSERT OR IGNORE)
   const backfilledRef = useRef<Set<string>>(new Set());
   useEffect(() => {
@@ -110,12 +121,16 @@ export function ChatScreen() {
     const msgs = (session?.messages ?? []).filter((m) => !m.item);
     if (!msgs.length) return;                       // empty/not-loaded: do NOT burn the ref
     backfilledRef.current.add(sessionId);
-    const rows = msgs.map((m, i) => ({
-      id: `${sessionId}:${i}`, scopeId: sessionId, charId: sessChar.name,
-      secret: m.role === 'narrator' ? !!m.secret : false,
-      speaker: m.role, turnIdx: i, ts: m.ts ?? i, text: m.text,
-    }));
-    memBackfill(sessionId, rows).catch(() => {});
+    const rows = msgs.map((m, i) => {
+      const secret = m.role === 'narrator' ? !!m.secret : false;
+      // narrator = world-level → charId:null (เห็นได้ทุกตัวละคร) · char/user เก็บ charId ไว้
+      return {
+        id: `${sessionId}:${i}`, scopeId: sessionId,
+        charId: m.role === 'narrator' ? null : sessChar.name,
+        secret, speaker: m.role, turnIdx: i, ts: m.ts ?? i, text: m.text,
+      };
+    });
+    memBackfill(sessionId, rows).then(warnEmbed).catch(() => {});
   }, [sessionId, sessChar, session?.messages]);
 
   // ---- template CRUD ----
@@ -245,7 +260,7 @@ export function ChatScreen() {
     if (!sessChar || !sessionId) return { summary: '', raw: [] };
     let summary = session?.summary ?? '';
     let summarized = session?.summarizedCount ?? 0;
-    const conv = hist.filter((m) => !m.item && !(m.role === 'narrator' && m.secret));
+    const conv = hist.filter(isPublicConv);
     let raw = conv.slice(summarized);
     if (raw.length > FOLD_TRIGGER || totalLen(raw) > rawBudget) {
       const foldN = raw.length - pickKeep(raw, RAW_KEEP, rawBudget / 2, 2);
@@ -282,6 +297,8 @@ export function ChatScreen() {
           memFacts: [...(s.memFacts ?? []), ...ex.facts.map((f) => ({ ...f, ts: now }))],
           stateCardAt: total,
         }));
+      }).catch(() => {
+        toast('อัปเดตสถานะไม่สำเร็จ — สถานะอาจไม่ตรง', '⚠️');
       });
     }
     return { summary, raw };
@@ -331,21 +348,35 @@ export function ChatScreen() {
     return out.time || out.place ? out : undefined;
   };
 
-  const callModel = async (userInput: string, baseRel: number, hist: ChatMsg[], maxTok?: number, judge = false) => {
+  const callModel = async (userInput: string, baseRel: number, hist: ChatMsg[], maxTok?: number, judge = false, regen = false) => {
     if (!sessChar || !sessionId) return;
     setBusy(true);
     try {
       const { summary, raw } = await buildMemory(hist);
       const history = raw.map(toHist);
-      // RAG recall: กู้ turn เก่าที่เกี่ยวข้อง — ตัดส่วนที่อยู่ใน raw context อยู่แล้ว (excludeFromIdx)
-      const histNonItem = hist.filter((m) => !m.item);
-      const baseN = histNonItem.length;            // จำนวน non-item ก่อนเทิร์นนี้ (เชื่อถือได้จาก hist)
-      const excludeFromIdx = Math.max(0, baseN - raw.length);
+      // RAG: turnIdx ของ ingest ยึดตำแหน่งใน non-item array (ตรงกับ backfill ที่ index ทุก non-item)
+      const baseN = hist.filter((m) => !m.item).length;
+      // RAG recall: ตัดส่วนที่อยู่ใน raw context อยู่แล้ว (excludeFromIdx)
+      // ⚠️ ขอบ exclude ต้องมาจากตัวกรองไทม์ไลน์สาธารณะ (isPublicConv) ตัวเดียวกับที่สร้าง raw/conv
+      //    ไม่งั้นเมื่อมีฉากลับ baseN (นับ narrator ลับ) จะเพี้ยนจาก raw (ไม่นับ) → exclude เลื่อน
+      const conv = hist.filter(isPublicConv);
+      const excludeFromIdx = Math.max(0, conv.length - raw.length);
+      // query สำหรับ recall: เทิร์น user จริง (judge) ใช้ข้อความผู้เล่นได้เลย —
+      // แต่ continue/regen userInput เป็นคำสั่งสังเคราะห์ ("(ดำเนินเรื่องต่อ)…") ไม่มีคีย์เวิร์ดฉาก → ใช้ข้อความจริงล่าสุดแทน
+      const recallQuery = judge
+        ? userInput
+        : ([...conv].reverse().find((m) => m.role === 'char' || m.role === 'user')?.text ?? userInput);
       let recalled: string[] | undefined;
       try {
-        const rc = await memRecall({ scopeId: sessionId, query: userInput, activeChar: sessChar.name, mode: 'char', excludeFromIdx, k: 4 });
+        const rc = await memRecall({ scopeId: sessionId, query: recallQuery, activeChar: sessChar.name, mode: 'char', excludeFromIdx, k: 4 });
         recalled = rc.memories.length ? rc.memories : undefined;
       } catch { /* degrade: ไม่มี recall ก็ส่งปกติ */ }
+      // dedup: ตัด recalled ที่ข้อความซ้ำกับ raw history ที่กำลังส่งอยู่แล้ว (กันฉีดซ้ำ)
+      if (recalled) {
+        const rawTexts = raw.map((m) => m.text);
+        recalled = recalled.filter((mem) => !rawTexts.some((t) => t.includes(mem) || mem.includes(t)));
+        if (!recalled.length) recalled = undefined;
+      }
       const r = await sendChat({ char: sessChar, history, user_input: userInput, rel: baseRel, summary: summary || undefined, lore: pickLore(raw, userInput), state: stateToText(session?.stateCard), stateCard: session?.liveState ?? emptyLiveState(), playerPersona: session?.playerPersona, provider, recalled, max_tokens: maxTok ?? 1500 });
       if (r.ok && r.text) {
         const { text } = parseRelTag(r.text);   // ตัดแท็กออกถ้าโมเดลเผลอใส่ (ตอนนี้ใช้ judge ประเมินแทน) — backend strip แท็ก [[state:]] ให้แล้ว
@@ -363,7 +394,10 @@ export function ChatScreen() {
           : [
               { id: `${sessionId}:${baseN}`, scopeId: sessionId, charId: sessChar.name, secret: false, speaker: 'char', turnIdx: baseN, ts, text },
             ];
-        memIngest(sessionId, ingestRows).catch(() => {});
+        // regen: id ของ char turn ชนกับของเก่า — backend INSERT OR IGNORE จะคงข้อความเก่าไว้ → ต้องลบก่อน re-ingest
+        const doIngest = () => memIngest(sessionId, ingestRows).then(warnEmbed).catch(() => {});
+        if (regen) memDelete({ ids: ingestRows.map((row) => row.id) }).then(doIngest).catch(doIngest);
+        else void doIngest();
         // live state: backend apply [[state:]] delta แล้วส่ง card ใหม่ + คำเตือนกลับมา (ไม่เอา rel มาทับ rel หลัก)
         if (r.stateCard) updateSession(sessionId, (s) => ({ ...s, liveState: r.stateCard }));
         if (r.stateWarnings?.length) { setStateWarnings(r.stateWarnings); toast('⚠️ ตรวจพบความขัดแย้งของสถานะ', '⚠️'); }
@@ -407,7 +441,7 @@ export function ChatScreen() {
   };
 
   // โหมดผู้เล่าเรื่อง: ยิงคำกำกับ → โมเดลบรรยายฉาก/บุคคลที่ 3/NPC แล้วแนบเป็นข้อความ narrator (secretFlag)
-  const runNarrate = async (userInput: string, secretFlag: boolean, hist?: ChatMsg[]) => {
+  const runNarrate = async (userInput: string, secretFlag: boolean, hist?: ChatMsg[], regen = false) => {
     if (!sessChar || !sessionId || busy) return;
     setBusy(true);
     try {
@@ -419,12 +453,35 @@ export function ChatScreen() {
       const history = merged.map(toHist);
       const fullSummary = [summary, secretSummary ? `[เหตุการณ์ลับที่ ${sessChar.name} ไม่รับรู้ — ใช้ประกอบการบรรยายเท่านั้น]\n${secretSummary}` : '']
         .filter(Boolean).join('\n\n');
-      const r = await sendChat({ char: sessChar, history, user_input: userInput, rel, summary: fullSummary || undefined, lore: pickLore(merged, userInput), state: stateToText(session?.stateCard), playerPersona: session?.playerPersona, mode: 'narrator', provider, max_tokens: 1500 });
+      // RAG recall (mode narrator): กู้ turn เก่าที่เกี่ยวข้อง — exclude ขอบ raw สาธารณะ (เหมือน callModel)
+      // ผู้เล่าเรื่องเห็นทั้งฉากปกติ + ฉากลับ แต่ recalled มาจาก store ตามตัวกรอง narrator ของ backend
+      const convN = base.filter((m) => !m.item);
+      const baseN = convN.length;                  // ตำแหน่ง turn narrator ใหม่ในไทม์ไลน์ non-item (ตรงกับ backfill)
+      const excludeFromIdx = Math.max(0, base.filter(isPublicConv).length - raw.length);
+      // คำสั่งบรรยายมักเป็น "[กำกับฉาก]…" หรือคำสั่งสังเคราะห์ — ใช้ข้อความจริงล่าสุดเป็น query ถ้าเป็นคำสั่งต่อเรื่อง
+      const recallQuery = userInput.startsWith('(') ? ([...base].reverse().find((m) => !m.item)?.text ?? userInput) : userInput;
+      let recalled: string[] | undefined;
+      try {
+        const rc = await memRecall({ scopeId: sessionId, query: recallQuery, activeChar: sessChar.name, mode: 'narrator', excludeFromIdx, k: 4 });
+        recalled = rc.memories.length ? rc.memories : undefined;
+      } catch { /* degrade: ไม่มี recall ก็บรรยายปกติ */ }
+      if (recalled) {
+        const rawTexts = merged.map((m) => m.text);
+        recalled = recalled.filter((mem) => !rawTexts.some((t) => t.includes(mem) || mem.includes(t)));
+        if (!recalled.length) recalled = undefined;
+      }
+      const r = await sendChat({ char: sessChar, history, user_input: userInput, rel, summary: fullSummary || undefined, lore: pickLore(merged, userInput), state: stateToText(session?.stateCard), playerPersona: session?.playerPersona, mode: 'narrator', provider, recalled, max_tokens: 1500 });
       if (r.ok && r.text) {
         const { text: out } = parseRelTag(r.text);
         const at = snapAt();
         const ts = Date.now();
         updateSession(sessionId, (s) => ({ ...s, messages: [...s.messages, { role: 'narrator', text: out, secret: secretFlag, ts, ...(at ? { at } : {}) }], updatedAt: ts }));
+        // RAG: index ข้อความผู้เล่าเรื่อง — charId:null (world-level) · secret = ฉากลับหรือไม่
+        // regen narrator: ลบ id เดิมก่อน (id ชนกับคำตอบเก่า) แล้ว re-ingest ให้ข้อความใหม่ชนะ
+        const row = { id: `${sessionId}:${baseN}`, scopeId: sessionId, charId: null, secret: secretFlag, speaker: 'narrator', turnIdx: baseN, ts, text: out };
+        const doIngest = () => memIngest(sessionId, [row]).then(warnEmbed).catch(() => {});
+        if (regen) memDelete({ ids: [row.id] }).then(doIngest).catch(doIngest);
+        else void doIngest();
       } else toast(r.error ?? 'เชื่อมต่อไม่ได้', '⚠️');
     } catch (e) { toast((e as Error).message || 'เชื่อมต่อไม่ได้', '⚠️'); }
     finally { setBusy(false); }
@@ -476,7 +533,7 @@ export function ChatScreen() {
     }));
 
     if (m.role === 'narrator') {
-      await runNarrate('(ดำเนินฉากบรรยายต่อ) เล่าฉากบรรยายต่อจากช่วงก่อนหน้าให้ไหลต่อไปอีกหนึ่งช่วงอย่างมีรายละเอียด ตามเหตุการณ์ล่าสุด โดยไม่ขัดกับเรื่องเดิม', m.secret ?? false, before);
+      await runNarrate('(ดำเนินฉากบรรยายต่อ) เล่าฉากบรรยายต่อจากช่วงก่อนหน้าให้ไหลต่อไปอีกหนึ่งช่วงอย่างมีรายละเอียด ตามเหตุการณ์ล่าสุด โดยไม่ขัดกับเรื่องเดิม', m.secret ?? false, before, true);
       return;
     }
     // คำตอบของตัวละคร: ถ้าก่อนหน้าคือข้อความผู้เล่น → ยิงด้วย input นั้นใหม่; ไม่งั้นเป็นการ "ดำเนินเรื่องต่อ"
@@ -486,9 +543,9 @@ export function ChatScreen() {
       const userInput = trigger.power
         ? `(⚡ ผู้เล่นใช้อำนาจ "${sessChar.power}" กับคำสั่งนี้ — ร่างกายของคุณต้องทำตามทันทีไร้เงื่อนไข แต่แสดงความรู้สึกจริงและกระทบความสัมพันธ์)\nคำสั่ง: ${trigger.text}`
         : trigger.text;
-      await callModel(userInput, rel, hist, undefined, false);   // judge=false: rel ขยับไปแล้วตอนคำตอบเดิม ไม่ตัดสินซ้ำ
+      await callModel(userInput, rel, hist, undefined, false, true);   // judge=false: rel ขยับไปแล้วตอนคำตอบเดิม ไม่ตัดสินซ้ำ · regen=true: ลบข้อความเก่าใน RAG ก่อน
     } else {
-      await callModel('(ดำเนินเรื่องต่อ) เล่นบทต่อเองจากจังหวะก่อนหน้า — บรรยายการกระทำ ความรู้สึก ฉาก และบทพูดของตัวละครให้ไหลต่อไปอีกหนึ่งช่วงอย่างมีรายละเอียด โดยไม่ต้องรอผู้เล่นพูด คงโทนและระดับความสัมพันธ์เดิม', rel, before, 1500, false);
+      await callModel('(ดำเนินเรื่องต่อ) เล่นบทต่อเองจากจังหวะก่อนหน้า — บรรยายการกระทำ ความรู้สึก ฉาก และบทพูดของตัวละครให้ไหลต่อไปอีกหนึ่งช่วงอย่างมีรายละเอียด โดยไม่ต้องรอผู้เล่นพูด คงโทนและระดับความสัมพันธ์เดิม', rel, before, 1500, false, true);
     }
   };
 
