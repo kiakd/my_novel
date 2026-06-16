@@ -837,7 +837,7 @@ const app = new Elysia()
         }));
         tx();
       }
-      return { ok: true, count: rows.length, embedded: !!vecs, embedConfigured: embedConfigured(), embedError: vecs ? null : lastEmbedError() };
+      return { ok: true, count: rows.length, embedded: !!vecs, embedConfigured: embedConfigured(), embedError: vecs ? null : (lastEmbedError()?.error ?? null) };
     } catch (e: any) { return { ok: false, error: e.message }; }
   })
 
@@ -850,7 +850,7 @@ const app = new Elysia()
       const vecs = await embedTexts(b.rows.map((r) => r.text));
       const rows: MemRow[] = b.rows.map((r, i) => ({ ...r, kind: b.kind ?? 'chat', embedding: vecs ? vecs[i] : null }));
       ingestMemory(db, rows);
-      return { ok: true, count: rows.length, embedded: !!vecs, embedConfigured: embedConfigured(), embedError: vecs ? null : lastEmbedError() };
+      return { ok: true, count: rows.length, embedded: !!vecs, embedConfigured: embedConfigured(), embedError: vecs ? null : (lastEmbedError()?.error ?? null) };
     } catch (e: any) { return { ok: false, error: e.message }; }
   })
 
@@ -904,7 +904,8 @@ const app = new Elysia()
         embedDim: Number(process.env.EMBED_DIM ?? 512),
         rows: total, embeddedRows: embedded, scopes,
         // ถ้าตั้งค่า embedding แล้วแต่ยิงพลาด (key ผิด/429/บัญชีโดนแบน R18) จะโผล่ที่นี่ — แยกจาก "ไม่ได้ตั้งค่า"
-        embedError: lastEmbedError(),
+        embedError: lastEmbedError()?.error ?? null,
+        embedErrorAt: lastEmbedError()?.at ?? null,
       };
     } catch (e: any) { return { ok: false, error: e.message }; }
   })
