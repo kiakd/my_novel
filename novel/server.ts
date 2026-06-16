@@ -5,7 +5,7 @@ import { getDb } from './db';
 import { logRequest, logActivity, logError, ensureLogIndexes, APP_LOG_COLLECTION } from './logger';
 import { assembleSystemPrompt, buildNovelReminder, type NovelContext } from './prompts';
 import { assembleChatPrompt, assembleNarratorPrompt, buildPersonaReminder, type ChatCharLite, type PlayerPersonaLite } from './chat-prompt';
-import { getMemDb, ingestMemory, recall, deleteScope, deleteMemory, type MemRow } from './chat-memory';
+import { getMemDb, ingestMemory, recall, deleteScope, deleteMemory, syncScope, type MemRow } from './chat-memory';
 import { embedTexts, embedOne, embedConfigured, lastEmbedError } from './embed';
 import { RULE_ADULT, RULE_R18_LEXICON } from './shared-rules';
 import { pickStory, writeStoryMd, type Story } from './story-md';
@@ -821,23 +821,23 @@ const app = new Elysia()
     }
   })
 
-  // --- RAG memory: backfill (index session ทั้งก้อนครั้งเดียว — FTS ทันที + embedding best-effort) ---
+  // --- RAG memory: backfill = content-aware reconcile (heal edit/ลบ/regen) — embed เฉพาะแถวที่เปลี่ยน/ยังไม่มีเวกเตอร์ ---
   .post('/api/chat/memory/backfill', async ({ body }) => {
     const b = body as { scopeId: string; kind?: 'chat' | 'novel'; rows: Omit<MemRow, 'embedding' | 'kind'>[] };
     if (!b?.scopeId || !Array.isArray(b.rows)) return { ok: false, error: 'missing scopeId/rows' };
     try {
       const db = getMemDb();
       const rows: MemRow[] = b.rows.map((r) => ({ ...r, kind: b.kind ?? 'chat', embedding: null }));
-      ingestMemory(db, rows);   // FTS sync ทันที (ฟรี/เร็ว) — ยังไม่ใส่ embedding
-      const vecs = await embedTexts(rows.map((r) => r.text));   // embedding best-effort
+      const { toEmbed, stats } = syncScope(db, b.scopeId, rows);   // reconcile ทั้ง scope (FTS sync ในตัว)
+      const vecs = toEmbed.length ? await embedTexts(toEmbed.map((r) => r.text)) : null;   // embed เฉพาะที่เปลี่ยน/ยังไม่มีเวกเตอร์
       if (vecs) {
         const upd = db.prepare('UPDATE mem SET embedding = ? WHERE id = ?');
-        const tx = db.transaction(() => rows.forEach((r, i) => {
+        const tx = db.transaction(() => toEmbed.forEach((r, i) => {
           const v = vecs[i]; upd.run(Buffer.from(v.buffer, v.byteOffset, v.byteLength), r.id);
         }));
         tx();
       }
-      return { ok: true, count: rows.length, embedded: !!vecs, embedConfigured: embedConfigured(), embedError: vecs ? null : (lastEmbedError()?.error ?? null) };
+      return { ok: true, ...stats, embedded: !!vecs, embedConfigured: embedConfigured(), embedError: vecs ? null : (toEmbed.length ? (lastEmbedError()?.error ?? null) : null) };
     } catch (e: any) { return { ok: false, error: e.message }; }
   })
 
