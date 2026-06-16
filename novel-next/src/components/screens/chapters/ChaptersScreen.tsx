@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { SectionTitle, Card, Tag, Btn, EmptyState, toast } from '@/components/ui';
+import { SectionTitle, Card, Tag, Btn, EmptyState, Modal, toast } from '@/components/ui';
 import { useI18n } from '@/lib/i18n';
 import { pal } from '@/lib/theme';
 import { useStory } from '@/lib/store/StoryProvider';
@@ -12,7 +12,7 @@ import { ChapterEditor, type ChapterEditorHandle } from './ChapterEditor';
 import { AIBar } from './AIBar';
 import { ExpandPanel } from './ExpandPanel';
 import { ContinueMenu, type ContinueKind } from './ContinueMenu';
-import { generate, generateRoleplay } from '@/lib/api';
+import { generate, generateRoleplay, memBackfillNovel, memIngestNovel, memRecallNovel } from '@/lib/api';
 import { buildNovelContext, cleanRoleplayArtifacts } from '@/lib/novel-context';
 
 const LS_LIST_OPEN = 'ns_chapterlist_open';
@@ -32,13 +32,29 @@ const htmlToText = (html?: string): string => {
   return d.textContent ?? '';
 };
 const charCount = (html?: string) => htmlToText(html).replace(/\s+/g, '').length;
+
+/** แตกเนื้อบท (HTML) เป็น "ย่อหน้า" — หน่วยความจำของ RAG ฝั่งนิยาย (ตัดย่อหน้าว่างทิ้ง)
+ *  content เก็บเป็น HTML <p> ต่อกัน — textContent ไม่มี \n คั่น จึงพาร์ส <p> ตรง ๆ (fallback แตกบรรทัด) */
+const htmlToParagraphs = (html?: string): string[] => {
+  if (!html) return [];
+  if (typeof document === 'undefined') {
+    return html.replace(/<[^>]+>/g, '\n').split(/\n+/).map((p) => p.trim()).filter(Boolean);
+  }
+  const d = document.createElement('div');
+  d.innerHTML = html;
+  const ps = d.querySelectorAll('p');
+  const parts = ps.length
+    ? Array.from(ps).map((p) => p.textContent ?? '')
+    : (d.textContent ?? '').split(/\n+/);
+  return parts.map((p) => p.trim()).filter(Boolean);
+};
 const statusOf = (content?: string, stored?: ChapterStatus): ChapterStatus =>
   !htmlToText(content).trim() ? 'empty' : stored && stored !== 'empty' ? stored : 'draft';
 
 /** หน้าบทนิยาย — ผูกกับ story.chapters */
 export function ChaptersScreen() {
   const { t } = useI18n();
-  const { story, status, mutateStory } = useStory();
+  const { story, status, mutateStory, saveNow, activeStoryId } = useStory();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const editorRef = useRef<ChapterEditorHandle>(null);
@@ -47,6 +63,10 @@ export function ChaptersScreen() {
   const [contOpen, setContOpen] = useState(false);
   const [listOpen, setListOpen] = useState(true);
   const [provider, setProviderState] = useState<GenProvider>('deepseek');
+  // รีวิว: ผลวิจารณ์บท → โชว์ใน modal (null = ปิด)
+  const [review, setReview] = useState<string | null>(null);
+  // RAG: backfill ความจำของเรื่องครั้งแรกที่เปิด/โหลด (idempotent ฝั่ง server) — key ด้วย story.id
+  const backfilledRef = useRef<Set<string>>(new Set());
 
   useEffect(() => { if (localStorage.getItem(LS_LIST_OPEN) === '0') setListOpen(false); }, []);
   useEffect(() => { const p = localStorage.getItem(LS_PROVIDER); if (p === 'lmstudio' || p === 'deepseek') setProviderState(p); }, []);
@@ -62,6 +82,33 @@ export function ChaptersScreen() {
   const chapters = [...(story?.chapters ?? [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   const active = chapters.find((c) => c.id === activeId) ?? chapters[0] ?? null;
   const activeStatus = active ? statusOf(active.content, active.status) : 'empty';
+
+  // turnIdx ของย่อหน้า = ดัชนีไล่ทั้งเรื่อง (บทตามลำดับ × ย่อหน้า) → คืน [start, paras] ของบท index ที่ระบุ
+  const paraOffsetOf = (chIdx: number): number => {
+    let off = 0;
+    for (let i = 0; i < chIdx; i++) off += htmlToParagraphs(chapters[i]?.content).length;
+    return off;
+  };
+
+  // RAG backfill: แตกทุกบทเป็นย่อหน้า → ส่งเข้า memory ครั้งแรกที่เปิดเรื่อง (idempotent ฝั่ง server)
+  // scopeId = activeStoryId (Story ไม่มี field id — id คือ key ใน state.stories)
+  useEffect(() => {
+    const sid = activeStoryId;
+    if (!sid || !story || backfilledRef.current.has(sid)) return;
+    let off = 0;
+    const rows = chapters.flatMap((c) => {
+      const paras = htmlToParagraphs(c.content);
+      const r = paras.map((text, j) => ({
+        id: `${sid}:${off + j}`, scopeId: sid, charId: null, secret: false,
+        speaker: 'narrator', turnIdx: off + j, ts: off + j, text,
+      }));
+      off += paras.length;
+      return r;
+    });
+    if (!rows.length) return;        // ยังไม่มีเนื้อ/ยังไม่โหลด: อย่าเผา ref
+    backfilledRef.current.add(sid);
+    memBackfillNovel(sid, rows).catch(() => {});
+  }, [activeStoryId, story, chapters]);
   const chars = charCount(active?.content);
 
   const patchActive = (patch: Partial<{ title: string; content: string; status: ChapterStatus; summary: string }>) => {
@@ -97,12 +144,30 @@ export function ChaptersScreen() {
     } finally { setBusy(false); }
   };
 
-  const act = (id: string, lbl: string) => {
-    if (id === 'summary') { void runSummarize(); return; }
-    // review ยังเป็น stub
+  // ---- รีวิวบท (วิจารณ์เชิงสร้างสรรค์ผ่าน /api/generate) — แทน stub เดิม ----
+  const REVIEW_SYSTEM =
+    'คุณคือบรรณาธิการนิยายไทยมือฉมัง วิจารณ์ "บทนี้" อย่างตรงไปตรงมาแต่สร้างสรรค์ เพื่อช่วยนักเขียนปรับให้ดีขึ้น. ' +
+    'ดูทั้ง: จังหวะ/การดำเนินเรื่อง, ความสม่ำเสมอของคาแรกเตอร์และโทน, จุดที่เยิ่นเย้อ/ซ้ำ/ขัดความต่อเนื่อง, บทสนทนา, การเปิด-ปิดฉาก. ' +
+    'ตอบเป็นภาษาไทย กระชับ เป็นหัวข้อ bullet: "✅ จุดเด่น" 2-3 ข้อ, "🔧 ควรปรับ" 3-5 ข้อ (ชี้จุดให้ชัดพร้อมวิธีแก้), "➡️ ทิศทางบทต่อไป" 1-2 ข้อ. ห้ามเขียนเนื้อเรื่องใหม่ให้.';
+  const runReview = async () => {
+    if (!active) return;
+    const text = htmlToText(active.content).trim();
+    if (!text) { toast(t('chapters.sumEmpty'), '⚠️'); return; }
+    const clipped = text.length > 12000 ? `${text.slice(0, 3000)}\n…\n${text.slice(-9000)}` : text;
     setBusy(true);
-    toast(lbl.replace(/^[^ ]+ /, '') + '…', '✦');
-    setTimeout(() => { setBusy(false); toast(t('common.done'), '✅'); }, 1300);
+    toast(t('chapters.aiReview') + '…', '🔍');
+    try {
+      const r = await generate({ system: REVIEW_SYSTEM, user: `[บท: ${active.title || '-'}]\n${clipped}`, provider, temperature: 0.5, max_tokens: 800 });
+      if (r.ok && r.text?.trim()) setReview(r.text.trim());
+      else toast(r.error ?? t('common.offline'), '⚠️');
+    } catch (e) {
+      toast((e as Error).message || t('common.offline'), '⚠️');
+    } finally { setBusy(false); }
+  };
+
+  const act = (id: string) => {
+    if (id === 'summary') { void runSummarize(); return; }
+    if (id === 'review') { void runReview(); return; }
   };
 
   // เขียนต่อบทจริง: ประกอบ context จาก story + ท้ายเนื้อบท → ยิง DeepSeek → แทรกผลต่อท้าย
@@ -166,7 +231,25 @@ export function ChaptersScreen() {
           st = { ...st, chapters: (st.chapters ?? []).map((x) => (x.id === c.id ? { ...x, summary: s } : x)) };
         }
       }
-      const ctx = buildNovelContext(st, { mode, eventCurrent, chapterNum });
+      // RAG recall: ดึงความจำระยะยาว (ย่อหน้าบทก่อน ๆ ที่เกี่ยวข้อง) มาเสริม context ก่อนเจน
+      // query = บันทึกความจำข้ามบท (intent) + ย่อหน้าสุดท้ายของบทปัจจุบัน · กันดึงย่อหน้าของบทปัจจุบันเองมาซ้ำด้วย excludeFromIdx
+      let recalled: string[] | undefined;
+      const sid = activeStoryId;
+      if (sid) {
+        const query = [active.summary?.trim(), lastParagraph(active.content)].filter(Boolean).join('\n').trim();
+        if (query) {
+          try {
+            const rc = await memRecallNovel({
+              scopeId: sid, query,
+              activeChar: st.characters?.find((c) => /พระเอก|ตัวเอก|protagonist|นางเอก|heroine/i.test(c.role ?? ''))?.name
+                ?? st.characters?.[0]?.name ?? 'ผู้เล่าเรื่อง',
+              mode: 'narrator', excludeFromIdx: paraOffsetOf(idx), k: 4,
+            });
+            recalled = rc.memories.length ? rc.memories : undefined;
+          } catch { /* degrade: ไม่มี recall ก็เจนปกติ */ }
+        }
+      }
+      const ctx = buildNovelContext(st, { mode, eventCurrent, chapterNum, provider, recalled });
       // local ช้า + ctx เล็ก → ขอ output สั้นลง
       const maxTokens = isLocal ? (mode === 'r18' ? 1500 : 1200) : (mode === 'r18' ? 2600 : 2200);
       const r = await generateRoleplay({ context: ctx, user_input: `เขียนต่อบท "${active.title || ''}"`, provider, max_tokens: maxTokens, prefill: prefill || undefined });
@@ -174,7 +257,21 @@ export function ChaptersScreen() {
         // backend คืน prefill+completion (prepend ย่อหน้าเดิมกลับมา) → ตัด prefill ออก ไม่งั้นย่อหน้าสุดท้ายจะซ้ำ
         let out = r.text;
         if (prefill && out.startsWith(prefill)) out = out.slice(prefill.length);
-        editorRef.current?.insertHtmlAtEnd(textToHtml(cleanRoleplayArtifacts(out)));
+        const cleaned = cleanRoleplayArtifacts(out);
+        editorRef.current?.insertHtmlAtEnd(textToHtml(cleaned));
+        // force-save ทันทีหลังแทรกข้อความที่เพิ่งเจน — ลด conflict window กันงานหายบนมือถือ (debounce 900ms)
+        saveNow();
+        // RAG ingest: index ย่อหน้าใหม่ที่เพิ่งเจน · turnIdx ต่อจากย่อหน้าเดิมของบทปัจจุบัน (ไล่ทั้งเรื่อง)
+        if (sid) {
+          const baseIdx = paraOffsetOf(idx) + htmlToParagraphs(active.content).length;
+          const newParas = htmlToParagraphs(textToHtml(cleaned));
+          const now = Date.now();
+          const rows = newParas.map((text, j) => ({
+            id: `${sid}:${baseIdx + j}`, scopeId: sid, charId: null, secret: false,
+            speaker: 'narrator', turnIdx: baseIdx + j, ts: now + j, text,
+          }));
+          if (rows.length) memIngestNovel(sid, rows).catch(() => {});
+        }
         toast(t('chapters.continue.done'), '✨');
         setContOpen(false);
       } else {
@@ -246,6 +343,15 @@ export function ChaptersScreen() {
       {active && <AIBar onAct={act} onExpand={openExpand} onContinue={() => setContOpen(true)} busy={busy} />}
       <ExpandPanel open={expandOpen} onClose={() => setExpandOpen(false)} initialDraft={expandDraft} chapterNum={active ? chapters.indexOf(active) + 1 : 1} onInsert={insertExpanded} />
       <ContinueMenu open={contOpen} onClose={() => setContOpen(false)} onPick={runContinue} busy={busy} provider={provider} onProvider={setProvider} />
+      <Modal open={review != null} onClose={() => setReview(null)} size="md">
+        <div className="p-6">
+          <div className="flex items-center gap-2 mb-3 font-display text-xl font-semibold text-ink">🔍 {t('chapters.aiReview')}</div>
+          <div className="text-[14px] text-ink whitespace-pre-wrap leading-relaxed">{review}</div>
+          <div className="mt-5 flex justify-end">
+            <Btn variant="primary" color="sky" size="sm" onClick={() => setReview(null)}>{t('common.close')}</Btn>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

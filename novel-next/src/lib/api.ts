@@ -60,6 +60,30 @@ export interface GenRoleplayResult { ok: boolean; text?: string; error?: string;
 export const generateRoleplay = (body: { context: unknown; user_input: string; provider?: string; temperature?: number; max_tokens?: number; prefill?: string }) =>
   jsonFetch<GenRoleplayResult>('/api/generate-roleplay', { method: 'POST', body: JSON.stringify(body) });
 
+// ---- RAG memory ฝั่งนิยาย (kind:'novel') — เรียก endpoint เดียวกับแชทแต่แยก scope/kind ----
+// หน่วยความจำของนิยาย = ย่อหน้าของแต่ละบท · scopeId = story.id · turnIdx = ดัชนีย่อหน้าไล่ทั้งเรื่อง
+export interface MemRowInput {
+  id: string; scopeId: string; charId?: string | null; secret: boolean;
+  speaker: string; turnIdx: number; ts: number; text: string;
+}
+export interface MemWriteResult { ok: boolean; count?: number; embedded?: boolean; embedConfigured?: boolean; embedError?: string; error?: string }
+export const memBackfillNovel = (scopeId: string, rows: MemRowInput[]) =>
+  jsonFetch<MemWriteResult>(
+    '/api/chat/memory/backfill', { method: 'POST', body: JSON.stringify({ scopeId, kind: 'novel', rows }) });
+
+export const memIngestNovel = (scopeId: string, rows: MemRowInput[]) =>
+  jsonFetch<MemWriteResult>(
+    '/api/chat/memory/ingest', { method: 'POST', body: JSON.stringify({ scopeId, kind: 'novel', rows }) });
+
+export const memRecallNovel = (body: { scopeId: string; query: string; activeChar: string; mode?: 'char' | 'narrator'; excludeFromIdx: number; k?: number }) =>
+  jsonFetch<{ ok: boolean; memories: string[]; error?: string }>(
+    '/api/chat/memory/recall', { method: 'POST', body: JSON.stringify(body) });
+
+// สถานะระบบความจำ (embedding ตั้งไว้ไหม/จำนวน row/ฯลฯ)
+export const memStatus = () =>
+  jsonFetch<{ ok: boolean; mode?: string; embeddingConfigured?: boolean; embedModel?: string; embedDim?: number; rows?: number; embeddedRows?: number; scopes?: number; embedError?: string }>(
+    '/api/chat/memory/status');
+
 // ---- รูป ref → booru tags (WD14 โลคัล ผ่าน ComfyUI) ----
 export interface RefTagResult { ok: boolean; tags?: string[]; buckets?: Record<string, string[]>; error?: string }
 export const refTag = (dataBase64: string) =>

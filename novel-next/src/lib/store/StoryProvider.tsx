@@ -8,6 +8,9 @@ import type { AppState, Story } from '@/lib/types';
 
 export type SaveStatus = 'loading' | 'idle' | 'saving' | 'saved' | 'conflict' | 'error';
 const SAVE_DEBOUNCE = 900;
+const RETRY_DELAY = 4000;   // network error → ลองเซฟใหม่อีกครั้ง (กันเสียงานที่เพิ่งเจนบนมือถือเน็ตหลุด)
+/** กู้คืนงานที่เจนแล้วแต่เซฟไม่ลง (เก็บไว้ window กัน reload หาย) — debug/manual recovery */
+const RECOVERY_KEY = 'ns_save_recovery';
 
 interface StoryCtx {
   loaded: boolean;
@@ -36,6 +39,8 @@ export function StoryProvider({ children }: { children: ReactNode }) {
   const stateRef = useRef<AppState | null>(null);
   const revRef = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout>>();
+  const retryTimer = useRef<ReturnType<typeof setTimeout>>();
+  const retriedRef = useRef(false);   // กัน retry วนไม่จบ — network error retry ได้ครั้งเดียวต่อรอบ
   stateRef.current = state;
   revRef.current = rev;
 
@@ -77,10 +82,14 @@ export function StoryProvider({ children }: { children: ReactNode }) {
     try {
       const res = await putState(cur, revRef.current);
       if (res.ok) {
+        retriedRef.current = false;
+        try { localStorage.removeItem(RECOVERY_KEY); } catch { /* ignore */ }
         setRev(res.rev ?? revRef.current + 1);
         setStatus('saved');
       } else if (res.conflict) {
-        // server ใหม่กว่า (แก้จากแท็บ/สคริปต์อื่น) → ดึงกลับมาทับ แล้วแจ้งเตือน
+        // server ใหม่กว่า (แก้จากแท็บ/สคริปต์อื่น) → ก่อนทับ local เก็บสำเนา local ไว้ใน recovery buffer
+        // กันเสียเนื้อที่ AI เพิ่งเจน (มือถือ: ผู้ใช้ reload/สลับแท็บได้) — แล้วค่อยดึง server มาทับเพื่อรักษา rev-reconcile เดิม
+        try { localStorage.setItem(RECOVERY_KEY, JSON.stringify({ ts: Date.now(), rev: revRef.current, state: cur })); } catch { /* ignore */ }
         const fresh = await getState();
         if (fresh) {
           const { __rev, ...rest } = fresh;
@@ -88,12 +97,19 @@ export function StoryProvider({ children }: { children: ReactNode }) {
           setRev(__rev ?? 0);
         }
         setStatus('conflict');
-        toast('โหลดข้อมูลล่าสุดจากเซิร์ฟเวอร์ (มีการแก้จากที่อื่น)', '⚠️');
+        toast('โหลดข้อมูลล่าสุดจากเซิร์ฟเวอร์ (มีการแก้จากที่อื่น — เก็บสำเนางานที่เพิ่งเขียนไว้กู้คืนได้)', '⚠️');
       } else {
         setStatus('error');
       }
     } catch {
+      // network error → เก็บสำเนาไว้กู้คืน + ตั้งเวลาลองเซฟใหม่อีกครั้ง (กันเงียบหายบนเน็ตมือถือ)
+      try { localStorage.setItem(RECOVERY_KEY, JSON.stringify({ ts: Date.now(), rev: revRef.current, state: cur })); } catch { /* ignore */ }
       setStatus('error');
+      if (!retriedRef.current) {
+        retriedRef.current = true;
+        clearTimeout(retryTimer.current);
+        retryTimer.current = setTimeout(() => { void doSave(); }, RETRY_DELAY);
+      }
     }
   }, []);
 
@@ -148,7 +164,12 @@ export function StoryProvider({ children }: { children: ReactNode }) {
     }
   }, [commit]);
 
-  const saveNow = useCallback(() => { clearTimeout(timer.current); void doSave(); }, [doSave]);
+  const saveNow = useCallback(() => {
+    clearTimeout(timer.current);
+    clearTimeout(retryTimer.current);
+    retriedRef.current = false;   // force-save → ให้สิทธิ์ retry ใหม่ (เช่นหลัง AI เจนเสร็จ)
+    void doSave();
+  }, [doSave]);
 
   const stories = state ? Object.entries(state.stories).map(([id, s]) => ({ id, name: s.name ?? '(untitled)' })) : [];
   const story = state ? state.stories[state.activeStoryId] ?? null : null;
