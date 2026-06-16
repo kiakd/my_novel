@@ -1,16 +1,34 @@
 // ============ API client — เรียก backend เดิม (proxied ผ่าน Next rewrites) ============
 import type { AppState, AILogRow, AILogDetail, AppLogRow } from './types';
 
-async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    ...init,
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...init?.headers },
-  });
-  const data = await res.json().catch(() => null);
-  if (!res.ok && res.status !== 409) {
-    throw new Error((data as { error?: string })?.error ?? `${url} → ${res.status}`);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** opts.retries: ลองใหม่เมื่อ network error (เช่น QUIC_TOO_MANY_RTOS บน edge HTTP3) หรือ gateway 502/503/504
+ *  — ใช้เฉพาะ call ที่ยิงซ้ำได้ปลอดภัย (idempotent เช่น generate) ไม่ใช้กับ write (put/upsert) ที่มีผลข้างเคียง */
+async function jsonFetch<T>(url: string, init?: RequestInit, opts?: { retries?: number }): Promise<T> {
+  const retries = opts?.retries ?? 0;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, {
+        ...init,
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...init?.headers },
+      });
+      if ((res.status === 502 || res.status === 503 || res.status === 504) && attempt < retries) {
+        await sleep(400 * (attempt + 1)); continue;
+      }
+      const data = await res.json().catch(() => null);
+      if (!res.ok && res.status !== 409) {
+        throw new Error((data as { error?: string })?.error ?? `${url} → ${res.status}`);
+      }
+      return data as T;
+    } catch (e) {
+      lastErr = e;
+      if (e instanceof TypeError && attempt < retries) { await sleep(400 * (attempt + 1)); continue; }
+      throw e;
+    }
   }
-  return data as T;
+  throw lastErr;
 }
 
 export type StateWithRev = AppState & { __rev: number };
@@ -53,12 +71,12 @@ export const clearAppLogs = () => jsonFetch<{ ok: boolean; deleted: number }>('/
 // ---- AI: raw generate (เผื่อ continue/review ในอนาคต) ----
 export interface GenerateResult { ok: boolean; text?: string; error?: string; provider?: string; model?: string }
 export const generate = (body: { user: string; system?: string; provider?: string; temperature?: number; max_tokens?: number; prefill?: string }) =>
-  jsonFetch<GenerateResult>('/api/generate', { method: 'POST', body: JSON.stringify(body) });
+  jsonFetch<GenerateResult>('/api/generate', { method: 'POST', body: JSON.stringify(body) }, { retries: 2 });
 
 // ---- AI: เขียนต่อบท (roleplay assembler ฝั่ง backend ประกอบ system prompt จาก context) ----
 export interface GenRoleplayResult { ok: boolean; text?: string; error?: string; provider?: string; model?: string; prompt_chars?: number }
 export const generateRoleplay = (body: { context: unknown; user_input: string; provider?: string; temperature?: number; max_tokens?: number; prefill?: string }) =>
-  jsonFetch<GenRoleplayResult>('/api/generate-roleplay', { method: 'POST', body: JSON.stringify(body) });
+  jsonFetch<GenRoleplayResult>('/api/generate-roleplay', { method: 'POST', body: JSON.stringify(body) }, { retries: 2 });
 
 // ---- RAG memory ฝั่งนิยาย (kind:'novel') — เรียก endpoint เดียวกับแชทแต่แยก scope/kind ----
 // หน่วยความจำของนิยาย = ย่อหน้าของแต่ละบท · scopeId = story.id · turnIdx = ดัชนีย่อหน้าไล่ทั้งเรื่อง
@@ -112,4 +130,4 @@ export const expand = (body: {
   characters?: string[];
   provider?: string;
   max_tokens?: number;
-}) => jsonFetch<ExpandResult>('/api/expand', { method: 'POST', body: JSON.stringify(body) });
+}) => jsonFetch<ExpandResult>('/api/expand', { method: 'POST', body: JSON.stringify(body) }, { retries: 2 });

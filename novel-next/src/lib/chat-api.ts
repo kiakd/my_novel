@@ -2,16 +2,35 @@
 import type { ChatMeta, ChatMetaWithRev, ChatSession, ChatSessionWithRev, ChatChar, ChatMsg, ChatStateCard, ChatMemFact, PlayerPersona } from './chat-types';
 import type { LiveState } from './live-state';
 
-async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    ...init,
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...init?.headers },
-  });
-  const data = await res.json().catch(() => null);
-  if (!res.ok && res.status !== 409) {
-    throw new Error((data as { error?: string })?.error ?? `${url} → ${res.status}`);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** opts.retries: ลองใหม่เมื่อเจอ network error (เช่น QUIC_TOO_MANY_RTOS บนเน็ตมือถือ/edge HTTP3) หรือ gateway 502/503/504
+ *  — ใช้เฉพาะ call ที่ "ยิงซ้ำได้ปลอดภัย" (idempotent เช่น generate/translate/recall) ไม่ใช้กับ write ที่มีผลข้างเคียง */
+async function jsonFetch<T>(url: string, init?: RequestInit, opts?: { retries?: number }): Promise<T> {
+  const retries = opts?.retries ?? 0;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, {
+        ...init,
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...init?.headers },
+      });
+      if ((res.status === 502 || res.status === 503 || res.status === 504) && attempt < retries) {
+        await sleep(400 * (attempt + 1)); continue;   // gateway error ชั่วคราว → ลองใหม่
+      }
+      const data = await res.json().catch(() => null);
+      if (!res.ok && res.status !== 409) {
+        throw new Error((data as { error?: string })?.error ?? `${url} → ${res.status}`);
+      }
+      return data as T;
+    } catch (e) {
+      lastErr = e;
+      // เฉพาะ network error (fetch reject = TypeError เช่น QUIC drop) ที่ retry — HTTP error ที่ throw เองไม่ retry
+      if (e instanceof TypeError && attempt < retries) { await sleep(400 * (attempt + 1)); continue; }
+      throw e;
+    }
   }
-  return data as T;
+  throw lastErr;
 }
 
 /** โหลด chat meta: chars+items (null ถ้ายังไม่มีใน DB) — sessions โหลดแยกผ่าน getChatSessions */
@@ -52,7 +71,7 @@ export const sendChat = (body: {
   max_tokens?: number;
   temperature?: number;
   prefill?: string;
-}) => jsonFetch<ChatReply>('/api/chat', { method: 'POST', body: JSON.stringify(body) });
+}) => jsonFetch<ChatReply>('/api/chat', { method: 'POST', body: JSON.stringify(body) }, { retries: 2 });
 
 // ---- RAG memory (ฝั่ง client เรียก server-side sqlite store) ----
 export interface MemRowInput {
@@ -88,7 +107,7 @@ export const generatePlayerPersona = (body: {
   char: { name: string; appearance?: string; description?: string; scenario?: string };
   provider?: string;
 }) => jsonFetch<{ ok: boolean; persona?: { name: string; role: string; appearance: string }; error?: string }>(
-  '/api/chat/generate-persona', { method: 'POST', body: JSON.stringify(body) },
+  '/api/chat/generate-persona', { method: 'POST', body: JSON.stringify(body) }, { retries: 2 },
 );
 
 // ---- AI เติม/เจนฟิลด์ตัวละคร (autofill) — ส่ง char ที่กรอกไว้ + บรีฟ → เจนฟิลด์ที่ขาด/ที่ขอ ----
@@ -99,7 +118,7 @@ export const generateCharFields = (body: {
   fields?: string[];
   provider?: string;
 }) => jsonFetch<{ ok: boolean; generated?: Record<string, string>; error?: string }>(
-  '/api/chat/characters/generate-fields', { method: 'POST', body: JSON.stringify(body) },
+  '/api/chat/characters/generate-fields', { method: 'POST', body: JSON.stringify(body) }, { retries: 2 },
 );
 
 // ---- AI แปลฟิลด์ตัวละครเป็นไทย (เอาการ์ดอังกฤษมาเล่นเป็นไทย) — คงความหมาย/โทน ----
@@ -109,7 +128,7 @@ export const translateCharFields = (body: {
   keepNames?: boolean;
   provider?: string;
 }) => jsonFetch<{ ok: boolean; translated?: Record<string, string>; error?: string }>(
-  '/api/chat/characters/translate', { method: 'POST', body: JSON.stringify(body) },
+  '/api/chat/characters/translate', { method: 'POST', body: JSON.stringify(body) }, { retries: 2 },
 );
 
 // ---- สรุปบทสนทนาช่วงเก่า (rolling summary) ผ่าน endpoint generate ทั่วไป ----
