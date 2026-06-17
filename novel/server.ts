@@ -11,7 +11,7 @@ import { RULE_ADULT, RULE_R18_LEXICON } from './shared-rules';
 import { pickStory, writeStoryMd, type Story } from './story-md';
 import { runWD14, categorizeTags, REF_SCENE_SYSTEM, buildRefSceneUser } from './ref-tag';
 import { toCard, fromCard, embedCardInPng, extractCardFromPng, makeSolidPng, type NovelChar } from './card-v2';
-import { renderStateCard, processChatState, type StateCard } from './state-card';
+import { renderStateCard, processChatState, deltaImportance, type StateCard } from './state-card';
 import {
   generateNovelAI,
   generateTensorArt,
@@ -809,7 +809,10 @@ const app = new Elysia()
         // บังคับ state tag: ถ้าไม่มีแท็กในคำตอบ → เรียกซ้ำขอเฉพาะบรรทัดแท็ก (กัน DeepSeek ลืมใส่ ~24%)
         const withTag = await ensureStateTag(out.text, b.stateCard, b.provider);
         const { cleaned, next, delta, warnings } = processChatState(withTag, b.stateCard);
-        return { ok: true, ...out, text: cleaned, stateCard: next, stateDelta: delta, stateWarnings: warnings };
+        // Phase 3 Part B: ให้คะแนนความสำคัญของเทิร์นจาก delta (piggyback ไม่เพิ่ม LLM call)
+        // client เอา importance/persistent ไป tag memory row → recall บูสต์เหตุการณ์เชิงปม
+        const { importance, persistent } = deltaImportance(delta);
+        return { ok: true, ...out, text: cleaned, stateCard: next, stateDelta: delta, stateWarnings: warnings, importance, persistent };
       }
       return { ok: true, ...out };
     } catch (e: any) {
@@ -869,10 +872,14 @@ const app = new Elysia()
       // ไม่มี vector → recall() ปรับ wFts เป็นเต็มเองภายใน. wRecency บูสต์ความจำสดเล็กน้อย
       // fusion: env MEM_FUSION = 'rrf' | 'weighted' (default weighted) — สลับเพื่อ A/B ได้โดยไม่ต้องแก้โค้ด
       const fusion = process.env.MEM_FUSION === 'rrf' ? 'rrf' : 'weighted';
+      // Phase 3 Part B: บูสต์เหตุการณ์สำคัญ/ถาวร (importance/persistent จาก deltaImportance) — ปรับได้ผ่าน env
+      // ปลอดภัยเปิด default: แถวเก่า importance=0 → boost=0 (ไม่ regress) มีผลเฉพาะเทิร์นที่เกิดปมเรื่องจริง
+      const wImp = Number(process.env.MEM_W_IMP ?? 0.15);
+      const wPersist = Number(process.env.MEM_W_PERSIST ?? 0.1);
       const hits = recall(db, {
         scopeId: b.scopeId, query: b.query, queryVec, activeChar: b.activeChar,
         narratorMode: b.mode === 'narrator', excludeFromIdx: b.excludeFromIdx ?? 0, k: b.k ?? 6,
-        wFts: queryVec ? 0.35 : 1, wVec: queryVec ? 0.65 : 0, wRecency: 0.12, fusion,
+        wFts: queryVec ? 0.35 : 1, wVec: queryVec ? 0.65 : 0, wRecency: 0.12, wImp, wPersist, fusion,
       });
       // budget ~600 token ≈ ตัด text ที่ยาวเกิน 300 ตัวอักษร/ก้อน (k=6 × 300 ≈ คงงบเดิม)
       const memories = hits.map((h) => `[เทิร์น ${h.turnIdx}] ${h.text.slice(0, 300)}`);

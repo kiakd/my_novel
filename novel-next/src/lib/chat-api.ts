@@ -53,6 +53,8 @@ export interface ChatReply {
   stateCard?: LiveState;      // live state ที่ backend apply delta แล้ว (เมื่อส่ง stateCard มาในคำขอ)
   stateDelta?: unknown;       // delta ที่พาร์สได้ (ดีบั๊ก)
   stateWarnings?: string[];   // คำเตือนความขัดแย้ง deterministic (ว่าง = ไม่มีปัญหา)
+  importance?: number;        // Phase 3B: ความสำคัญของเทิร์น (0-5) จาก delta — เอาไป tag memory row
+  persistent?: boolean;       // Phase 3B: เทิร์นนี้มีการเปลี่ยนถาวร (ปม/ตัวตน/พลัง) → บูสต์ recall
 }
 export const sendChat = (body: {
   char: Partial<ChatChar> & { name: string };
@@ -77,6 +79,7 @@ export const sendChat = (body: {
 export interface MemRowInput {
   id: string; scopeId: string; charId?: string | null; secret: boolean;
   speaker: string; turnIdx: number; ts: number; text: string;
+  importance?: number; persistent?: boolean;  // Phase 3B: tag เทิร์นสำคัญเพื่อบูสต์ recall
 }
 // resp ของ ingest/backfill — มี embedConfigured/embedError เพื่อเตือน client ว่า embedding ใช้งานได้ไหม
 export interface MemWriteResult { ok: boolean; count?: number; embedded?: boolean; embedConfigured?: boolean; embedError?: string; error?: string }

@@ -11,6 +11,8 @@ export interface MemRow {
   ts: number;
   text: string;
   embedding?: Float32Array | null;
+  importance?: number;   // 0-5 (จาก extractState) — fact สำคัญถูกบูสต์ตอน recall. default 0
+  persistent?: boolean;  // true = fact ถาวร (ปม/ความลับ/คำสัญญา) — บูสต์เพิ่ม. default false
 }
 
 export interface FtsQuery {
@@ -34,8 +36,13 @@ export function openMemDb(path: string): Database {
   db.exec(`CREATE TABLE IF NOT EXISTS mem (
     id TEXT PRIMARY KEY, scopeId TEXT NOT NULL, kind TEXT NOT NULL,
     charId TEXT, secret INTEGER NOT NULL DEFAULT 0, speaker TEXT,
-    turnIdx INTEGER NOT NULL, ts INTEGER NOT NULL, text TEXT NOT NULL, embedding BLOB
+    turnIdx INTEGER NOT NULL, ts INTEGER NOT NULL, text TEXT NOT NULL, embedding BLOB,
+    importance INTEGER NOT NULL DEFAULT 0, persistent INTEGER NOT NULL DEFAULT 0
   )`);
+  // migration: เพิ่มคอลัมน์ importance/persistent ให้ DB เดิม (prod) ที่สร้างก่อน Phase 3 Part B
+  const cols = (db.query('PRAGMA table_info(mem)').all() as { name: string }[]).map((c) => c.name);
+  if (!cols.includes('importance')) db.exec('ALTER TABLE mem ADD COLUMN importance INTEGER NOT NULL DEFAULT 0');
+  if (!cols.includes('persistent')) db.exec('ALTER TABLE mem ADD COLUMN persistent INTEGER NOT NULL DEFAULT 0');
   db.exec('CREATE INDEX IF NOT EXISTS idx_mem_scope ON mem(scopeId, turnIdx)');
   db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS mem_fts USING fts5(id UNINDEXED, text, tokenize='trigram')`);
   return db;
@@ -49,14 +56,14 @@ export function getMemDb(): Database {
 
 export function ingestMemory(db: Database, rows: MemRow[]): void {
   const insMem = db.prepare(
-    `INSERT OR IGNORE INTO mem (id, scopeId, kind, charId, secret, speaker, turnIdx, ts, text, embedding)
-     VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT OR IGNORE INTO mem (id, scopeId, kind, charId, secret, speaker, turnIdx, ts, text, embedding, importance, persistent)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
   );
   const insFts = db.prepare('INSERT INTO mem_fts (id, text) VALUES (?, ?)');
   const tx = db.transaction((items: MemRow[]) => {
     for (const r of items) {
       const blob = r.embedding ? Buffer.from(r.embedding.buffer, r.embedding.byteOffset, r.embedding.byteLength) : null;
-      const res = insMem.run(r.id, r.scopeId, r.kind, r.charId ?? null, r.secret ? 1 : 0, r.speaker, r.turnIdx, r.ts, r.text, blob);
+      const res = insMem.run(r.id, r.scopeId, r.kind, r.charId ?? null, r.secret ? 1 : 0, r.speaker, r.turnIdx, r.ts, r.text, blob, r.importance ?? 0, r.persistent ? 1 : 0);
       if (res.changes > 0) insFts.run(r.id, r.text); // เพิ่ม FTS เฉพาะตอน mem เพิ่มจริง (กันซ้ำตอน backfill ซ้ำ)
     }
   });
@@ -95,6 +102,8 @@ function rowToHit(r: any): MemHit {
     id: r.id, scopeId: r.scopeId, kind: r.kind, charId: r.charId, secret: !!r.secret,
     speaker: r.speaker, turnIdx: r.turnIdx, ts: r.ts, text: r.text,
     embedding: r.embedding ? new Float32Array((r.embedding as Buffer).buffer, (r.embedding as Buffer).byteOffset, (r.embedding as Buffer).byteLength / 4) : null,
+    importance: typeof r.importance === 'number' ? r.importance : 0,
+    persistent: !!r.persistent,
     ftsRank: typeof r.ftsRank === 'number' ? r.ftsRank : undefined,
   };
 }
@@ -129,6 +138,8 @@ export interface RecallQuery {
   scopeId: string; query: string; queryVec: Float32Array | null; activeChar: string;
   narratorMode: boolean; excludeFromIdx: number; k: number; wFts: number; wVec: number;
   wRecency?: number; // ถ่วงความจำที่สดกว่าเล็กน้อย (turnIdx สูง = ใหม่). default 0 = ปิด
+  wImp?: number;     // บูสต์ตาม importance (0-5 → 0-1). default 0 = ปิด
+  wPersist?: number; // บูสต์ fact ถาวร (persistent). default 0 = ปิด
   fusion?: 'weighted' | 'rrf'; // วิธีรวมสัญญาณ FTS+vector. default 'weighted'. rrf = robust กว่า (ใช้อันดับ ไม่ใช่ค่าดิบ)
 }
 
@@ -189,6 +200,15 @@ export function recall(db: Database, q: RecallQuery): MemHit[] {
     }
   }
 
+  // importance/persistence boost: fact สำคัญ (จาก extractState) ดันขึ้นเมื่อ relevance ใกล้กัน
+  const wImp = q.wImp ?? 0;
+  const wPersist = q.wPersist ?? 0;
+  if (wImp > 0 || wPersist > 0) {
+    score.forEach((e) => {
+      e.s += wImp * ((e.hit.importance ?? 0) / 5) + wPersist * (e.hit.persistent ? 1 : 0);
+    });
+  }
+
   return [...score.values()].sort((a, b) => b.s - a.s).slice(0, q.k).map((e) => e.hit);
 }
 
@@ -221,9 +241,9 @@ export function syncScope(db: Database, scopeId: string, rows: MemRow[]): { toEm
   }
   const incoming = new Set(rows.map((r) => r.id));
   const insMem = db.prepare(
-    `INSERT INTO mem (id, scopeId, kind, charId, secret, speaker, turnIdx, ts, text, embedding)
-     VALUES (?,?,?,?,?,?,?,?,?,NULL)`);
-  const updMem = db.prepare('UPDATE mem SET kind=?, charId=?, secret=?, speaker=?, turnIdx=?, ts=?, text=?, embedding=NULL WHERE id=?');
+    `INSERT INTO mem (id, scopeId, kind, charId, secret, speaker, turnIdx, ts, text, embedding, importance, persistent)
+     VALUES (?,?,?,?,?,?,?,?,?,NULL,?,?)`);
+  const updMem = db.prepare('UPDATE mem SET kind=?, charId=?, secret=?, speaker=?, turnIdx=?, ts=?, text=?, embedding=NULL, importance=?, persistent=? WHERE id=?');
   const insFts = db.prepare('INSERT INTO mem_fts (id, text) VALUES (?, ?)');
   const delFts = db.prepare('DELETE FROM mem_fts WHERE id = ?');
   const delMem = db.prepare('DELETE FROM mem WHERE id = ?');
@@ -233,11 +253,11 @@ export function syncScope(db: Database, scopeId: string, rows: MemRow[]): { toEm
     for (const r of rows) {
       const ex = existing.get(r.id);
       if (!ex) {
-        insMem.run(r.id, r.scopeId, r.kind, r.charId ?? null, r.secret ? 1 : 0, r.speaker, r.turnIdx, r.ts, r.text);
+        insMem.run(r.id, r.scopeId, r.kind, r.charId ?? null, r.secret ? 1 : 0, r.speaker, r.turnIdx, r.ts, r.text, r.importance ?? 0, r.persistent ? 1 : 0);
         insFts.run(r.id, r.text);
         toEmbed.push(r); stats.added++;
       } else if (ex.text !== r.text) {
-        updMem.run(r.kind, r.charId ?? null, r.secret ? 1 : 0, r.speaker, r.turnIdx, r.ts, r.text, r.id);
+        updMem.run(r.kind, r.charId ?? null, r.secret ? 1 : 0, r.speaker, r.turnIdx, r.ts, r.text, r.importance ?? 0, r.persistent ? 1 : 0, r.id);
         delFts.run(r.id); insFts.run(r.id, r.text);
         toEmbed.push(r); stats.updated++;
       } else {
