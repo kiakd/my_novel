@@ -1,6 +1,8 @@
 # Phase 3 — RRF rerank + Importance-aware recall (แผนไว้ทำภายหลัง)
 
-> สถานะ: **planned (ยังไม่ทำ)** · ที่มา: survey prior-art ([docs/2026-06-16-rag-prior-art-survey.md](../../2026-06-16-rag-prior-art-survey.md)) — ยืมจาก VectFox/CharMemory + RRF (Alex Garcia/Simon Willison)
+> สถานะ: **เสร็จแล้ว ✅** — Part A (RRF, commit 8d0be12) + Part B (importance/persistent: B1+B2 commit 4224937, B3 commit f2df01e)
+> หมายเหตุการลงมือจริงต่างจากแผนเดิมเล็กน้อย: B3 **ไม่แตะ prompt ของ extractState** (กัน regression state-card) — ใช้ `deltaImportance()` ให้คะแนนจาก `[[state:]]` delta ที่โมเดลปล่อยอยู่แล้ว แล้ว tag ลง memory row ของเทิร์นนั้น (แทนการ ingest fact แยกเป็น row ใหม่ → ไม่ซ้ำซ้อนกับ live-state ที่ฉีด fact อยู่ทุกเทิร์น). Task B4 (Injection Viewer) ยังไม่ทำ (ออปชัน)
+> ที่มา: survey prior-art ([docs/2026-06-16-rag-prior-art-survey.md](../../2026-06-16-rag-prior-art-survey.md)) — ยืมจาก VectFox/CharMemory + RRF (Alex Garcia/Simon Willison)
 > REQUIRED SUB-SKILL ตอนลงมือ: superpowers:subagent-driven-development
 
 **Goal:** ยกคุณภาพ recall 2 ชั้น — (A) เปลี่ยน rerank เป็น RRF ที่ robust กว่า, (B) ติด "importance/persistence" ให้ความจำ แล้วบูสต์ตอน recall โดย piggyback บน `extractState` ที่มีอยู่ (ไม่เพิ่ม LLM call)
