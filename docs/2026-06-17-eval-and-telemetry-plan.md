@@ -1,5 +1,6 @@
 # แผน "เก็บอะไร + เอาอะไรมา verify" ให้แอปดีขึ้น (Eval & Telemetry)
 
+> สถานะลงมือ (2026-06-17): ✅ **1.2 recall telemetry** (`logActivity('mem.recall')`), ✅ **2.1 eval harness** (`novel/eval/recall-eval.ts` + `needles-demo.json`), ✅ baseline run แรก (`docs/eval-runs/2026-06-17-baseline-demo.md`). ยังเหลือ: 1.3 implicit feedback (regen counter), golden set จากแชท**จริง** (รอข้อมูลผู้ใช้)
 > วันที่: 2026-06-17 · เป้า: เปลี่ยนการตัดสินใจปรับแอปจาก "เดา/รู้สึก" → "วัดได้" โดยเฉพาะคุณภาพ RAG recall (RRF vs weighted, importance ฯลฯ)
 > หลักคิด: เก็บ **สัญญาณที่ถูกอยู่แล้ว** (มี logger + memory store) + เพิ่ม **golden set เล็ก ๆ** ที่ทำเองได้ฟรี → วัดก่อน/หลังทุกครั้งที่ปรับ
 

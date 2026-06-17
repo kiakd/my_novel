@@ -65,3 +65,22 @@ export function useConciseMode() {
 
   return { concise, set };
 }
+
+// ============ ตัวดูความจำที่ฉีดเข้า prompt (Injection Viewer) — ดีบั๊ก/ความเชื่อมั่น (default ปิด) ============
+const LS_SHOW_RECALL = 'ns_show_recall';
+
+/** โชว์ว่าเทิร์นล่าสุด recall ความจำอะไรเข้า prompt บ้าง — ช่วยตรวจว่าระบบ "จำ" ถูกไหม เก็บถาวร (default ปิด) */
+export function useShowRecall() {
+  const [show, setShow] = useState(false);
+
+  useEffect(() => {
+    try { if (localStorage.getItem(LS_SHOW_RECALL) === '1') setShow(true); } catch { /* ignore */ }
+  }, []);
+
+  const set = useCallback((v: boolean) => setShow(() => {
+    try { localStorage.setItem(LS_SHOW_RECALL, v ? '1' : '0'); } catch { /* ignore */ }
+    return v;
+  }), []);
+
+  return { show, set };
+}
