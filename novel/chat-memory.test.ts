@@ -1,4 +1,7 @@
 import { test, expect } from 'bun:test';
+import { tmpdir } from 'os';
+import { rmSync } from 'fs';
+import { Database } from 'bun:sqlite';
 import { openMemDb, ingestMemory, ftsSearch, cosine, vectorSearch, recall, deleteMemory, deleteScope, syncScope } from './chat-memory';
 
 test('ingest + fts trigram จับคำไทยได้', () => {
@@ -172,4 +175,109 @@ test('recall: fusion default (weighted) ยังทำงานเมื่อ�
   ]);
   const hits = recall(db, { scopeId: 's1', query: 'มังกร', queryVec: null, activeChar: 'a', narratorMode: false, excludeFromIdx: 999, k: 5, wFts: 0.5, wVec: 0.5 });
   expect(hits[0].turnIdx).toBe(0);
+});
+
+// ===== Part B — importance/persistence-aware recall =====
+
+test('B1: ingest importance/persistent แล้วอ่านกลับได้ (default 0/false)', () => {
+  const db = openMemDb(':memory:');
+  ingestMemory(db, [
+    { id: 's1:0', scopeId: 's1', kind: 'chat', charId: 'a', secret: false, speaker: 'char', turnIdx: 0, ts: 1, text: 'เรย์นสัญญาว่าจะกลับมา', importance: 5, persistent: true },
+    { id: 's1:1', scopeId: 's1', kind: 'chat', charId: 'a', secret: false, speaker: 'char', turnIdx: 1, ts: 2, text: 'อากาศวันนี้ดีจัง' }, // ไม่ระบุ → default
+  ]);
+  const hits = recall(db, { scopeId: 's1', query: 'สัญญา', queryVec: null, activeChar: 'a', narratorMode: false, excludeFromIdx: 999, k: 5, wFts: 1, wVec: 0 });
+  const h0 = hits.find((h) => h.turnIdx === 0)!;
+  expect(h0.importance).toBe(5);
+  expect(h0.persistent).toBe(true);
+  const def = recall(db, { scopeId: 's1', query: 'อากาศ', queryVec: null, activeChar: 'a', narratorMode: false, excludeFromIdx: 999, k: 5, wFts: 1, wVec: 0 }).find((h) => h.turnIdx === 1)!;
+  expect(def.importance).toBe(0);
+  expect(def.persistent).toBe(false);
+});
+
+test('B1: DB เก่า (ไม่มีคอลัมน์ importance/persistent) → migrate ไม่ crash + ingest ได้', () => {
+  const path = `${tmpdir()}/chat-mem-migrate-test.sqlite`;
+  rmSync(path, { force: true });
+  try {
+    // จำลอง DB เวอร์ชันเก่า: สร้างตาราง mem แบบไม่มีคอลัมน์ใหม่
+    const old = new Database(path);
+    old.exec(`CREATE TABLE mem (
+      id TEXT PRIMARY KEY, scopeId TEXT NOT NULL, kind TEXT NOT NULL,
+      charId TEXT, secret INTEGER NOT NULL DEFAULT 0, speaker TEXT,
+      turnIdx INTEGER NOT NULL, ts INTEGER NOT NULL, text TEXT NOT NULL, embedding BLOB
+    )`);
+    old.exec(`INSERT INTO mem (id, scopeId, kind, secret, speaker, turnIdx, ts, text)
+      VALUES ('s1:0','s1','chat',0,'char',0,1,'ข้อความเก่าก่อน migrate')`);
+    old.close();
+
+    // openMemDb ต้อง migrate (ALTER TABLE ADD COLUMN) โดยไม่ crash
+    const db = openMemDb(path);
+    const cols = (db.query('PRAGMA table_info(mem)').all() as any[]).map((c) => c.name);
+    expect(cols).toContain('importance');
+    expect(cols).toContain('persistent');
+    // แถวเก่าได้ค่า default
+    const oldRow = db.query("SELECT importance, persistent FROM mem WHERE id='s1:0'").get() as any;
+    expect(oldRow.importance).toBe(0);
+    expect(oldRow.persistent).toBe(0);
+    // ingest แถวใหม่พร้อม importance ได้
+    ingestMemory(db, [{ id: 's1:1', scopeId: 's1', kind: 'chat', charId: 'a', secret: false, speaker: 'char', turnIdx: 1, ts: 2, text: 'ข้อความใหม่หลัง migrate', importance: 4, persistent: true }]);
+    const newRow = db.query("SELECT importance, persistent FROM mem WHERE id='s1:1'").get() as any;
+    expect(newRow.importance).toBe(4);
+    expect(newRow.persistent).toBe(1);
+    db.close();
+  } finally {
+    // cleanup (best-effort): WAL ทิ้ง sidecar -wal/-shm และ Windows อาจล็อกชั่วครู่ → ไม่ให้ล้มเทส
+    for (const p of [path, `${path}-wal`, `${path}-shm`]) {
+      try { rmSync(p, { force: true }); } catch { /* ignore lock บน Windows */ }
+    }
+  }
+});
+
+test('B2: recall บูสต์ fact importance สูง เมื่อ relevance ใกล้กัน', () => {
+  const db = openMemDb(':memory:');
+  ingestMemory(db, [
+    // สองแถว keyword เดียวกัน (relevance เท่ากัน) — แถวที่ importance สูงต้องนำ
+    { id: 's1:0', scopeId: 's1', kind: 'chat', charId: 'a', secret: false, speaker: 'char', turnIdx: 0, ts: 1, text: 'มังกรไฟ', importance: 0 },
+    { id: 's1:1', scopeId: 's1', kind: 'chat', charId: 'a', secret: false, speaker: 'char', turnIdx: 1, ts: 2, text: 'มังกรไฟ', importance: 5 },
+  ]);
+  const hits = recall(db, { scopeId: 's1', query: 'มังกรไฟ', queryVec: null, activeChar: 'a', narratorMode: false, excludeFromIdx: 999, k: 5, wFts: 1, wVec: 0, wImp: 0.3 });
+  expect(hits[0].turnIdx).toBe(1); // importance 5 นำ importance 0
+});
+
+test('B2: recall บูสต์ persistent fact เมื่อ relevance ใกล้กัน', () => {
+  const db = openMemDb(':memory:');
+  ingestMemory(db, [
+    { id: 's1:0', scopeId: 's1', kind: 'chat', charId: 'a', secret: false, speaker: 'char', turnIdx: 0, ts: 1, text: 'คำสาป', persistent: false },
+    { id: 's1:1', scopeId: 's1', kind: 'chat', charId: 'a', secret: false, speaker: 'char', turnIdx: 1, ts: 2, text: 'คำสาป', persistent: true },
+  ]);
+  const hits = recall(db, { scopeId: 's1', query: 'คำสาป', queryVec: null, activeChar: 'a', narratorMode: false, excludeFromIdx: 999, k: 5, wFts: 1, wVec: 0, wPersist: 0.3 });
+  expect(hits[0].turnIdx).toBe(1); // persistent นำ non-persistent
+});
+
+test('B2: ไม่ระบุ wImp/wPersist → ไม่บูสต์ (ของเดิมไม่ regress)', () => {
+  const db = openMemDb(':memory:');
+  ingestMemory(db, [
+    { id: 's1:0', scopeId: 's1', kind: 'chat', charId: 'a', secret: false, speaker: 'char', turnIdx: 0, ts: 1, text: 'มังกรไฟ', importance: 0 },
+    { id: 's1:5', scopeId: 's1', kind: 'chat', charId: 'a', secret: false, speaker: 'char', turnIdx: 5, ts: 2, text: 'มังกรไฟ', importance: 5 },
+  ]);
+  // ไม่มี wImp/wPersist/wRecency → ลำดับมาจาก FTS อย่างเดียว (เสมอกัน) ไม่พังเพราะ importance
+  const hits = recall(db, { scopeId: 's1', query: 'มังกรไฟ', queryVec: null, activeChar: 'a', narratorMode: false, excludeFromIdx: 999, k: 5, wFts: 1, wVec: 0 });
+  expect(hits.length).toBe(2);
+});
+
+test('syncScope: เก็บ importance/persistent ตอน insert + update', () => {
+  const db = openMemDb(':memory:');
+  const { stats } = syncScope(db, 's1', [
+    { id: 's1:0', scopeId: 's1', kind: 'chat', charId: 'a', secret: false, speaker: 'char', turnIdx: 0, ts: 1, text: 'เรย์นสัญญาจะกลับมา', importance: 5, persistent: true },
+  ]);
+  expect(stats.added).toBe(1);
+  let row = db.query("SELECT importance, persistent FROM mem WHERE id='s1:0'").get() as any;
+  expect(row.importance).toBe(5);
+  expect(row.persistent).toBe(1);
+  // update: เนื้อเปลี่ยน + importance เปลี่ยน
+  syncScope(db, 's1', [
+    { id: 's1:0', scopeId: 's1', kind: 'chat', charId: 'a', secret: false, speaker: 'char', turnIdx: 0, ts: 1, text: 'เรย์นผิดสัญญา', importance: 3, persistent: false },
+  ]);
+  row = db.query("SELECT importance, persistent FROM mem WHERE id='s1:0'").get() as any;
+  expect(row.importance).toBe(3);
+  expect(row.persistent).toBe(0);
 });
