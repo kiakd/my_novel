@@ -174,6 +174,25 @@ export function applyDelta(prev: StateCard | null | undefined, delta: StateDelta
   return base;
 }
 
+// ===== deltaImportance: ให้คะแนน "ความสำคัญ" ของเทิร์น จาก delta (deterministic, ไม่เรียก LLM) =====
+// piggyback บน [[state:]] delta ที่โมเดลปล่อยอยู่แล้ว → ใช้ tag memory row เพื่อบูสต์ตอน recall (Phase 3 Part B)
+// แนวคิด: เทิร์นที่เกิด "การเปลี่ยนเชิงโครงเรื่อง" (fact ใหม่/เปลี่ยนตัวตน/ได้-เสียพลัง) สำคัญกว่าเทิร์นเปลี่ยนสภาพชั่วคราว (ของ/เวลา/ที่)
+export function deltaImportance(delta: StateDelta | null): { importance: number; persistent: boolean } {
+  if (!delta) return { importance: 0, persistent: false };
+  const id = delta.set.identity;
+  const identityChange = !!(id && (id.realName || id.alias || id.form || id.gender || id.disguised !== undefined));
+  const facts = delta.add.facts.length;
+  const powerCh = delta.add.powers.length + delta.remove.powers.length;
+  const condCh = delta.add.conditions.length + delta.remove.conditions.length;
+  const invCh = delta.add.inventory.length + delta.remove.inventory.length;
+  // ถ่วงน้ำหนัก: fact/identity/power = ปมเรื่อง (หนัก) · cond = ปานกลาง · inv = เบา
+  const raw = facts * 2 + (identityChange ? 3 : 0) + powerCh * 2 + condCh + invCh;
+  const importance = Math.min(5, raw);
+  // persistent = การเปลี่ยน "ถาวร" เชิงตัวตน/ปมเรื่อง/พลังที่ได้มา (ไม่ใช่ของหาย/อาการชั่วคราว)
+  const persistent = identityChange || facts > 0 || delta.add.powers.length > 0;
+  return { importance, persistent };
+}
+
 // ===== checkContradiction: ตรวจ "ในโค้ด" ไม่เรียก LLM =====
 // คำที่บ่งว่าเป็น "ที่สาธารณะ/มีคนเห็น" (กฎปลอมตัว: ห้ามปรากฏร่างจริงในที่สาธารณะ)
 const PUBLIC_KW = ['เมือง', 'ตลาด', 'หมู่บ้าน', 'ชุมชน', 'จัตุรัส', 'ย่าน', 'โรงเตี๊ยม', 'โรงแรม', 'งานเลี้ยง', 'ราชสำนัก', 'วัง', 'ถนน', 'ท่าเรือ', 'สำนัก', 'โรงเรียน', 'ห้องเรียน', 'public', 'market', 'town', 'street', 'tavern', 'court', 'palace'];

@@ -387,13 +387,15 @@ export function ChatScreen() {
         // RAG: index ข้อความใหม่ (turnIdx = ตำแหน่งใน filtered array — ตรงกับ backfill)
         // judge=true = เทิร์น user จริง (user ถูก append ที่ baseN, char ที่ baseN+1)
         // judge=false = ต่อเรื่อง/regen (ไม่มี user ใหม่ — char อยู่ที่ baseN)
+        // Phase 3B: tag เทิร์น char ด้วย importance/persistent (จาก delta ฝั่ง backend) → recall บูสต์เหตุการณ์เชิงปม
+        const imp = { importance: r.importance ?? 0, persistent: r.persistent ?? false };
         const ingestRows = judge
           ? [
               { id: `${sessionId}:${baseN}`, scopeId: sessionId, charId: sessChar.name, secret: false, speaker: 'user', turnIdx: baseN, ts: ts - 1, text: userInput },
-              { id: `${sessionId}:${baseN + 1}`, scopeId: sessionId, charId: sessChar.name, secret: false, speaker: 'char', turnIdx: baseN + 1, ts, text },
+              { id: `${sessionId}:${baseN + 1}`, scopeId: sessionId, charId: sessChar.name, secret: false, speaker: 'char', turnIdx: baseN + 1, ts, text, ...imp },
             ]
           : [
-              { id: `${sessionId}:${baseN}`, scopeId: sessionId, charId: sessChar.name, secret: false, speaker: 'char', turnIdx: baseN, ts, text },
+              { id: `${sessionId}:${baseN}`, scopeId: sessionId, charId: sessChar.name, secret: false, speaker: 'char', turnIdx: baseN, ts, text, ...imp },
             ];
         // regen: id ของ char turn ชนกับของเก่า — backend INSERT OR IGNORE จะคงข้อความเก่าไว้ → ต้องลบก่อน re-ingest
         const doIngest = () => memIngest(sessionId, ingestRows).then(warnEmbed).catch(() => {});
