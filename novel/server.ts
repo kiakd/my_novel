@@ -866,6 +866,7 @@ const app = new Elysia()
     };
     if (!b?.scopeId || !b?.query) return { ok: true, memories: [] };
     try {
+      const t0 = Date.now();
       const db = getMemDb();
       const queryVec = await embedOne(b.query);
       // มี vector (semantic แม่นกว่า FTS trigram ที่ภาษาไทยมัก match substring มั่ว) → ถ่วง vec มากกว่า
@@ -883,6 +884,11 @@ const app = new Elysia()
       });
       // budget ~600 token ≈ ตัด text ที่ยาวเกิน 300 ตัวอักษร/ก้อน (k=6 × 300 ≈ คงงบเดิม)
       const memories = hits.map((h) => `[เทิร์น ${h.turnIdx}] ${h.text.slice(0, 300)}`);
+      // telemetry (เบา, ไม่เก็บ text เต็ม — กัน log บวม + ความเป็นส่วนตัว R18): ดูว่า recall ดึง id ไหน สูตรไหน ช้าแค่ไหน
+      logActivity('mem.recall', b.scopeId, {
+        mode: b.mode ?? 'char', fusion, embedded: !!queryVec, k: b.k ?? 6,
+        returnedIds: hits.map((h) => h.turnIdx), count: hits.length, latencyMs: Date.now() - t0,
+      });
       return { ok: true, memories };
     } catch (e: any) { return { ok: false, error: e.message, memories: [] }; }
   })
