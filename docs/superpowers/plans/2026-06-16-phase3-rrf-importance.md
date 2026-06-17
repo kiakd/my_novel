@@ -1,7 +1,7 @@
 # Phase 3 — RRF rerank + Importance-aware recall (แผนไว้ทำภายหลัง)
 
 > สถานะ: **เสร็จแล้ว ✅** — Part A (RRF, commit 8d0be12) + Part B (importance/persistent: B1+B2 commit 4224937, B3 commit f2df01e)
-> หมายเหตุการลงมือจริงต่างจากแผนเดิมเล็กน้อย: B3 **ไม่แตะ prompt ของ extractState** (กัน regression state-card) — ใช้ `deltaImportance()` ให้คะแนนจาก `[[state:]]` delta ที่โมเดลปล่อยอยู่แล้ว แล้ว tag ลง memory row ของเทิร์นนั้น (แทนการ ingest fact แยกเป็น row ใหม่ → ไม่ซ้ำซ้อนกับ live-state ที่ฉีด fact อยู่ทุกเทิร์น). Task B4 (Injection Viewer) ยังไม่ทำ (ออปชัน)
+> หมายเหตุการลงมือจริงต่างจากแผนเดิมเล็กน้อย: B3 **ไม่แตะ prompt ของ extractState** (กัน regression state-card) — ใช้ `deltaImportance()` ให้คะแนนจาก `[[state:]]` delta ที่โมเดลปล่อยอยู่แล้ว แล้ว tag ลง memory row ของเทิร์นนั้น (แทนการ ingest fact แยกเป็น row ใหม่ → ไม่ซ้ำซ้อนกับ live-state ที่ฉีด fact อยู่ทุกเทิร์น). **Task B4 (Injection Viewer) เสร็จแล้ว** — toggle "🧠 โชว์ความจำที่ระบบดึงมาใช้" ในตั้งค่าแชท
 > ที่มา: survey prior-art ([docs/2026-06-16-rag-prior-art-survey.md](../../2026-06-16-rag-prior-art-survey.md)) — ยืมจาก VectFox/CharMemory + RRF (Alex Garcia/Simon Willison)
 > REQUIRED SUB-SKILL ตอนลงมือ: superpowers:subagent-driven-development
 
