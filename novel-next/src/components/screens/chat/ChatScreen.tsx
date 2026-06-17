@@ -6,7 +6,7 @@ import { useChat } from '@/lib/store/ChatProvider';
 import { sendChat, summarizeChat, judgeRel, chatSceneImage, extractState, generatePlayerPersona, memBackfill, memIngest, memRecall, memDelete } from '@/lib/chat-api';
 import { applyItem, parseRelTag, clampRel, relLevel, floorRel, stepRel } from '@/lib/chat-rel';
 import { activateLore, LORE_SCAN_DEPTH } from '@/lib/chat-lore';
-import { useChatFontSize, useChatProvider, useConciseMode } from '@/lib/uiPrefs';
+import { useChatFontSize, useChatProvider, useConciseMode, useShowRecall } from '@/lib/uiPrefs';
 import type { ChatChar, ChatItem, ChatMsg, ChatSession, ChatStateCard, PlayerPersona } from '@/lib/chat-types';
 import { emptyLiveState, renderLiveStateLines } from '@/lib/live-state';
 import type { LiveState } from '@/lib/live-state';
@@ -58,10 +58,13 @@ export function ChatScreen() {
   const [memoDraft, setMemoDraft] = useState('');                         // draft ความจำ (ใน view settings)
   const [cardDraft, setCardDraft] = useState<ChatStateCard>({});          // draft บัตรสถานะ (ใน view settings)
   const [stateWarnings, setStateWarnings] = useState<string[]>([]);       // คำเตือนความขัดแย้งสถานะ (จาก live-state delta) — โชว์แบนเนอร์
+  const [lastRecalled, setLastRecalled] = useState<string[] | null>(null); // ความจำที่ recall เข้า prompt เทิร์นล่าสุด (Injection Viewer)
+  const [recallOpen, setRecallOpen] = useState(false);                    // เปิด/ยุบ panel ตัวดูความจำ
   const [personaDraft, setPersonaDraft] = useState<PlayerPersona | null>(null); // draft บทบาทผู้เล่น (gate บังคับ + แก้ในsettings)
   const [personaBusy, setPersonaBusy] = useState(false);                  // กำลังให้ AI กรอกบทบาท
   const { provider, set: setProvider } = useChatProvider();
   const { concise, set: setConcise } = useConciseMode();
+  const { show: showRecall, set: setShowRecall } = useShowRecall();
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastMsgRef = useRef<HTMLDivElement>(null);   // ต้นของข้อความล่าสุด (เพื่อเลื่อนให้คำตอบ AI ขึ้นบน)
   const prevViewRef = useRef(view);
@@ -378,6 +381,7 @@ export function ChatScreen() {
         recalled = recalled.filter((mem) => !rawTexts.some((t) => t.includes(mem) || mem.includes(t)));
         if (!recalled.length) recalled = undefined;
       }
+      setLastRecalled(recalled ?? []);   // Injection Viewer: บันทึกความจำที่ฉีดจริงเทิร์นนี้ ([] = ไม่ได้ดึงอะไร)
       const r = await sendChat({ char: sessChar, history, user_input: userInput, rel: baseRel, summary: summary || undefined, lore: pickLore(raw, userInput), state: stateToText(session?.stateCard), stateCard: session?.liveState ?? emptyLiveState(), playerPersona: session?.playerPersona, provider, recalled, concise, max_tokens: maxTok ?? 1500 });
       if (r.ok && r.text) {
         const { text } = parseRelTag(r.text);   // ตัดแท็กออกถ้าโมเดลเผลอใส่ (ตอนนี้ใช้ judge ประเมินแทน) — backend strip แท็ก [[state:]] ให้แล้ว
@@ -473,6 +477,7 @@ export function ChatScreen() {
         recalled = recalled.filter((mem) => !rawTexts.some((t) => t.includes(mem) || mem.includes(t)));
         if (!recalled.length) recalled = undefined;
       }
+      setLastRecalled(recalled ?? []);   // Injection Viewer (โหมดบรรยาย)
       const r = await sendChat({ char: sessChar, history, user_input: userInput, rel, summary: fullSummary || undefined, lore: pickLore(merged, userInput), state: stateToText(session?.stateCard), playerPersona: session?.playerPersona, mode: 'narrator', provider, recalled, concise, max_tokens: 1500 });
       if (r.ok && r.text) {
         const { text: out } = parseRelTag(r.text);
@@ -685,6 +690,30 @@ export function ChatScreen() {
             </div>
           )}
 
+          {/* Injection Viewer: ความจำระยะยาวที่ถูกฉีดเข้า prompt เทิร์นล่าสุด (เปิดจากตั้งค่า — ดีบั๊ก/ความเชื่อมั่น) */}
+          {showRecall && lastRecalled !== null && (
+            <div className="shrink-0 mx-3 mb-2 rounded-2xl border-2 border-grape/30 bg-grape/[.06]">
+              <button onClick={() => setRecallOpen((v) => !v)}
+                className="w-full flex items-center justify-between px-3.5 py-2 text-[12px] font-bold text-grape">
+                <span>🧠 ความจำที่ดึงมาใช้เทิร์นล่าสุด · {lastRecalled.length} ก้อน</span>
+                <span className="text-[11px]">{recallOpen ? '▲ ยุบ' : '▼ ดู'}</span>
+              </button>
+              {recallOpen && (
+                <div className="px-3.5 pb-2.5">
+                  {lastRecalled.length === 0 ? (
+                    <div className="text-[12px] text-muted leading-snug">— ไม่ได้ดึงความจำเก่ามาเทิร์นนี้ (บริบทล่าสุดพอแล้ว หรือยังไม่มีอะไรเข้าเกณฑ์)</div>
+                  ) : (
+                    <ul className="flex flex-col gap-1">
+                      {lastRecalled.map((mem, i) => (
+                        <li key={i} className="text-[12px] text-ink/80 leading-snug rounded-lg bg-white/60 px-2.5 py-1.5">{mem}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* footer: โมเดล + ไอเท็ม + ช่องพิมพ์ */}
           <div className="shrink-0 border-t border-line px-3 pt-2 pb-3 flex flex-col gap-2 bg-white/70 backdrop-blur" style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}>
             <div className="flex items-center justify-end gap-1.5">
@@ -793,6 +822,14 @@ export function ChatScreen() {
             <span className="flex flex-col">
               <span className="text-[13px] font-bold text-ink">✂️ โหมดกระชับ (ลดพรรณนา เน้นบทสนทนา)</span>
               <span className="text-[11.5px] text-muted leading-snug">เปิดเพื่อให้ AI เขียนพรรณนาฟุ่มเฟือยน้อยลง เน้นบทพูด+การกระทำ (มีผลกับทุกแชทและการเขียนนิยาย)</span>
+            </span>
+          </label>
+          {/* Injection Viewer toggle — โชว์ความจำที่ระบบดึงเข้า prompt เทิร์นล่าสุด (ดีบั๊ก/ความเชื่อมั่น) */}
+          <label className="flex items-start gap-2.5 cursor-pointer select-none">
+            <input type="checkbox" checked={showRecall} onChange={(e) => setShowRecall(e.target.checked)} className="accent-grape mt-0.5" />
+            <span className="flex flex-col">
+              <span className="text-[13px] font-bold text-ink">🧠 โชว์ความจำที่ระบบดึงมาใช้</span>
+              <span className="text-[11.5px] text-muted leading-snug">เปิดเพื่อเห็นว่าแต่ละเทิร์น AI ดึง “ความจำระยะยาว” ก้อนไหนเข้ามาช่วยตอบ — ใช้ตรวจว่าระบบจำเรื่องเก่าได้ถูกไหม</span>
             </span>
           </label>
         </Card>
