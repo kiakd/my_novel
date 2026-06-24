@@ -2,6 +2,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
+import { BottomTabBar } from './BottomTabBar';
 
 const LS_NAV_OPEN = 'ns_nav_open';
 
@@ -28,8 +29,10 @@ export function AppShell({ children }: { children: ReactNode }) {
       <Header onToggleNav={toggle} />
       <div className="flex-1 min-h-0 flex">
         <Sidebar open={navOpen} onClose={() => setNavOpen(false)} />
-        <main className="flex-1 min-w-0 overflow-auto p-6 lg:p-8">{children}</main>
+        <main className="flex-1 min-w-0 overflow-auto p-4 sm:p-6 lg:p-8 pb-24 md:pb-8">{children}</main>
       </div>
+      {/* มือถือ: แถบแท็บล่าง · "เพิ่ม" เปิดลิ้นชักเมนูเต็ม */}
+      <BottomTabBar onMore={() => setNavOpen(true)} />
     </div>
   );
 }

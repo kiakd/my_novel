@@ -28,6 +28,7 @@ const en = {
   group: { CONTENT: 'CONTENT', SYSTEM: 'SYSTEM' },
   nav: {
     read: 'Read',
+    more: 'More',
     plot: 'Plot',
     characters: 'Characters',
     locations: 'Locations',
@@ -113,6 +114,9 @@ const en = {
     },
     placeholder: "What's the {label}?",
     pov: { label: 'Narration POV', hint: 'used by Continue / Expand', first: '1st person', third: '3rd limited' },
+    genAllEmpty: 'Fill empty fields',
+    genAllDone: 'Generated {n} field(s)',
+    allFilled: 'All fields already filled',
   },
   characters: {
     title: 'Characters',
@@ -186,6 +190,8 @@ const en = {
     sumDone: 'Saved as cross-chapter memory',
     sumEmpty: 'This chapter has no content to summarize yet',
     toggleList: 'Show/hide chapter list',
+    modeWrite: 'Write',
+    modeRead: 'Read',
     expand: {
       title: 'Expand writing',
       sub: 'Write the story & dialogue — let AI flesh out scenes and action.',
@@ -346,6 +352,7 @@ const th: typeof en = {
   group: { CONTENT: 'เนื้อหา', SYSTEM: 'ระบบ' },
   nav: {
     read: 'อ่าน',
+    more: 'เพิ่ม',
     plot: 'โครงเรื่อง',
     characters: 'ตัวละคร',
     locations: 'สถานที่',
@@ -431,6 +438,9 @@ const th: typeof en = {
     },
     placeholder: '{label} คืออะไร?',
     pov: { label: 'มุมมองการเล่า', hint: 'ใช้ตอนเขียนต่อ/ขยาย', first: 'บุรุษ 1 (ผม/ฉัน)', third: 'บุรุษ 3 limited' },
+    genAllEmpty: 'เจนทุกช่องที่ว่าง',
+    genAllDone: 'เจนแล้ว {n} ช่อง',
+    allFilled: 'ทุกช่องมีข้อมูลแล้ว',
   },
   characters: {
     title: 'ตัวละคร',
@@ -504,6 +514,8 @@ const th: typeof en = {
     sumDone: 'เก็บเป็นความจำข้ามบทแล้ว',
     sumEmpty: 'บทนี้ยังไม่มีเนื้อหาให้สรุป',
     toggleList: 'ซ่อน/แสดงรายชื่อบท',
+    modeWrite: 'เขียน',
+    modeRead: 'อ่าน',
     expand: {
       title: 'ขยายงานเขียน',
       sub: 'คุณเขียนเนื้อเรื่อง+บทพูด — ให้ AI ช่วยเสริมฉากและแอ็กชัน',

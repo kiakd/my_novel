@@ -6,6 +6,7 @@ import { keysToText, textToKeys } from '@/lib/chat-lore';
 import { exportCardPng, exportCardJson, importCardFile } from '@/lib/card-client';
 import { generateCharFields, translateCharFields } from '@/lib/chat-api';
 import { useChatProvider } from '@/lib/uiPrefs';
+import { fileToScaledDataUrl } from '@/lib/image-resize';
 import type { ChatChar, LoreEntry } from '@/lib/chat-types';
 
 const COLORS: ColorKey[] = ['coral', 'sky', 'mint', 'grape', 'sun', 'bubble', 'lilac', 'slate'];
@@ -22,6 +23,14 @@ export function ChatCharModal({ char, onClose, onSave, onDelete }: Props) {
   const [d, setD] = useState<ChatChar>(char);
   const set = (p: Partial<ChatChar>) => setD((x) => ({ ...x, ...p }));
   const P = pal(d.color ?? 'coral');
+
+  // ---- รูปประจำตัว: ย่อฝั่ง client → data URL เก็บใน ChatChar.avatar ----
+  const avatarRef = useRef<HTMLInputElement>(null);
+  const onAvatarFile = async (file?: File | null) => {
+    if (!file || !file.type.startsWith('image/')) return;
+    try { set({ avatar: await fileToScaledDataUrl(file) }); toast('ใส่รูปแล้ว', '🖼️'); }
+    catch { toast('อ่านรูปไม่สำเร็จ', '⚠️'); }
+  };
 
   // ---- AI ช่วยเจนฟิลด์ตัวละคร (สถานะ local ไม่เก็บลง ChatChar) ----
   const { provider } = useChatProvider();
@@ -135,7 +144,7 @@ export function ChatCharModal({ char, onClose, onSave, onDelete }: Props) {
   const delLore = (id: string) => set({ lore: (d.lore ?? []).filter((e) => e.id !== id) });
 
   return (
-    <Modal open onClose={onClose} size="lg">
+    <Modal open onClose={onClose} size="lg" mobileFull>
       <div className="sticky top-0 z-10 bg-cream/95 backdrop-blur px-6 pt-6 pb-3 border-b border-line flex items-center justify-between gap-3">
         <div className="flex items-center gap-3.5 flex-1 min-w-0">
           <Avatar initial={(d.name || '?').slice(0, 1)} color={d.color ?? 'coral'} size={52} ring />
@@ -146,6 +155,31 @@ export function ChatCharModal({ char, onClose, onSave, onDelete }: Props) {
       </div>
 
       <div className="p-6 pt-5 flex flex-col gap-4">
+        {/* รูปประจำตัว — โชว์เต็มใบบนการ์ดรายชื่อ */}
+        <Field label="🖼️ รูปประจำตัว (โชว์บนการ์ด)">
+          <div className="flex items-center gap-3">
+            <div
+              onClick={() => avatarRef.current?.click()}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => { e.preventDefault(); void onAvatarFile(e.dataTransfer.files?.[0]); }}
+              className="relative h-24 w-20 rounded-2xl overflow-hidden cursor-pointer border-2 border-dashed grid place-items-center shrink-0 transition hover:brightness-95"
+              style={{ borderColor: P.tint, background: P.soft }}
+            >
+              {d.avatar ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={d.avatar} alt="" className="absolute inset-0 w-full h-full object-cover" />
+              ) : (
+                <span className="text-2xl" style={{ color: P.c }}>＋</span>
+              )}
+            </div>
+            <div className="text-[12px] text-muted leading-relaxed">
+              แตะหรือลากรูปมาวาง · ระบบย่อให้อัตโนมัติ
+              {d.avatar && <button type="button" onClick={() => set({ avatar: undefined })} className="block mt-1.5 text-coral font-bold hover:underline">ลบรูป</button>}
+            </div>
+          </div>
+          <input ref={avatarRef} type="file" accept="image/*" className="hidden" onChange={(e) => void onAvatarFile(e.target.files?.[0])} />
+        </Field>
+
         {/* สี */}
         <Field label="สีประจำตัว">
           <div className="flex gap-2 flex-wrap">

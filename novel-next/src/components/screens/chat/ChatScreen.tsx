@@ -960,21 +960,31 @@ export function ChatScreen() {
       {chars.length === 0 ? (
         <EmptyState emoji="💬" title="ยังไม่มีตัวละคร" sub="กด “＋ ตัวละครใหม่” เพื่อสร้างคนแรก" />
       ) : (
-        <div className="grid sm:grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 sm:gap-3">
           {chars.map((c) => {
             const P = pal(c.color ?? 'coral');
             const n = state.sessions.filter((s) => s.charId === c.id).length;
             return (
-              <Card key={c.id} className="p-3.5 flex items-center gap-3 relative">
-                <button className="flex items-center gap-3 flex-1 min-w-0 text-left" onClick={() => { setCharId(c.id); setView('sessions'); }}>
-                  <Avatar initial={(c.name || '?').slice(0, 1)} color={c.color ?? 'coral'} size={48} ring />
-                  <div className="min-w-0">
-                    <div className="font-bold text-ink truncate">{c.name}</div>
-                    <div className="text-[12px] text-muted truncate">{c.scenario || c.description || 'ตัวละครแชท'}</div>
-                    <div className="text-[11px] mt-0.5" style={{ color: P.c }}>{n ? `${n} แชท` : 'ยังไม่มีแชท'}</div>
+              <Card key={c.id} className="overflow-hidden relative" hover>
+                <button className="block w-full text-left" onClick={() => { setCharId(c.id); setView('sessions'); }}>
+                  {/* รูปเต็มใบ (4:5) — ไม่มีรูป → พื้นไล่สีประจำตัว + อักษรย่อ */}
+                  <div className="relative aspect-[4/5] w-full overflow-hidden" style={{ background: `linear-gradient(140deg, ${P.tint}, ${P.c})` }}>
+                    {c.avatar ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={c.avatar} alt={c.name} className="absolute inset-0 w-full h-full object-cover" />
+                    ) : (
+                      <span className="absolute inset-0 grid place-items-center font-display font-bold text-white/90 text-5xl">{(c.name || '?').slice(0, 1)}</span>
+                    )}
+                    <span className="absolute bottom-1.5 left-1.5 text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-white/85 backdrop-blur" style={{ color: P.c }}>
+                      {n ? `${n} แชท` : 'ใหม่'}
+                    </span>
+                  </div>
+                  <div className="p-2.5">
+                    <div className="font-bold text-ink truncate text-[14px]">{c.name}</div>
+                    <div className="text-[11px] text-muted line-clamp-2 mt-0.5 leading-snug">{c.scenario || c.description || 'ตัวละครแชท'}</div>
                   </div>
                 </button>
-                <IconBtn onClick={() => setEditId(c.id)} title="แก้ตัวละคร">✏️</IconBtn>
+                <IconBtn onClick={() => setEditId(c.id)} title="แก้ตัวละคร" className="absolute top-1.5 right-1.5 h-8 w-8 bg-white/85 backdrop-blur">✏️</IconBtn>
               </Card>
             );
           })}

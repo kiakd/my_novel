@@ -17,6 +17,7 @@ export interface ChatChar {
   id: string;
   name: string;
   color?: ColorKey;
+  avatar?: string;        // รูปประจำตัว (data URL ย่อขนาดฝั่ง client หรือ url) — โชว์เต็มใบบนการ์ด · ไม่มี = ใช้พื้นไล่สี + อักษรย่อ
   // โปรไฟล์ (สไตล์เดียวกับตัวละครในเนื้อเรื่อง)
   appearance?: string;
   outfit?: string;        // สไตล์การแต่งตัว/ชุดเริ่มต้น

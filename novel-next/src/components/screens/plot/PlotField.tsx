@@ -1,6 +1,5 @@
 'use client';
-import { useState } from 'react';
-import { Textarea, toast } from '@/components/ui';
+import { Textarea } from '@/components/ui';
 import { useI18n } from '@/lib/i18n';
 import { cx } from '@/lib/theme';
 
@@ -14,20 +13,15 @@ export interface PlotFieldDef {
 interface PlotFieldProps {
   f: PlotFieldDef;
   value: string;
+  busy: boolean;                              // กำลังเจนช่องนี้อยู่ (คุมจากแม่)
   onChange: (prop: string, value: string) => void;
+  onGenerate: (prop: string) => void;         // กดเจน → แม่เรียก AI + เขียนค่ากลับ
 }
 
-/** ฟิลด์โครงเรื่อง 1 ช่อง + ปุ่ม AI assist */
-export function PlotField({ f, value, onChange }: PlotFieldProps) {
+/** ฟิลด์โครงเรื่อง 1 ช่อง + ปุ่ม AI assist (อิงช่องอื่น + ของเดิมในช่อง แล้วปรับ/เติม) */
+export function PlotField({ f, value, busy, onChange, onGenerate }: PlotFieldProps) {
   const { t } = useI18n();
-  const [busy, setBusy] = useState(false);
   const label = t(`plot.fields.${f.labelKey}`);
-
-  const assist = () => {
-    setBusy(true);
-    toast(t('toast.drafting'), '✦');
-    setTimeout(() => { setBusy(false); toast(t('toast.suggestionReady'), '✅'); }, 1100);
-  };
 
   return (
     <div className="anim-rise">
@@ -37,8 +31,9 @@ export function PlotField({ f, value, onChange }: PlotFieldProps) {
           <span className="font-display text-[17px] font-medium text-ink">{label}</span>
         </div>
         <button
-          onClick={assist}
-          className="group inline-flex items-center gap-1.5 text-[13px] font-extrabold rounded-full px-3 py-1 transition"
+          onClick={() => onGenerate(f.prop)}
+          disabled={busy}
+          className="group inline-flex items-center gap-1.5 text-[13px] font-extrabold rounded-full px-3 py-1 transition disabled:cursor-not-allowed"
           style={{ color: '#7C6FE8', background: busy ? '#ECE9FB' : 'transparent' }}
           onMouseEnter={(e) => (e.currentTarget.style.background = '#ECE9FB')}
           onMouseLeave={(e) => !busy && (e.currentTarget.style.background = 'transparent')}

@@ -12,7 +12,7 @@ export function StorySelector() {
         value={activeStoryId}
         onChange={(e) => setActiveStory(e.target.value)}
         disabled={stories.length === 0}
-        className="appearance-none font-display font-medium text-[15px] rounded-full pl-4 pr-9 py-1.5 cursor-pointer focus:outline-none border-2 disabled:opacity-60"
+        className="appearance-none font-display font-medium text-[15px] rounded-full pl-4 pr-9 py-1.5 cursor-pointer focus:outline-none border-2 disabled:opacity-60 w-full md:w-auto max-w-full truncate"
         style={{ background: P.soft, borderColor: P.soft, color: darken(P.c, 0.7) }}
       >
         {stories.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}

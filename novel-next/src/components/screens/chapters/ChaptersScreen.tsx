@@ -1,15 +1,15 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { SectionTitle, Card, Tag, Btn, EmptyState, Modal, toast } from '@/components/ui';
+import { SectionTitle, Card, Tag, Btn, EmptyState, Modal, Spinner, toast } from '@/components/ui';
 import { useI18n } from '@/lib/i18n';
-import { pal } from '@/lib/theme';
+import { pal, cx } from '@/lib/theme';
 import { useStory } from '@/lib/store/StoryProvider';
 import { SaveIndicator } from '@/components/layout/SaveIndicator';
 import type { ChapterStatus } from '@/lib/types';
-import { textToHtml } from '@/lib/chapter';
+import { textToHtml, hasContent } from '@/lib/chapter';
 import { ChapterRow } from './ChapterRow';
+import { ChapterReadView } from './ChapterReadView';
 import { ChapterEditor, type ChapterEditorHandle } from './ChapterEditor';
-import { AIBar } from './AIBar';
 import { ExpandPanel } from './ExpandPanel';
 import { ContinueMenu, type ContinueKind } from './ContinueMenu';
 import { generate, generateRoleplay, memBackfillNovel, memIngestNovel, memRecallNovel } from '@/lib/api';
@@ -62,7 +62,10 @@ export function ChaptersScreen() {
   const [expandOpen, setExpandOpen] = useState(false);
   const [expandDraft, setExpandDraft] = useState('');
   const [contOpen, setContOpen] = useState(false);
-  const [listOpen, setListOpen] = useState(true);
+  const [listOpen, setListOpen] = useState(false);
+  // โหมดการ์ดบท: 'read' = อ่านสวย ๆ (immersive) · 'write' = แก้ไข
+  const [mode, setMode] = useState<'read' | 'write'>('write');
+  const [aiMenuOpen, setAiMenuOpen] = useState(false);
   const [provider, setProviderState] = useState<GenProvider>('deepseek');
   const { concise, set: setConcise } = useConciseMode();
   // รีวิว: ผลวิจารณ์บท → โชว์ใน modal (null = ปิด)
@@ -70,7 +73,11 @@ export function ChaptersScreen() {
   // RAG: backfill ความจำของเรื่องครั้งแรกที่เปิด/โหลด (idempotent ฝั่ง server) — key ด้วย story.id
   const backfilledRef = useRef<Set<string>>(new Set());
 
-  useEffect(() => { if (localStorage.getItem(LS_LIST_OPEN) === '0') setListOpen(false); }, []);
+  // ค่าเริ่มต้นรายชื่อบท: เคารพที่เคยตั้งไว้ ไม่งั้น มือถือ→พับ (กันรก) จอใหญ่→กาง
+  useEffect(() => {
+    const saved = localStorage.getItem(LS_LIST_OPEN);
+    setListOpen(saved === '1' || (saved == null && window.innerWidth >= 768));
+  }, []);
   useEffect(() => { const p = localStorage.getItem(LS_PROVIDER); if (p === 'lmstudio' || p === 'deepseek') setProviderState(p); }, []);
   const setProvider = (p: GenProvider) => { setProviderState(p); try { localStorage.setItem(LS_PROVIDER, p); } catch { /* ignore */ } };
   const toggleList = () => setListOpen((v) => {
@@ -84,6 +91,14 @@ export function ChaptersScreen() {
   const chapters = [...(story?.chapters ?? [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   const active = chapters.find((c) => c.id === activeId) ?? chapters[0] ?? null;
   const activeStatus = active ? statusOf(active.content, active.status) : 'empty';
+
+  // เปิดบทใหม่: มีเนื้อหาแล้ว → เริ่มที่โหมดอ่าน (เห็นภาพทันที), บทว่าง → โหมดเขียน
+  // คีย์ด้วย active.id เท่านั้น เพื่อไม่ให้เด้งออกจากโหมดเขียนระหว่างพิมพ์
+  const activeChapterId = active?.id;
+  useEffect(() => {
+    setMode(active && hasContent(active.content) ? 'read' : 'write');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChapterId]);
 
   // turnIdx ของย่อหน้า = ดัชนีไล่ทั้งเรื่อง (บทตามลำดับ × ย่อหน้า) → คืน [start, paras] ของบท index ที่ระบุ
   const paraOffsetOf = (chIdx: number): number => {
@@ -311,32 +326,91 @@ export function ChaptersScreen() {
         )}
 
         {active ? (
-          <Card className="relative flex flex-col min-h-[560px] w-full md:flex-1">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-line">
-              <div className="flex items-center gap-2.5">
+          <Card className="relative flex flex-col min-h-[calc(100dvh-200px)] md:min-h-[560px] w-full md:flex-1 p-0 overflow-hidden">
+            {/* หัวการ์ด: แถวบน = สลับลิสต์ + toggle อ่าน/เขียน + สถานะเซฟ · แถวล่าง = สถานะบท/เลขบท/จำนวนตัวอักษร */}
+            <div className="px-4 sm:px-6 py-3 border-b border-line">
+              <div className="flex items-center justify-between gap-2">
                 <button onClick={toggleList} title={t('chapters.toggleList')} className="h-8 w-8 grid place-items-center rounded-xl text-muted hover:bg-ink/[.06] transition shrink-0 text-base">
                   {listOpen ? '‹' : '☰'}
                 </button>
+                <div className="inline-flex items-center rounded-full border-2 p-0.5" style={{ borderColor: pal('sky').soft }}>
+                  {([['write', '✎', t('chapters.modeWrite')], ['read', '📖', t('chapters.modeRead')]] as const).map(([m, ic, lbl]) => (
+                    <button
+                      key={m}
+                      onClick={() => setMode(m)}
+                      className={cx('rounded-full px-3 py-1 text-[12px] font-extrabold transition active:scale-95')}
+                      style={mode === m ? { background: pal('sky').c, color: '#fff' } : { color: '#988C7C' }}
+                    >
+                      {ic} {lbl}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {mode === 'write' && (
+                    <button
+                      onClick={() => setAiMenuOpen((v) => !v)}
+                      disabled={busy}
+                      className="inline-flex items-center gap-1 text-[12px] font-extrabold rounded-full px-3 py-1.5 transition active:scale-95 disabled:opacity-50"
+                      style={{ background: pal('sky').soft, color: pal('sky').c }}
+                    >
+                      {busy ? <Spinner size={13} color={pal('sky').c} /> : '✦'} AI
+                    </button>
+                  )}
+                  <SaveIndicator status={status} variant="inline" />
+                </div>
+              </div>
+              <div className="flex items-center gap-2.5 mt-2 pl-0.5">
                 <Tag color={STATUS_COLOR[activeStatus]}>{t(`chapters.status.${activeStatus}`)}</Tag>
-                <span className="font-bold text-muted text-sm">{t('chapters.chapterN', { n: chapters.indexOf(active) + 1 })}</span>
-              </div>
-              <div className="flex items-center gap-4">
-                <span className="font-extrabold text-sm" style={{ color: pal('sky').c }}>{t('chapters.chars', { n: chars.toLocaleString() })}</span>
-                <SaveIndicator status={status} variant="inline" />
+                <span className="font-bold text-muted text-[13px]">{t('chapters.chapterN', { n: chapters.indexOf(active) + 1 })}</span>
+                <span className="text-muted/50">·</span>
+                <span className="font-extrabold text-[13px]" style={{ color: pal('sky').c }}>{t('chapters.chars', { n: chars.toLocaleString() })}</span>
               </div>
             </div>
-            <div className="flex-1 px-8 py-6">
-              <input value={active.title ?? ''} onChange={(e) => patchActive({ title: e.target.value })}
-                className="font-display text-3xl font-semibold text-ink bg-transparent w-full focus:outline-none mb-5 placeholder:text-muted/50" placeholder={t('chapters.untitled')} />
-              <ChapterEditor ref={editorRef} chapterId={active.id} html={active.content ?? ''} placeholder={t('chapters.beginPlaceholder')} onChange={setBody} />
-              {/* ความจำข้ามบท — ป้อนให้ AI ตอนเขียนบทถัด ๆ ไป (สร้างอัตโนมัติตอน "เขียนต่อ" หรือกด 📝 สรุป) แก้มือได้ */}
-              <div className="mt-5 pt-3 border-t border-line/60">
-                <div className="text-[12px] font-bold text-muted mb-1.5">🧠 {t('chapters.sumLabel')}</div>
-                <textarea value={active.summary ?? ''} onChange={(e) => patchActive({ summary: e.target.value })} rows={3}
-                  placeholder={t('chapters.sumPlaceholder')}
-                  className="w-full bg-cream/60 rounded-xl px-3 py-2 text-[13px] text-ink border border-line focus:border-sky focus:bg-white focus:outline-none transition resize-y leading-relaxed" />
+
+            {/* เมนู AI (โหมดเขียน) — แทนแถบลอยเดิม กดปุ่ม ✦ AI แล้วเด้งลงมา */}
+            {mode === 'write' && aiMenuOpen && (
+              <>
+                <div className="fixed inset-0 z-30" onClick={() => setAiMenuOpen(false)} />
+                <div className="absolute right-3 sm:right-5 top-[76px] z-40 w-52 bg-white rounded-2xl shadow-pop border border-line p-2 anim-pop flex flex-col gap-0.5">
+                  <div className="px-2 py-1 text-[11px] font-extrabold tracking-[.12em] text-muted">✦ AI</div>
+                  {([
+                    ['▶', t('chapters.aiContinue'), () => setContOpen(true)],
+                    ['✨', t('chapters.aiExpand'), openExpand],
+                    ['🔍', t('chapters.aiReview'), () => act('review')],
+                    ['📝', t('chapters.aiSummary'), () => act('summary')],
+                  ] as const).map(([ic, lbl, fn]) => (
+                    <button
+                      key={lbl}
+                      disabled={busy}
+                      onClick={() => { setAiMenuOpen(false); fn(); }}
+                      className="flex items-center gap-2.5 w-full text-left px-3 py-2.5 rounded-xl text-[14px] font-bold text-ink hover:bg-ink/[.05] disabled:opacity-40 transition"
+                    >
+                      <span className="w-5 text-center">{ic}</span>{lbl}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {mode === 'read' ? (
+              <ChapterReadView chapter={active} chapterLabel={t('chapters.chapterN', { n: chapters.indexOf(active) + 1 })} />
+            ) : (
+              <div className="flex-1 px-4 sm:px-8 py-5 sm:py-6">
+                <input value={active.title ?? ''} onChange={(e) => patchActive({ title: e.target.value })}
+                  className="font-display text-2xl sm:text-3xl font-semibold text-ink bg-transparent w-full focus:outline-none mb-4 sm:mb-5 placeholder:text-muted/50" placeholder={t('chapters.untitled')} />
+                <ChapterEditor ref={editorRef} chapterId={active.id} html={active.content ?? ''} placeholder={t('chapters.beginPlaceholder')} onChange={setBody} />
+                {/* ความจำข้ามบท — ป้อนให้ AI ตอนเขียนบทถัด ๆ ไป · พับไว้กันรก แตะเพื่อขยาย */}
+                <details className="mt-5 pt-3 border-t border-line/60 group">
+                  <summary className="text-[12px] font-bold text-muted mb-1.5 cursor-pointer list-none select-none flex items-center gap-1">
+                    <span className="text-[10px] transition-transform group-open:rotate-90">▶</span>
+                    🧠 {t('chapters.sumLabel')}
+                  </summary>
+                  <textarea value={active.summary ?? ''} onChange={(e) => patchActive({ summary: e.target.value })} rows={3}
+                    placeholder={t('chapters.sumPlaceholder')}
+                    className="mt-1.5 w-full bg-cream/60 rounded-xl px-3 py-2 text-[13px] text-ink border border-line focus:border-sky focus:bg-white focus:outline-none transition resize-y leading-relaxed" />
+                </details>
               </div>
-            </div>
+            )}
           </Card>
         ) : (
           <Card className="flex-1 w-full min-h-[560px] grid place-items-center">
@@ -345,7 +419,6 @@ export function ChaptersScreen() {
           </Card>
         )}
       </div>
-      {active && <AIBar onAct={act} onExpand={openExpand} onContinue={() => setContOpen(true)} busy={busy} />}
       <ExpandPanel open={expandOpen} onClose={() => setExpandOpen(false)} initialDraft={expandDraft} chapterNum={active ? chapters.indexOf(active) + 1 : 1} onInsert={insertExpanded} />
       <ContinueMenu open={contOpen} onClose={() => setContOpen(false)} onPick={runContinue} busy={busy} provider={provider} onProvider={setProvider} concise={concise} onConcise={setConcise} />
       <Modal open={review != null} onClose={() => setReview(null)} size="md">
