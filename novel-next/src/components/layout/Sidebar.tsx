@@ -47,7 +47,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
       {/* mobile: backdrop + overlay slide จากซ้าย */}
       <div
-        className={cx('md:hidden fixed inset-0 z-40 bg-ink/30 transition-opacity duration-300', open ? 'opacity-100' : 'opacity-0 pointer-events-none')}
+        className={cx('md:hidden fixed inset-0 z-50 bg-ink/30 transition-opacity duration-300', open ? 'opacity-100' : 'opacity-0 pointer-events-none')}
         onClick={onClose}
       />
       <aside

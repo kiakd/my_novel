@@ -617,8 +617,8 @@ export function ChatScreen() {
     if (!session.playerPersona) {
       const pd = personaDraft ?? blankPersona();
       return (
-        <div className="fixed inset-0 z-30 flex flex-col bg-cream md:static md:z-auto md:max-w-2xl md:mx-auto md:my-6 md:rounded-3xl md:border-2 md:border-line md:shadow-pop overflow-y-auto">
-          <div className="shrink-0 px-4 py-3 border-b border-line flex items-center gap-2.5 bg-white/70 backdrop-blur">
+        <div className="fixed inset-0 z-[60] flex flex-col bg-cream md:static md:z-auto md:max-w-2xl md:mx-auto md:my-6 md:rounded-3xl md:border-2 md:border-line md:shadow-pop overflow-y-auto">
+          <div className="sticky top-0 z-10 shrink-0 px-4 py-3 border-b border-line flex items-center gap-2.5 bg-white/85 backdrop-blur">
             <IconBtn onClick={() => { setView('sessions'); setSessionId(null); }} title="กลับ">←</IconBtn>
             <div className="font-display text-lg font-semibold text-ink leading-tight">🎭 ตั้งบทบาทของคุณ ก่อนเริ่มเล่นกับ {sessChar.name}</div>
           </div>
@@ -636,7 +636,7 @@ export function ChatScreen() {
     }
     return (
       <>
-        <div className="fixed inset-0 z-30 flex flex-col bg-cream md:static md:z-auto md:max-w-3xl md:mx-auto md:h-[calc(100vh-160px)] md:rounded-3xl md:border-2 md:border-line md:overflow-hidden md:shadow-pop">
+        <div className="fixed inset-0 z-[60] flex flex-col bg-cream md:static md:z-auto md:max-w-3xl md:mx-auto md:h-[calc(100vh-160px)] md:rounded-3xl md:border-2 md:border-line md:overflow-hidden md:shadow-pop">
           {/* header */}
           <div className="shrink-0 px-3 py-2.5 border-b border-line flex items-center gap-2.5 bg-white/70 backdrop-blur">
             <IconBtn onClick={() => { setView('sessions'); setSessionId(null); }} title="กลับ">←</IconBtn>
