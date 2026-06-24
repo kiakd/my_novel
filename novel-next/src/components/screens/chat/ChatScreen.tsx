@@ -6,11 +6,13 @@ import { useChat } from '@/lib/store/ChatProvider';
 import { sendChat, summarizeChat, judgeRel, chatSceneImage, extractState, generatePlayerPersona, memBackfill, memIngest, memRecall, memDelete } from '@/lib/chat-api';
 import { applyItem, parseRelTag, clampRel, relLevel, floorRel, stepRel } from '@/lib/chat-rel';
 import { activateLore, LORE_SCAN_DEPTH } from '@/lib/chat-lore';
+import { exportSessionLog } from '@/lib/chat-export';
 import { useChatFontSize, useChatProvider, useConciseMode, useShowRecall } from '@/lib/uiPrefs';
 import type { ChatChar, ChatItem, ChatMsg, ChatSession, ChatStateCard, PlayerPersona } from '@/lib/chat-types';
 import { emptyLiveState, renderLiveStateLines } from '@/lib/live-state';
 import type { LiveState } from '@/lib/live-state';
 import { ChatCharModal } from './ChatCharModal';
+import { ChatWorldModal } from './ChatWorldModal';
 import { ChatBubble } from './ChatBubble';
 import { RelMeter } from './RelMeter';
 import { ItemBar } from './ItemBar';
@@ -44,6 +46,7 @@ const isPublicConv = (m: ChatMsg) => !m.item && !(m.role === 'narrator' && m.sec
 
 export function ChatScreen() {
   const { state, mutate, loaded } = useChat();
+  const [worldOpen, setWorldOpen] = useState(false);   // ตัวแก้โลกกลาง (shared world)
   const [view, setView] = useState<'chars' | 'sessions' | 'chat' | 'settings'>('chars');
   const [charId, setCharId] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -338,7 +341,9 @@ export function ChatScreen() {
 
   // lorebook: เลือกข้อเท็จจริงที่ keyword โผล่ในข้อความล่าสุด (จ่าย token เฉพาะที่เกี่ยวกับฉาก)
   const pickLore = (recent: ChatMsg[], userInput: string): string[] | undefined => {
-    const hits = activateLore(sessChar?.lore, [...recent.slice(-LORE_SCAN_DEPTH).map((m) => m.text), userInput]);
+    // รวม "โลกกลาง (state.world)" + lore เฉพาะตัวละคร → activate ด้วยกัน (always=ฉีดทุกเทิร์น · keyword=ตามคีย์)
+    const merged = [...(state.world ?? []), ...(sessChar?.lore ?? [])];
+    const hits = activateLore(merged, [...recent.slice(-LORE_SCAN_DEPTH).map((m) => m.text), userInput]);
     return hits.length ? hits.map((e) => e.text) : undefined;
   };
 
@@ -649,6 +654,8 @@ export function ChatScreen() {
             <div className="flex items-center gap-0.5 shrink-0">
               <button onClick={font.dec} title="ตัวอักษรเล็กลง" className="h-8 w-7 grid place-items-center rounded-lg text-[12px] font-bold text-muted hover:bg-ink/[.06] active:scale-90 transition">A−</button>
               <button onClick={font.inc} title="ตัวอักษรใหญ่ขึ้น" className="h-8 w-7 grid place-items-center rounded-lg text-[15px] font-bold text-muted hover:bg-ink/[.06] active:scale-90 transition">A+</button>
+              <button onClick={() => exportSessionLog(session, sessChar, (state.world ?? []).map((w) => ({ text: w.text })))} title="ส่งออกแชทนี้เป็นไฟล์ .md"
+                className="h-8 w-8 grid place-items-center rounded-lg text-[15px] text-muted hover:bg-ink/[.06] active:scale-90 transition">📤</button>
               <button onClick={() => { setMemoDraft(session.summary ?? ''); setCardDraft(session.stateCard ?? {}); setView('settings'); }} title="ตั้งค่าแชท / แก้ความจำ"
                 className="h-8 w-8 grid place-items-center rounded-lg text-[16px] text-muted hover:bg-ink/[.06] active:scale-90 transition">⚙️</button>
             </div>
@@ -956,7 +963,12 @@ export function ChatScreen() {
   return (
     <div className="max-w-3xl mx-auto pb-6">
       <SectionTitle emoji="💬" color="bubble" title="แชท RP" sub="คุยกับตัวละครที่มีชีวิตของตัวเอง — ความสัมพันธ์ต้องค่อย ๆ สร้าง"
-        right={<Btn variant="primary" color="bubble" onClick={addChar}>＋ ตัวละครใหม่</Btn>} />
+        right={
+          <div className="flex items-center gap-2">
+            <Btn variant="soft" color="bubble" onClick={() => setWorldOpen(true)} title="โลกกลาง — ลอร์ที่ฉีดเข้าทุกแชท">🌍 <span className="hidden sm:inline">โลก</span></Btn>
+            <Btn variant="primary" color="bubble" onClick={addChar}>＋ <span className="hidden sm:inline">ตัวละครใหม่</span></Btn>
+          </div>
+        } />
       {chars.length === 0 ? (
         <EmptyState emoji="💬" title="ยังไม่มีตัวละคร" sub="กด “＋ ตัวละครใหม่” เพื่อสร้างคนแรก" />
       ) : (
@@ -991,6 +1003,7 @@ export function ChatScreen() {
         </div>
       )}
       {editChar && <ChatCharModal char={editChar} onClose={() => setEditId(null)} onSave={saveChar} onDelete={deleteChar} />}
+      {worldOpen && <ChatWorldModal world={state.world ?? []} onClose={() => setWorldOpen(false)} onSave={(entries) => mutate((st) => ({ ...st, world: entries }))} />}
     </div>
   );
 }

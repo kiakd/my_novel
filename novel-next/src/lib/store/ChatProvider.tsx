@@ -29,7 +29,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const metaRev = useRef(0);
   const sessRevs = useRef<Map<string, number>>(new Map());
   // snapshot ที่เซฟแล้ว — mutate สร้าง object ใหม่เสมอ จึงเทียบ reference ได้ว่าอะไรเปลี่ยน
-  const savedMeta = useRef<{ chars: ChatState['chars']; items: ChatState['items']; personas: ChatState['personas'] } | null>(null);
+  const savedMeta = useRef<{ chars: ChatState['chars']; items: ChatState['items']; personas: ChatState['personas']; world: ChatState['world'] } | null>(null);
   const savedSessions = useRef<Map<string, ChatSession>>(new Map());
   const timer = useRef<ReturnType<typeof setTimeout>>();
   stateRef.current = state;
@@ -41,11 +41,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       chars: meta?.chars ?? [],
       items: meta?.items?.length ? meta.items : emptyChatState().items,
       personas: meta?.personas ?? [],
+      world: meta?.world ?? [],
       sessions: sessions.map(({ __rev, ...s }) => s as ChatSession),
     };
     metaRev.current = meta?.__rev ?? 0;
     sessRevs.current = new Map(sessions.map((s) => [s.id, s.__rev ?? 0]));
-    savedMeta.current = { chars: next.chars, items: next.items, personas: next.personas };
+    savedMeta.current = { chars: next.chars, items: next.items, personas: next.personas, world: next.world };
     savedSessions.current = new Map(next.sessions.map((s) => [s.id, s]));
     setState(next);
     return meta != null;
@@ -72,11 +73,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     try {
       let conflict = false;
       // 1) meta (chars/items) เปลี่ยน → เซฟ doc 'chat'
-      if (!savedMeta.current || savedMeta.current.chars !== cur.chars || savedMeta.current.items !== cur.items || savedMeta.current.personas !== cur.personas) {
-        const res = await putChatState({ chars: cur.chars, items: cur.items, personas: cur.personas }, metaRev.current);
+      if (!savedMeta.current || savedMeta.current.chars !== cur.chars || savedMeta.current.items !== cur.items || savedMeta.current.personas !== cur.personas || savedMeta.current.world !== cur.world) {
+        const res = await putChatState({ chars: cur.chars, items: cur.items, personas: cur.personas, world: cur.world }, metaRev.current);
         if (res.ok) {
           metaRev.current = res.rev ?? metaRev.current + 1;
-          savedMeta.current = { chars: cur.chars, items: cur.items, personas: cur.personas };
+          savedMeta.current = { chars: cur.chars, items: cur.items, personas: cur.personas, world: cur.world };
         } else if (res.conflict) conflict = true;
         else { setStatus('error'); return; }
       }

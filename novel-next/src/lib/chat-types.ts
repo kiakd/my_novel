@@ -114,10 +114,11 @@ export interface ChatState {
   chars: ChatChar[];
   items: ChatItem[];      // คลังไอเท็ม/ของโกง (ใช้ร่วมทุกตัวละคร)
   personas?: PlayerPersona[];  // คลังบทบาทผู้เล่น — reuse ข้ามแชทได้ (หยิบมาแก้ชื่อ/รายละเอียดก่อนเล่นแชทใหม่)
+  world?: LoreEntry[];    // โลกกลาง (shared world) — lorebook ที่ฉีดเข้า "ทุกแชท" (always=ฉีดทุกเทิร์น · keyword=ตามคีย์เวิร์ด) ใช้ตั้งจักรวาล/เผ่า/ฝ่าย/ศัตรูร่วม
   sessions: ChatSession[];
 }
 
-/** ส่วน meta (chars+items) — เก็บใน doc 'chat'; ส่วน sessions แยกเก็บ doc ละอันใน chat_sessions */
-export type ChatMeta = Pick<ChatState, 'chars' | 'items' | 'personas'>;
+/** ส่วน meta (chars+items+personas+world) — เก็บใน doc 'chat'; ส่วน sessions แยกเก็บ doc ละอันใน chat_sessions */
+export type ChatMeta = Pick<ChatState, 'chars' | 'items' | 'personas' | 'world'>;
 export type ChatMetaWithRev = ChatMeta & { __rev: number };
 export type ChatSessionWithRev = ChatSession & { __rev: number };
