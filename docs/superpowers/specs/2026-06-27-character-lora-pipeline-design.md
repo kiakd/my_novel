@@ -14,7 +14,7 @@
 |---|---|---|
 | 1 | Success criterion | **One character, fully locked** (face+body), reusable across poses/scenes/nude |
 | 2 | Source/anchor face | **`dl_I_i2i_strong_00001_.png`** (semi-real/doll black-hair woman) |
-| 3 | Training venue | **Local 6GB in ComfyUI** (with cloud fallback) |
+| 3 | Training venue | **Local 6GB, with pause/resume** (Kohya save_state + resume so the GPU can be freed for gaming). Cloud (RunPod) **deferred** until budget (start of month). Long training time accepted. |
 | 4 | Dataset approach | **A** — FaceID-seeded generation + hard verifier filtering |
 
 ---
@@ -63,7 +63,8 @@ Each stage is an isolated unit with a clear input → output and its own verific
   - Network dim **16–32**, alpha = dim or dim/2 (UNSETTLED — try dim 32/alpha 16 first).
   - batch 1, gradient checkpointing, block-swap, Clip Skip 2.
 - **⚠️ Reality check (verified):** SDXL LoRA training on a 6GB GPU is **extremely slow** — a documented RTX 3060 6GB run took **~47 hours for 3000 steps** (so ~24h for 1500). "Overnight" likely is **not** enough; budget **~1 day** of the machine running, or use the cloud fallback.
-- **Cloud fallback (if local is too slow / OOMs):** RunPod 4090 (~$0.5, ~40 min) or Civitai on-site trainer (uploads R18 to their platform). Dataset + config are venue-portable.
+- **Pause/resume (chosen):** the 6GB GPU **cannot game + train at once** (VRAM conflict). So Kohya is configured to `save_state` every N steps; training can be **stopped to free the GPU for gaming, then resumed** from the last state. Manual (stop process → game → relaunch with `--resume`), and stop/start extends total wall-clock. Accepted by user (no cloud budget until start of month).
+- **Cloud fallback (deferred to next budget cycle):** RunPod 4090 (~$0.5, ~40 min) or Civitai on-site trainer. Dataset + config are venue-portable, so we can switch later with no rework.
 - **Output:** `char1.safetensors` → `models/loras/`.
 
 ### Stage 3 — Use + verify
