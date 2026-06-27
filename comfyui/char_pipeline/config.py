@@ -5,7 +5,7 @@ EMBED_PY = r"D:\ComfyUI_windows_portable\python_embeded\python.exe"
 INSIGHTFACE_ROOT = COMFY + r"\models\insightface"
 
 CHAR = "char1"
-ANCHOR_SRC = COMFY + r"\output\dl_I_i2i_strong_00001_.png"   # the approved look
+ANCHOR_SRC = r"D:\lora_train\char1\anchor.png"               # front-facing anchor (front_a4) for char1
 ANCHOR_INPUT = "face_doll.png"                                # filename inside ComfyUI/input
 TRAIN_DIR = r"D:\lora_train\char1"
 
