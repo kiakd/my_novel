@@ -16,8 +16,8 @@ Legend: ✅ done · ⏳ ready to run (you run it) · ⛔ blocked / needs setup
 2. ⏳ **Score + filter** — `python comfyui/char_pipeline/score_filter.py 0.62` → check it kept ≥40 in `D:\lora_train\char1\keep\`
 3. ⏳ **Spot-check + curate** — open `keep\`, delete bad ones (broken hands / off-style), aim ~40–55
 4. ⏳ **Caption** — `python comfyui/char_pipeline/curate_caption.py` → fills `D:\lora_train\char1\img\10_char1\` (png+txt)
-5. ⛔ **Backend setup (one-time, NOT done)** — install Python 3.11 + Kohya sd-scripts venv. See `training.md` PREREQUISITE.
-6. ⏳ **Train** — in ComfyUI use `SDXLLoraTrainer` with settings in `training.md`. Pause/resume = stop ComfyUI to game, relaunch + resume-from-state to continue. **~24h on 6GB** (slow — that's expected; cloud later if you want faster).
+5. ✅ **Backend setup — DONE** (Python 3.11 + sd-scripts venv at `D:\sd-scripts`, torch 2.6 cu124 sees the GPU). Nothing to do.
+6. ⏳ **Train** — in ComfyUI use `SDXLLoraTrainer`, set `sd_scripts_path = D:\sd-scripts`, plus the settings in `training.md`. Pause/resume = stop ComfyUI to game, relaunch + resume-from-state to continue. **~24h on 6GB** (slow — that's expected; cloud later if you want faster).
 7. ⏳ **Generate with char1** — after `char1.safetensors` is in `models/loras/`: `python comfyui/char_pipeline/gen_with_lora.py 0.8` → auto-prints face-match scores across poses incl. nude.
 
 ## Pause/resume reminder
