@@ -70,7 +70,9 @@ export function CharModal({ char, onClose, onSave, onDelete }: CharModalProps) {
       <div className="sticky top-0 z-10 bg-cream/95 backdrop-blur px-6 pt-6 pb-3 border-b border-line">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3.5">
-            <Avatar initial={charInitial(draft)} color={accent} size={52} ring />
+            {draft.avatar
+              ? <img src={draft.avatar} alt={draft.name} className="h-[52px] w-[52px] rounded-full object-cover ring-2 ring-white shadow shrink-0" />
+              : <Avatar initial={charInitial(draft)} color={accent} size={52} ring />}
             <div>
               <Input value={draft.name} onChange={(e) => set({ name: e.target.value })}
                 className="font-display text-2xl font-semibold !py-1 !border-transparent !bg-transparent focus:!bg-white" />

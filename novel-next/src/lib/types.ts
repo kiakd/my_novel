@@ -21,6 +21,7 @@ export interface Char {
   // UI extras (persist ในก้อน JSON)
   color?: ColorKey;
   defaultOutfit?: string; // ชุดเริ่มต้น (identity) — ใช้ใน writing context
+  avatar?: string;        // รูปประจำตัว (data URL ย่อฝั่ง client) — โชว์บนการ์ด/โมดัล
 }
 
 export type ChapterStatus = 'done' | 'draft' | 'empty';
