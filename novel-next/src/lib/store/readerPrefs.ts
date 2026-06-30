@@ -1,6 +1,7 @@
 'use client';
-// ============ Reader prefs — ขนาดอักษร/ธีม/บทล่าสุด (เก็บใน localStorage, แยกจาก DB) ============
+// ============ Reader prefs — ขนาดอักษร/ธีม/บทล่าสุด (localStorage + sync MongoDB ข้ามเครื่อง) ============
 import { useState, useEffect, useCallback } from 'react';
+import { notifyPrefChange, PREFS_RECONCILE_EVENT } from '@/lib/prefs-sync';
 
 export type ReaderTheme = 'paper' | 'sepia' | 'night';
 
@@ -33,19 +34,35 @@ export function useReaderPrefs() {
   const [prefs, setPrefs] = useState<ReaderPrefs>(DEFAULT);
   const [hydrated, setHydrated] = useState(false);
 
-  useEffect(() => {
+  const readLs = useCallback(() => {
     try {
       const raw = localStorage.getItem(LS_PREFS);
-      if (raw) setPrefs((p) => ({ ...p, ...JSON.parse(raw), fontSize: clampFont(JSON.parse(raw).fontSize ?? p.fontSize) }));
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        setPrefs((p) => ({ ...p, ...parsed, fontSize: clampFont(parsed.fontSize ?? p.fontSize) }));
+      }
     } catch { /* ignore */ }
-    setHydrated(true);
   }, []);
+
+  useEffect(() => { readLs(); setHydrated(true); }, [readLs]);
+
+  // reconcile จาก DB (prefs-sync) หรือแท็บอื่น → อ่านค่าใหม่จาก localStorage
+  useEffect(() => {
+    const onSync = () => readLs();
+    window.addEventListener(PREFS_RECONCILE_EVENT, onSync);
+    window.addEventListener('storage', onSync);
+    return () => {
+      window.removeEventListener(PREFS_RECONCILE_EVENT, onSync);
+      window.removeEventListener('storage', onSync);
+    };
+  }, [readLs]);
 
   const update = useCallback((patch: Partial<ReaderPrefs>) => {
     setPrefs((p) => {
       const next: ReaderPrefs = { ...p, ...patch };
       if (patch.fontSize != null) next.fontSize = clampFont(patch.fontSize);
       try { localStorage.setItem(LS_PREFS, JSON.stringify(next)); } catch { /* ignore */ }
+      notifyPrefChange();
       return next;
     });
   }, []);
@@ -61,7 +78,9 @@ export function getLastChapter(storyId: string): string | null {
 export function setLastChapter(storyId: string, chapterId: string): void {
   try {
     const m = JSON.parse(localStorage.getItem(LS_LAST) || '{}') as Record<string, string>;
+    if (m[storyId] === chapterId) return;   // ไม่เปลี่ยน → ไม่ต้อง PUT
     m[storyId] = chapterId;
     localStorage.setItem(LS_LAST, JSON.stringify(m));
+    notifyPrefChange();
   } catch { /* ignore */ }
 }

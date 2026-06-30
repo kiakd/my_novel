@@ -47,6 +47,14 @@ export interface PutStateResult {
 export const putState = (state: AppState, rev: number) =>
   jsonFetch<PutStateResult>('/api/state', { method: 'PUT', body: JSON.stringify({ ...state, __rev: rev }) });
 
+// ---- UI prefs (ค่าตั้งค่าหน้าจอ sync ข้ามเครื่อง — doc 'prefs', optimistic lock เหมือน state) ----
+export type PrefsWithRev = Record<string, unknown> & { __rev: number };
+/** โหลด prefs ทั้งก้อน (null ถ้ายังไม่มีใน DB) */
+export const getPrefs = () => jsonFetch<PrefsWithRev | null>('/api/prefs');
+/** บันทึก prefs — แนบ __rev เพื่อ optimistic lock (409 ถ้า rev ไม่ตรง) */
+export const putPrefs = (prefs: Record<string, unknown>, rev: number) =>
+  jsonFetch<PutStateResult>('/api/prefs', { method: 'PUT', body: JSON.stringify({ ...prefs, __rev: rev }) });
+
 /** ai_logs (การเรียก LLM) */
 export const getAiLogs = async (limit = 100): Promise<AILogRow[]> =>
   jsonFetch<AILogRow[]>(`/api/logs?limit=${limit}`);

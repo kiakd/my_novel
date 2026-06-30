@@ -2,6 +2,7 @@
 // ============ StoryProvider — state กลางของแอป (โหลด/แก้/autosave/optimistic-lock) ============
 import { createContext, useContext, useEffect, useRef, useState, useCallback, type ReactNode } from 'react';
 import { getState, putState } from '@/lib/api';
+import { initPrefsSync } from '@/lib/prefs-sync';
 import { seedState, emptyStory } from '@/lib/seed';
 import { toast } from '@/components/ui';
 import type { AppState, Story } from '@/lib/types';
@@ -43,6 +44,9 @@ export function StoryProvider({ children }: { children: ReactNode }) {
   const retriedRef = useRef(false);   // กัน retry วนไม่จบ — network error retry ได้ครั้งเดียวต่อรอบ
   stateRef.current = state;
   revRef.current = rev;
+
+  // sync UI prefs (ขนาดอักษร/ธีม ฯลฯ) จาก DB หลัง mount — localStorage เป็น instant cache กันกระพริบ
+  useEffect(() => { initPrefsSync(); }, []);
 
   // --- โหลด state ตอน mount ---
   useEffect(() => {

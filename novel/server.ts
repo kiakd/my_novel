@@ -15,6 +15,7 @@ const PORT = Number(process.env.PORT ?? 3000);
 const STATE_ID = 'main';
 const CHAT_STATE_ID = 'chat';   // state ก้อนแยกของระบบแชท RP (ไม่ปนกับ stories) — เก็บเฉพาะ chars+items
 const CHAT_SESSIONS_COLLECTION = 'chat_sessions';   // session แชทเก็บ doc ละอัน (_id = session.id)
+const PREFS_ID = 'prefs';       // ค่าตั้งค่าหน้าจอ (UI prefs) — ก้อนเดียว sync ข้ามเครื่อง
 const DICT_ID = 'dict';
 const COLLECTION = 'workspace';
 const LOG_COLLECTION = 'ai_logs';
@@ -396,6 +397,48 @@ const app = new Elysia()
     );
     if (r.matchedCount === 0) {
       const d = await col.findOne({ _id: CHAT_STATE_ID as any }, { projection: { rev: 1 } });
+      set.status = 409;
+      return { ok: false, conflict: true, currentRev: d?.rev ?? 0, error: 'rev changed during write' };
+    }
+    return { ok: true, rev: cur + 1 };
+  })
+
+  // --- UI prefs (doc 'prefs' — ค่าตั้งค่าหน้าจอ: ขนาดอักษรแชท/ธีมอ่าน/concise ฯลฯ sync ข้ามเครื่อง) ---
+  // เก็บก้อนเดียวเป็น object เพื่อ sync มือถือ↔คอม (localStorage เป็น instant cache กันกระพริบ; DB เป็น source of truth)
+  // optimistic locking ด้วย rev เหมือน /api/state — single-user: client ใช้กติกา "DB rev ใหม่กว่า cache → ใช้ DB"
+  .get('/api/prefs', async () => {
+    const db = await getDb();
+    const doc = await db.collection(COLLECTION).findOne({ _id: PREFS_ID as any });
+    if (!doc?.state) return null;
+    return { ...doc.state, __rev: doc.rev ?? 0 };
+  })
+  .put('/api/prefs', async ({ body, set }) => {
+    const db = await getDb();
+    const col = db.collection(COLLECTION);
+    const incoming = { ...(body as any) };
+    const baseRev = incoming.__rev;
+    delete incoming.__rev;
+    const existing = await col.findOne({ _id: PREFS_ID as any }, { projection: { rev: 1 } });
+    if (!existing) {
+      const c = await col.updateOne({ _id: PREFS_ID as any }, { $setOnInsert: { state: incoming, updatedAt: new Date(), rev: 1 } }, { upsert: true });
+      if (c.upsertedCount && c.upsertedCount > 0) return { ok: true, rev: 1 };
+      const d = await col.findOne({ _id: PREFS_ID as any }, { projection: { rev: 1 } });
+      set.status = 409;
+      return { ok: false, conflict: true, currentRev: d?.rev ?? 0, error: 'created concurrently' };
+    }
+    const hasRev = existing.rev !== undefined && existing.rev !== null;
+    const cur = hasRev ? existing.rev : 0;
+    if (baseRev !== cur) {
+      set.status = 409;
+      return { ok: false, conflict: true, currentRev: cur, error: `rev mismatch (client=${baseRev}, server=${cur})` };
+    }
+    const revFilter = hasRev ? { rev: cur } : { rev: { $exists: false } };
+    const r = await col.updateOne(
+      { _id: PREFS_ID as any, ...revFilter },
+      { $set: { state: incoming, updatedAt: new Date() }, $inc: { rev: 1 } },
+    );
+    if (r.matchedCount === 0) {
+      const d = await col.findOne({ _id: PREFS_ID as any }, { projection: { rev: 1 } });
       set.status = 409;
       return { ok: false, conflict: true, currentRev: d?.rev ?? 0, error: 'rev changed during write' };
     }
