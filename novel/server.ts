@@ -18,6 +18,7 @@ const CHAT_SESSIONS_COLLECTION = 'chat_sessions';   // session แชทเก�
 const PREFS_ID = 'prefs';       // ค่าตั้งค่าหน้าจอ (UI prefs) — ก้อนเดียว sync ข้ามเครื่อง
 const DICT_ID = 'dict';
 const COLLECTION = 'workspace';
+const GALLERY_COLLECTION = 'gallery';   // timeline gallery รูป — doc ละ galKey (count + slots dataURL) sync ข้ามเครื่อง
 const LOG_COLLECTION = 'ai_logs';
 const CHAR_COLLECTION = 'characters';
 
@@ -441,6 +442,62 @@ const app = new Elysia()
       const d = await col.findOne({ _id: PREFS_ID as any }, { projection: { rev: 1 } });
       set.status = 409;
       return { ok: false, conflict: true, currentRev: d?.rev ?? 0, error: 'rev changed during write' };
+    }
+    return { ok: true, rev: cur + 1 };
+  })
+
+  // --- timeline gallery (collection 'gallery' — doc ละ galKey: { count, slots: {<slotKey>: dataURL} }) ---
+  // sharded ต่อ galKey (ไม่รวมเป็นก้อนเดียวเหมือน prefs) เพื่อกัน 16MB/doc limit เวล้ารูปเยอะ:
+  // รูป webp ~110–330KB/ช่อง → ก้อนเดียวทั้งนิยายอาจทะลุ 16MB; แยกต่อ gallery → ก้อนละ ≤2–6MB ปลอดภัย
+  // optimistic locking ด้วย rev เหมือน /api/prefs — single-user: client ใช้กติกา "DB rev ใหม่กว่า cache → ใช้ DB"
+  .get('/api/gallery', async () => {
+    const db = await getDb();
+    const docs = await db.collection(GALLERY_COLLECTION).find({}).toArray();
+    // map: { <galKey>: { count, slots, __rev } } — client โหลดทีเดียวแล้ว reconcile ทุก gallery
+    const out: Record<string, any> = {};
+    for (const d of docs as any[]) out[d._id] = { count: d.count ?? 0, slots: d.slots ?? {}, __rev: d.rev ?? 0 };
+    return out;
+  })
+  .get('/api/gallery/:key', async ({ params }) => {
+    const db = await getDb();
+    const doc = await db.collection(GALLERY_COLLECTION).findOne({ _id: params.key as any });
+    if (!doc) return null;
+    return { count: (doc as any).count ?? 0, slots: (doc as any).slots ?? {}, __rev: (doc as any).rev ?? 0 };
+  })
+  .put('/api/gallery/:key', async ({ params, body, set }) => {
+    const db = await getDb();
+    const col = db.collection(GALLERY_COLLECTION);
+    const incoming = { ...(body as any) };
+    const baseRev = incoming.__rev;
+    delete incoming.__rev;
+    const payload = { count: Number(incoming.count ?? 0), slots: incoming.slots ?? {} };
+    const existing = await col.findOne({ _id: params.key as any }, { projection: { rev: 1 } });
+    if (!existing) {
+      const c = await col.updateOne(
+        { _id: params.key as any },
+        { $setOnInsert: { ...payload, updatedAt: new Date(), rev: 1 } },
+        { upsert: true },
+      );
+      if (c.upsertedCount && c.upsertedCount > 0) return { ok: true, rev: 1 };
+      const d = await col.findOne({ _id: params.key as any }, { projection: { rev: 1 } });
+      set.status = 409;
+      return { ok: false, conflict: true, currentRev: (d as any)?.rev ?? 0, error: 'created concurrently' };
+    }
+    const hasRev = (existing as any).rev !== undefined && (existing as any).rev !== null;
+    const cur = hasRev ? (existing as any).rev : 0;
+    if (baseRev !== cur) {
+      set.status = 409;
+      return { ok: false, conflict: true, currentRev: cur, error: `rev mismatch (client=${baseRev}, server=${cur})` };
+    }
+    const revFilter = hasRev ? { rev: cur } : { rev: { $exists: false } };
+    const r = await col.updateOne(
+      { _id: params.key as any, ...revFilter },
+      { $set: { ...payload, updatedAt: new Date() }, $inc: { rev: 1 } },
+    );
+    if (r.matchedCount === 0) {
+      const d = await col.findOne({ _id: params.key as any }, { projection: { rev: 1 } });
+      set.status = 409;
+      return { ok: false, conflict: true, currentRev: (d as any)?.rev ?? 0, error: 'rev changed during write' };
     }
     return { ok: true, rev: cur + 1 };
   })

@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { pal } from '@/lib/theme';
 import { useI18n } from '@/lib/i18n';
 import { ImageSlot } from './ImageSlot';
+import { notifyGalleryChange, GALLERY_RECONCILE_EVENT } from '@/lib/gallery-sync';
 
 const COUNT_PREFIX = 'tl:galcount:';
 const SLOT_PREFIX = 'tl:slot:';
@@ -24,16 +25,29 @@ export function SlotGallery({ galKey, placeholder, start = 2, w = 120, h = 104, 
   const P = pal('lilac');
   const ckey = COUNT_PREFIX + galKey;
 
-  useEffect(() => {
+  const readCount = () => {
     const v = localStorage.getItem(ckey);
     const n = v == null ? start : parseInt(v, 10);
-    setCount(Math.max(1, isNaN(n) ? start : n));
-  }, [ckey, start]);
+    return Math.max(1, isNaN(n) ? start : n);
+  };
+
+  useEffect(() => { setCount(readCount()); }, [ckey, start]);
+
+  // reconcile จาก DB → gallery-sync เขียน tl:galcount ใหม่แล้ว dispatch event → re-read count
+  useEffect(() => {
+    const onReconcile = (e: Event) => {
+      if ((e as CustomEvent).detail?.galKey === galKey) setCount(readCount());
+    };
+    window.addEventListener(GALLERY_RECONCILE_EVENT, onReconcile);
+    return () => window.removeEventListener(GALLERY_RECONCILE_EVENT, onReconcile);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [galKey, ckey, start]);
 
   const setN = (n: number) => {
     const next = Math.max(1, n);
     setCount(next);
     try { localStorage.setItem(ckey, String(next)); } catch { /* ignore quota */ }
+    notifyGalleryChange(galKey);   // จำนวนช่องเปลี่ยน → sync gallery นี้ขึ้น DB
   };
 
   const add = () => setN(count + 1);
@@ -46,7 +60,7 @@ export function SlotGallery({ galKey, placeholder, start = 2, w = 120, h = 104, 
   return (
     <div className="flex flex-wrap gap-2.5 items-stretch">
       {Array.from({ length: count }, (_, i) => (
-        <ImageSlot key={i} slotKey={`${galKey}-${i + 1}`} placeholder={`${placeholder} ${i + 1}`} w={w} h={h} radius={radius} />
+        <ImageSlot key={i} slotKey={`${galKey}-${i + 1}`} galKey={galKey} placeholder={`${placeholder} ${i + 1}`} w={w} h={h} radius={radius} />
       ))}
       <div className="flex flex-col gap-1.5">
         <button

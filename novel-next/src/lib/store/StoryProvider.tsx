@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useRef, useState, useCallback, type ReactNode } from 'react';
 import { getState, putState } from '@/lib/api';
 import { initPrefsSync } from '@/lib/prefs-sync';
+import { initGallerySync } from '@/lib/gallery-sync';
 import { seedState, emptyStory } from '@/lib/seed';
 import { toast } from '@/components/ui';
 import type { AppState, Story } from '@/lib/types';
@@ -46,7 +47,7 @@ export function StoryProvider({ children }: { children: ReactNode }) {
   revRef.current = rev;
 
   // sync UI prefs (ขนาดอักษร/ธีม ฯลฯ) จาก DB หลัง mount — localStorage เป็น instant cache กันกระพริบ
-  useEffect(() => { initPrefsSync(); }, []);
+  useEffect(() => { initPrefsSync(); initGallerySync(); }, []);
 
   // --- โหลด state ตอน mount ---
   useEffect(() => {

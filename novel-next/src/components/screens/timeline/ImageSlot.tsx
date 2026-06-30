@@ -3,6 +3,7 @@
 // ลาก/คลิกเพื่อใส่รูป, ย่อผ่าน canvas เป็น webp ก่อนเก็บ. คอนเซ็ปต์เดียวกับ sidecar ของ wireframe
 import { useEffect, useRef, useState } from 'react';
 import { pal } from '@/lib/theme';
+import { notifyGalleryChange, GALLERY_RECONCILE_EVENT } from '@/lib/gallery-sync';
 
 const PREFIX = 'tl:slot:';
 
@@ -25,20 +26,37 @@ async function downscale(file: File, max = 1000): Promise<string> {
 interface ImageSlotProps {
   slotKey: string;
   placeholder: string;
+  /** galKey ของ SlotGallery ที่ครอบช่องนี้ — ใช้บอก gallery-sync ว่าควร PUT gallery ก้อนไหน.
+   *  ถ้าไม่ส่ง (ImageSlot เดี่ยว เช่น look-slot) → ใช้ slotKey เป็น gallery เดี่ยว (isSingle) */
+  galKey?: string;
   w?: number | string;
   h?: number;
   radius?: number;
 }
 
-export function ImageSlot({ slotKey, placeholder, w = 120, h = 104, radius = 14 }: ImageSlotProps) {
+export function ImageSlot({ slotKey, placeholder, galKey, w = 120, h = 104, radius = 14 }: ImageSlotProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [url, setUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const P = pal('lilac');
   const lsKey = PREFIX + slotKey;
+  // gallery ที่จะ sync: ถ้ามี galKey (อยู่ใน SlotGallery) → sync ทั้ง gallery; ไม่งั้น slot เดี่ยว (isSingle)
+  const syncKey = galKey ?? slotKey;
+  const isSingle = !galKey;
+  const notify = () => notifyGalleryChange(syncKey, isSingle);
 
   // hydrate หลัง mount (เลี่ยง SSR mismatch)
   useEffect(() => { setUrl(localStorage.getItem(lsKey)); }, [lsKey]);
+
+  // reconcile จาก DB (gallery-sync เขียน localStorage แล้ว dispatch event) → re-read ค่าใหม่ ไม่ remount
+  useEffect(() => {
+    const onReconcile = (e: Event) => {
+      const k = (e as CustomEvent).detail?.galKey;
+      if (k === syncKey || k === slotKey) setUrl(localStorage.getItem(lsKey));
+    };
+    window.addEventListener(GALLERY_RECONCILE_EVENT, onReconcile);
+    return () => window.removeEventListener(GALLERY_RECONCILE_EVENT, onReconcile);
+  }, [lsKey, syncKey, slotKey]);
 
   const handle = async (file: File) => {
     if (!file.type.startsWith('image/')) return;
@@ -47,6 +65,7 @@ export function ImageSlot({ slotKey, placeholder, w = 120, h = 104, radius = 14 
       const data = await downscale(file);
       try { localStorage.setItem(lsKey, data); } catch { /* quota — ยังโชว์ในเซสชันได้ */ }
       setUrl(data);
+      notify();
     } finally {
       setBusy(false);
     }
@@ -56,6 +75,7 @@ export function ImageSlot({ slotKey, placeholder, w = 120, h = 104, radius = 14 
     e.stopPropagation();
     localStorage.removeItem(lsKey);
     setUrl(null);
+    notify();
   };
 
   return (

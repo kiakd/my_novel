@@ -55,6 +55,16 @@ export const getPrefs = () => jsonFetch<PrefsWithRev | null>('/api/prefs');
 export const putPrefs = (prefs: Record<string, unknown>, rev: number) =>
   jsonFetch<PutStateResult>('/api/prefs', { method: 'PUT', body: JSON.stringify({ ...prefs, __rev: rev }) });
 
+// ---- timeline gallery (รูป sync ข้ามเครื่อง — doc ละ galKey ใน collection 'gallery', optimistic lock เหมือน prefs) ----
+export interface GalleryDoc { count: number; slots: Record<string, string>; __rev: number }
+/** โหลด gallery ทั้งหมดทีเดียว: { <galKey>: { count, slots, __rev } } (object ว่างถ้ายังไม่มี) */
+export const getGalleries = () => jsonFetch<Record<string, GalleryDoc>>('/api/gallery');
+/** บันทึก gallery ก้อนเดียว (galKey) — แนบ __rev เพื่อ optimistic lock (409 ถ้า rev ไม่ตรง) */
+export const putGallery = (key: string, count: number, slots: Record<string, string>, rev: number) =>
+  jsonFetch<PutStateResult>(`/api/gallery/${encodeURIComponent(key)}`, {
+    method: 'PUT', body: JSON.stringify({ count, slots, __rev: rev }),
+  });
+
 /** ai_logs (การเรียก LLM) */
 export const getAiLogs = async (limit = 100): Promise<AILogRow[]> =>
   jsonFetch<AILogRow[]>(`/api/logs?limit=${limit}`);
