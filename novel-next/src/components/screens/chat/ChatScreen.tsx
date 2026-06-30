@@ -3,10 +3,9 @@ import { useEffect, useRef, useState } from 'react';
 import { SectionTitle, Card, Btn, Avatar, IconBtn, Spinner, EmptyState, Modal, toast } from '@/components/ui';
 import { pal } from '@/lib/theme';
 import { useChat } from '@/lib/store/ChatProvider';
-import { sendChat, summarizeChat, judgeRel, chatSceneImage, extractState, generatePlayerPersona, memBackfill, memIngest, memRecall, memDelete } from '@/lib/chat-api';
-import { applyItem, parseRelTag, clampRel, relLevel, floorRel, stepRel } from '@/lib/chat-rel';
+import { sendChat, summarizeChat, chatSceneImage, extractState, generatePlayerPersona, memBackfill, memIngest, memRecall, memDelete } from '@/lib/chat-api';
+import { applyItem, parseRelTag, clampRel, relLevel } from '@/lib/chat-rel';
 import { activateLore, LORE_SCAN_DEPTH } from '@/lib/chat-lore';
-import { exportSessionLog } from '@/lib/chat-export';
 import { useChatFontSize, useChatProvider, useConciseMode, useShowRecall } from '@/lib/uiPrefs';
 import type { ChatChar, ChatItem, ChatMsg, ChatSession, ChatStateCard, PlayerPersona } from '@/lib/chat-types';
 import { emptyLiveState, renderLiveStateLines } from '@/lib/live-state';
@@ -14,7 +13,6 @@ import type { LiveState } from '@/lib/live-state';
 import { ChatCharModal } from './ChatCharModal';
 import { ChatWorldModal } from './ChatWorldModal';
 import { ChatBubble } from './ChatBubble';
-import { RelMeter } from './RelMeter';
 import { ItemBar } from './ItemBar';
 
 // แชทเลือก provider ได้ (useChatProvider): deepseek=cloud เร็ว/ฉลาด · lmstudio=Gemma E4B local (~44 tok/s)
@@ -84,6 +82,7 @@ export function ChatScreen() {
   const sessChar = session?.char ?? char;          // ใช้ snapshot ของแชทนั้น (เอกเทศ)
   const rel = session?.rel ?? sessChar?.relStart ?? 0;
   const messages = session?.messages ?? [];
+  const [showAvatar, setShowAvatar] = useState(false);   // lightbox ดูรูปตัวละครเต็ม
 
   // เลื่อนอัจฉริยะ: เข้าห้อง/พิมพ์เอง → ลงล่างสุด · AI/ผู้เล่าเรื่องตอบ → เลื่อนให้ "ต้น" คำตอบใหม่อยู่บนสุด (อ่านจากต้นได้เลย ไม่ต้องไล่ขึ้น)
   useEffect(() => {
@@ -414,11 +413,9 @@ export function ChatScreen() {
         if (r.stateCard) updateSession(sessionId, (s) => ({ ...s, liveState: r.stateCard }));
         if (r.stateWarnings?.length) { setStateWarnings(r.stateWarnings); toast('⚠️ ตรวจพบความขัดแย้งของสถานะ', '⚠️'); }
         else setStateWarnings([]);
-        // ให้ "ผู้ตัดสิน" ประเมินความสัมพันธ์เสมอ (เฉพาะเทิร์นผู้เล่นจริง)
-        if (judge) {
-          const jr = await judgeRel({ charName: sessChar.name, mindset: sessChar.mindset, likes: sessChar.likes, dislikes: sessChar.dislikes, currentRel: baseRel, userMsg: userInput, charReply: text, provider });
-          if (jr != null) updateSession(sessionId, (s) => ({ ...s, rel: floorRel(s.rel, stepRel(s.rel, jr)) }));
-        }
+        // ปิดระบบประเมินความสัมพันธ์ด้วย LLM แล้ว — ไม่ยิง judgeRel ทุกเทิร์น (ลดค่า API ครึ่งหนึ่ง + เลิกเลขแกว่ง)
+        // rel ยังคงไว้เป็นค่าเริ่มต้น/ขยับจากไอเทมของขวัญเท่านั้น
+        void judge;
       } else toast(r.error ?? 'เชื่อมต่อไม่ได้', '⚠️');
     } catch (e) { toast((e as Error).message || 'เชื่อมต่อไม่ได้', '⚠️'); }
     finally { setBusy(false); }
@@ -645,21 +642,28 @@ export function ChatScreen() {
           {/* header */}
           <div className="shrink-0 px-3 py-2.5 border-b border-line flex items-center gap-2.5 bg-white/70 backdrop-blur">
             <IconBtn onClick={() => { setView('sessions'); setSessionId(null); }} title="กลับ">←</IconBtn>
-            <Avatar initial={(sessChar.name || '?').slice(0, 1)} color={accent} size={38} ring />
+            {sessChar.avatar
+              ? <button type="button" onClick={() => setShowAvatar(true)} title="ดูรูปเต็ม" className="shrink-0 rounded-full active:scale-95 transition">
+                  <img src={sessChar.avatar} alt={sessChar.name} className="w-[38px] h-[38px] rounded-full object-cover ring-2 ring-white shadow" />
+                </button>
+              : <Avatar initial={(sessChar.name || '?').slice(0, 1)} color={accent} size={38} ring />}
             <div className="min-w-0 flex-1">
               <div className="font-bold text-ink truncate leading-tight">{sessChar.name}</div>
-              <div className="mt-0.5"><RelMeter rel={rel} /></div>
             </div>
             {/* ขนาดตัวอักษร + ตั้งค่า */}
             <div className="flex items-center gap-0.5 shrink-0">
               <button onClick={font.dec} title="ตัวอักษรเล็กลง" className="h-8 w-7 grid place-items-center rounded-lg text-[12px] font-bold text-muted hover:bg-ink/[.06] active:scale-90 transition">A−</button>
               <button onClick={font.inc} title="ตัวอักษรใหญ่ขึ้น" className="h-8 w-7 grid place-items-center rounded-lg text-[15px] font-bold text-muted hover:bg-ink/[.06] active:scale-90 transition">A+</button>
-              <button onClick={() => exportSessionLog(session, sessChar, (state.world ?? []).map((w) => ({ text: w.text })))} title="ส่งออกแชทนี้เป็นไฟล์ .md"
-                className="h-8 w-8 grid place-items-center rounded-lg text-[15px] text-muted hover:bg-ink/[.06] active:scale-90 transition">📤</button>
               <button onClick={() => { setMemoDraft(session.summary ?? ''); setCardDraft(session.stateCard ?? {}); setView('settings'); }} title="ตั้งค่าแชท / แก้ความจำ"
                 className="h-8 w-8 grid place-items-center rounded-lg text-[16px] text-muted hover:bg-ink/[.06] active:scale-90 transition">⚙️</button>
             </div>
           </div>
+
+          <Modal open={showAvatar} onClose={() => setShowAvatar(false)} mobileFull>
+            <div className="grid place-items-center p-2">
+              {sessChar.avatar ? <img src={sessChar.avatar} alt={sessChar.name} className="max-h-[85vh] w-auto rounded-3xl object-contain" /> : null}
+            </div>
+          </Modal>
 
           {/* messages */}
           <div ref={scrollRef} style={{ fontSize: font.size }} className="flex-1 overflow-y-auto px-3 sm:px-4 py-4 flex flex-col gap-2.5">
