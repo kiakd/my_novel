@@ -319,7 +319,7 @@ export function ChaptersScreen() {
         {active ? (
           <Card className="relative flex flex-col min-h-[calc(100dvh-200px)] md:min-h-[560px] w-full md:flex-1 p-0 overflow-hidden">
             {/* หัวการ์ด: แถวบน = สลับลิสต์ + toggle อ่าน/เขียน + สถานะเซฟ · แถวล่าง = สถานะบท/เลขบท/จำนวนตัวอักษร */}
-            <div className="px-4 sm:px-6 py-3 border-b border-line">
+            <div className="px-4 sm:px-6 py-3 border-b border-line sticky top-0 z-20 bg-cream/85 backdrop-blur">
               <div className="flex items-center justify-between gap-2">
                 <button onClick={toggleList} title={t('chapters.toggleList')} className="h-8 w-8 grid place-items-center rounded-xl text-muted hover:bg-ink/[.06] transition shrink-0 text-base">
                   {listOpen ? '‹' : '☰'}
@@ -337,16 +337,14 @@ export function ChaptersScreen() {
                   ))}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  {mode === 'write' && (
-                    <button
-                      onClick={() => setAiMenuOpen((v) => !v)}
-                      disabled={busy}
-                      className="inline-flex items-center gap-1 text-[12px] font-extrabold rounded-full px-3 py-1.5 transition active:scale-95 disabled:opacity-50"
-                      style={{ background: pal('sky').soft, color: pal('sky').c }}
-                    >
-                      {busy ? <Spinner size={13} color={pal('sky').c} /> : '✦'} AI
-                    </button>
-                  )}
+                  <button
+                    onClick={() => setAiMenuOpen((v) => !v)}
+                    disabled={busy}
+                    className="inline-flex items-center gap-1 text-[12px] font-extrabold rounded-full px-3 py-1.5 transition active:scale-95 disabled:opacity-50"
+                    style={{ background: pal('sky').soft, color: pal('sky').c }}
+                  >
+                    {busy ? <Spinner size={13} color={pal('sky').c} /> : '✦'} AI
+                  </button>
                   <SaveIndicator status={status} variant="inline" />
                 </div>
               </div>
@@ -358,8 +356,8 @@ export function ChaptersScreen() {
               </div>
             </div>
 
-            {/* เมนู AI (โหมดเขียน) — แทนแถบลอยเดิม กดปุ่ม ✦ AI แล้วเด้งลงมา */}
-            {mode === 'write' && aiMenuOpen && (
+            {/* เมนู AI (ใช้ได้ทั้งอ่าน/เขียน) — กดปุ่ม ✦ AI แล้วเด้งลงมา */}
+            {aiMenuOpen && (
               <>
                 <div className="fixed inset-0 z-30" onClick={() => setAiMenuOpen(false)} />
                 <div className="absolute right-3 sm:right-5 top-[76px] z-40 w-52 bg-white rounded-2xl shadow-pop border border-line p-2 anim-pop flex flex-col gap-0.5">
