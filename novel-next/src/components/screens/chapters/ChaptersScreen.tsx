@@ -317,9 +317,9 @@ export function ChaptersScreen() {
         )}
 
         {active ? (
-          <Card className="relative flex flex-col min-h-[calc(100dvh-200px)] md:min-h-[560px] w-full md:flex-1 p-0 overflow-hidden">
+          <Card className="relative flex flex-col h-[calc(100dvh-150px)] md:h-[calc(100dvh-180px)] w-full md:flex-1 p-0 overflow-hidden">
             {/* หัวการ์ด: แถวบน = สลับลิสต์ + toggle อ่าน/เขียน + สถานะเซฟ · แถวล่าง = สถานะบท/เลขบท/จำนวนตัวอักษร */}
-            <div className="px-4 sm:px-6 py-3 border-b border-line sticky top-0 z-20 bg-cream/85 backdrop-blur">
+            <div className="px-4 sm:px-6 py-3 border-b border-line shrink-0 bg-cream/85 backdrop-blur">
               <div className="flex items-center justify-between gap-2">
                 <button onClick={toggleList} title={t('chapters.toggleList')} className="h-8 w-8 grid place-items-center rounded-xl text-muted hover:bg-ink/[.06] transition shrink-0 text-base">
                   {listOpen ? '‹' : '☰'}
@@ -381,10 +381,11 @@ export function ChaptersScreen() {
               </>
             )}
 
+            <div className="flex-1 overflow-y-auto min-h-0">
             {mode === 'read' ? (
               <ChapterReadView chapter={active} chapterLabel={t('chapters.chapterN', { n: chapters.indexOf(active) + 1 })} />
             ) : (
-              <div className="flex-1 px-4 sm:px-8 py-5 sm:py-6">
+              <div className="px-4 sm:px-8 py-5 sm:py-6">
                 <input value={active.title ?? ''} onChange={(e) => patchActive({ title: e.target.value })}
                   className="font-display text-2xl sm:text-3xl font-semibold text-ink bg-transparent w-full focus:outline-none mb-4 sm:mb-5 placeholder:text-muted/50" placeholder={t('chapters.untitled')} />
                 <ChapterEditor ref={editorRef} chapterId={active.id} html={active.content ?? ''} placeholder={t('chapters.beginPlaceholder')} onChange={setBody} />
@@ -400,6 +401,7 @@ export function ChaptersScreen() {
                 </details>
               </div>
             )}
+            </div>
           </Card>
         ) : (
           <Card className="flex-1 w-full min-h-[560px] grid place-items-center">
