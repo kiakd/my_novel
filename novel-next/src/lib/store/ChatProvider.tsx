@@ -28,6 +28,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const stateRef = useRef<ChatState>(state);
   const metaRev = useRef(0);
   const sessRevs = useRef<Map<string, number>>(new Map());
+  // โหลดสำเร็จแล้วหรือยัง — กันเซฟ (PUT empty/stale) ทับ DB ถ้าโหลดแรกล้มเหลว (online-only)
+  const loadOk = useRef(false);
   // snapshot ที่เซฟแล้ว — mutate สร้าง object ใหม่เสมอ จึงเทียบ reference ได้ว่าอะไรเปลี่ยน
   const savedMeta = useRef<{ chars: ChatState['chars']; items: ChatState['items']; personas: ChatState['personas']; world: ChatState['world'] } | null>(null);
   const savedSessions = useRef<Map<string, ChatSession>>(new Map());
@@ -49,6 +51,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     savedMeta.current = { chars: next.chars, items: next.items, personas: next.personas, world: next.world };
     savedSessions.current = new Map(next.sessions.map((s) => [s.id, s]));
     setState(next);
+    loadOk.current = true;   // โหลด/reconcile สำเร็จ → อนุญาตให้เซฟได้
     return meta != null;
   }, []);
 
@@ -59,7 +62,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         const had = await loadAll();
         if (!cancelled) setStatus(had ? 'saved' : 'idle');
       } catch {
-        if (!cancelled) { setState(emptyChatState()); setStatus('error'); }
+        // โหลดล้มเหลว → online-only: ห้ามทับด้วย emptyChatState เงียบ ๆ
+        // คง loadOk=false → doSave จะ no-op (กันเขียน empty/stale ทับ DB) + UI แจ้ง error
+        if (!cancelled) { setStatus('error'); toast('โหลดแชทไม่ได้ ตรวจการเชื่อมต่อแล้วลองรีโหลด', '⚠️'); }
       } finally {
         if (!cancelled) setLoaded(true);
       }
@@ -68,6 +73,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, [loadAll]);
 
   const doSave = useCallback(async () => {
+    if (!loadOk.current) return;   // โหลดแรกยังไม่สำเร็จ → ห้าม PUT (กันเขียน empty/stale ทับ DB)
     const cur = stateRef.current;
     setStatus('saving');
     try {
@@ -79,7 +85,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           metaRev.current = res.rev ?? metaRev.current + 1;
           savedMeta.current = { chars: cur.chars, items: cur.items, personas: cur.personas, world: cur.world };
         } else if (res.conflict) conflict = true;
-        else { setStatus('error'); return; }
+        else { setStatus('error'); toast('บันทึกแชทไม่สำเร็จ — งานล่าสุดยังไม่ถูกบันทึก', '⚠️'); return; }
       }
       // 2) เซฟเฉพาะ session ที่เปลี่ยน
       for (const s of cur.sessions) {
@@ -89,7 +95,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           sessRevs.current.set(s.id, res.rev ?? (sessRevs.current.get(s.id) ?? 0) + 1);
           savedSessions.current.set(s.id, s);
         } else if (res.conflict) conflict = true;
-        else { setStatus('error'); return; }
+        else { setStatus('error'); toast('บันทึกแชทไม่สำเร็จ — งานล่าสุดยังไม่ถูกบันทึก', '⚠️'); return; }
       }
       // 3) ลบ session ที่หายไปจาก state
       const ids = new Set(cur.sessions.map((s) => s.id));
@@ -104,7 +110,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         setStatus('conflict');
         toast('โหลดแชทล่าสุดจากเซิร์ฟเวอร์ (มีการแก้จากที่อื่น)', '⚠️');
       } else setStatus('saved');
-    } catch { setStatus('error'); }
+    } catch {
+      // network/DB down → online-only: ไม่ retry; state ใน memory ยังครบ → mutate ถัดไป/ลองใหม่ได้
+      setStatus('error');
+      toast('บันทึกแชทไม่สำเร็จ — เช็กการเชื่อมต่อ งานล่าสุดยังไม่ถูกบันทึก', '⚠️');
+    }
   }, [loadAll]);
 
   const scheduleSave = useCallback(() => {
