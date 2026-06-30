@@ -102,30 +102,12 @@ export const memStatus = () =>
   jsonFetch<{ ok: boolean; mode?: string; embeddingConfigured?: boolean; embedModel?: string; embedDim?: number; rows?: number; embeddedRows?: number; scopes?: number; embedError?: string }>(
     '/api/chat/memory/status');
 
-// ---- รูป ref → booru tags (WD14 โลคัล ผ่าน ComfyUI) ----
-export interface RefTagResult { ok: boolean; tags?: string[]; buckets?: Record<string, string[]>; error?: string }
-export const refTag = (dataBase64: string) =>
-  jsonFetch<RefTagResult>('/api/ref/tag', { method: 'POST', body: JSON.stringify({ data_base64: dataBase64 }) });
-
-// ---- รูป ref → บรีฟไทยแยกหมวด (👗ชุด 🤸ท่า 💦การกระทำ 🎬มุมกล้อง 😳สีหน้า) ให้คนอ่าน/แก้ก่อนใช้ ----
-export interface RefSceneResult { ok: boolean; brief?: string; buckets?: Record<string, string[]>; error?: string }
-export const refToScene = (body: {
-  buckets?: Record<string, string[]>;
-  tags?: string[];
-  use?: { outfit?: boolean; pose?: boolean; action?: boolean; camera?: boolean; expression?: boolean };
-  character_names?: string[];
-  extra?: string;
-  provider?: string;
-}) => jsonFetch<RefSceneResult>('/api/ref/to-scene', { method: 'POST', body: JSON.stringify(body) });
-
-// ---- ขยายงานเขียน (draft + tag จากรูป + โหมด) ----
+// ---- ขยายงานเขียน (draft + โหมด) ----
 export type ExpandMode = 'scene' | 'action' | 'polish';
 export interface ExpandResult { ok: boolean; text?: string; error?: string; provider?: string; model?: string }
 export const expand = (body: {
   draft: string;
   mode: ExpandMode;
-  tags?: string[];
-  buckets?: Record<string, string[]>;
   style?: string;
   characters?: string[];
   provider?: string;

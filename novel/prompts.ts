@@ -4,41 +4,6 @@ import { renderStateCard, STATE_DELTA_INSTRUCTION, type StateCard } from './stat
 
 export type Mode = 'novel' | 'dialogue' | 'r18';
 
-export interface CharacterVisual {
-  // Hard rule: must be ≥18
-  age: number;
-  gender: 'female' | 'male';
-
-  // Body
-  bodyType: string;          // 'slim athletic', 'tall muscular', etc.
-  skinTone: string;          // 'fair', 'olive', 'tan', 'pale'
-
-  // Face — consistency-critical
-  hair: string;              // 'long platinum blonde, blunt bangs'
-  eyes: string;              // 'large violet doe eyes'
-  faceFeatures: string;      // 'small mole below left eye, soft jawline'
-
-  // R18 specifics (optional)
-  bust?: string;             // 'medium natural breasts, soft pink areola'
-  marks?: string;            // 'pointed elf ears, tribal tattoo on shoulder'
-
-  // Wardrobe
-  defaultOutfit: string;
-  alternativeOutfits?: { name: string; tags: string }[];
-  accessories?: string;
-
-  // Style
-  stylePreference: 'anime' | 'photoreal';
-  modelPreference?: string;  // e.g. 'meinahentai_v5Final.safetensors'
-
-  // Anchors (LLM-generated, user-editable, locked)
-  promptAnchor: string;
-  negativeAnchor: string;
-
-  // Reference sheet — face refs picked from generated sheet
-  faceRefs?: string[];       // urls of reference images marked as face_ref
-}
-
 export interface Character {
   name: string;
   nickname?: string;
@@ -54,7 +19,6 @@ export interface Character {
   curse_allowed?: boolean;
   voiceExamples?: string;    // ตัวอย่างบทพูด (few-shot) — รักษาน้ำเสียงตัวละคร
   defaultOutfit?: string;    // ชุดเริ่มต้น (identity) — ใช้คู่กับกฎ 7/8 กันชุดหลุด
-  visual?: CharacterVisual;  // optional — for image gen
 }
 
 export interface Relation {

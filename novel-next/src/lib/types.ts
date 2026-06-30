@@ -18,12 +18,9 @@ export interface Char {
   speechTone?: string;
   voiceExamples?: string; // = sample lines
   arc?: ArcBeat[];        // UI extra — จุดเปลี่ยนรายบท (timeline digest)
-  // UI / image-gen extras (persist ในก้อน JSON)
+  // UI extras (persist ในก้อน JSON)
   color?: ColorKey;
-  promptAnchor?: string;
-  negativeAnchor?: string;
-  defaultOutfit?: string;
-  stylePreference?: 'anime' | 'photoreal';
+  defaultOutfit?: string; // ชุดเริ่มต้น (identity) — ใช้ใน writing context
 }
 
 export type ChapterStatus = 'done' | 'draft' | 'empty';

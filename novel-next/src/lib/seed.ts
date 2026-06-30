@@ -31,10 +31,7 @@ function buildSeedStory(): Story {
       speechTone: c.tone,
       voiceExamples: c.sample,
       arc: ARCS[c.id],
-      promptAnchor: c.anchor,
-      negativeAnchor: c.neg,
       defaultOutfit: c.outfit,
-      stylePreference: c.mode,
     })),
     chapters: CHAPTERS.map((c, i) => ({
       id: c.id,

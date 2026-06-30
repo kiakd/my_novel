@@ -4,9 +4,8 @@ import { Drawer, Btn, Spinner, toast } from '@/components/ui';
 import { pal, cx } from '@/lib/theme';
 import { useI18n } from '@/lib/i18n';
 import { useStory } from '@/lib/store/StoryProvider';
-import { expand, refToScene, type ExpandMode } from '@/lib/api';
+import { expand, type ExpandMode } from '@/lib/api';
 import { chapterRefs, continuityBrief } from '@/components/screens/timeline/arc';
-import { ImageDrop } from './ImageDrop';
 
 interface ExpandPanelProps {
   open: boolean;
@@ -18,44 +17,19 @@ interface ExpandPanelProps {
 
 const MODES: ExpandMode[] = ['scene', 'action', 'polish'];
 
-/** แผงขยายงานเขียน: ข้อความ + แนบรูป(WD14) + continuity ตัวละคร + เลือกโหมด → AI ขยาย → แทรก/คัดลอก */
+/** แผงขยายงานเขียน: ข้อความ + continuity ตัวละคร + เลือกโหมด → AI ขยาย → แทรก/คัดลอก */
 export function ExpandPanel({ open, onClose, initialDraft, chapterNum, onInsert }: ExpandPanelProps) {
   const { t } = useI18n();
   const { story } = useStory();
   const [draft, setDraft] = useState('');
   const [mode, setMode] = useState<ExpandMode>('scene');
-  const [tags, setTags] = useState<string[]>([]);
-  const [buckets, setBuckets] = useState<Record<string, string[]> | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState('');
   const [useCont, setUseCont] = useState(true);   // แนบ continuity ตัวละครให้ AI (กันหลุดคาแรกเตอร์)
   const [showCont, setShowCont] = useState(false);
-  const [brief, setBrief] = useState('');         // บรีฟ "ชุด/ท่า" จากรูป (อ่าน/แก้ก่อนใช้)
-  const [briefBusy, setBriefBusy] = useState(false);
 
   // sync ข้อความที่เลือกทุกครั้งที่เปิด
-  useEffect(() => { if (open) { setDraft(initialDraft); setResult(''); setBrief(''); } }, [open, initialDraft]);
-
-  // อ่านรูป → บรีฟไทยแยกหมวด (ชุด/ท่า/มุมกล้อง/สีหน้า/การกระทำ) ให้คนอ่าน/แก้/เอาไปใช้
-  const readBrief = async () => {
-    if (!buckets && !tags.length) return;
-    setBriefBusy(true);
-    try {
-      const r = await refToScene({
-        buckets: buckets ?? undefined,
-        tags: buckets ? undefined : tags,
-        use: { outfit: true, pose: true, action: true, camera: true, expression: true },
-      });
-      if (r.ok && r.brief) setBrief(r.brief);
-      else toast(r.error ?? t('chapters.expand.briefFailed'), '⚠️');
-    } catch (e) {
-      toast((e as Error).message || t('chapters.expand.briefFailed'), '⚠️');
-    } finally {
-      setBriefBusy(false);
-    }
-  };
-  const briefToDraft = () => { setDraft((d) => (d.trim() ? `${d.trim()}\n\n${brief}` : brief)); toast(t('chapters.expand.briefToDraft'), '↘'); };
-  const copyBrief = () => { void navigator.clipboard?.writeText(brief); toast(t('common.copied'), '📋'); };
+  useEffect(() => { if (open) { setDraft(initialDraft); setResult(''); } }, [open, initialDraft]);
 
   // สไตล์/ข้อห้ามของเรื่อง → ส่งเป็น context ให้ AI
   const styleContext = [
@@ -75,7 +49,7 @@ export function ExpandPanel({ open, onClose, initialDraft, chapterNum, onInsert 
     setResult('');
     try {
       const context = [styleContext, useCont && continuity ? continuity : ''].filter(Boolean).join('\n\n');
-      const r = await expand({ draft, mode, tags: tags.length ? tags : undefined, buckets: buckets ?? undefined, style: context || undefined });
+      const r = await expand({ draft, mode, style: context || undefined });
       if (r.ok && r.text) setResult(r.text);
       else toast(r.error ?? t('common.offline'), '⚠️');
     } catch (e) {
@@ -87,11 +61,6 @@ export function ExpandPanel({ open, onClose, initialDraft, chapterNum, onInsert 
 
   const doInsert = () => { onInsert(result); toast(t('chapters.expand.inserted'), '✨'); onClose(); };
   const doCopy = () => { void navigator.clipboard?.writeText(result); toast(t('common.copied'), '📋'); };
-
-  // tag เด่นที่จะโชว์ (หมวดท่า/แอ็กชัน/ชุด)
-  const previewTags = buckets
-    ? Object.values(buckets).flat().slice(0, 14)
-    : tags.slice(0, 14);
 
   const sky = pal('sky');
   return (
@@ -113,48 +82,6 @@ export function ExpandPanel({ open, onClose, initialDraft, chapterNum, onInsert 
             rows={4}
             className="mt-1.5 w-full rounded-2xl border-2 border-line bg-white px-3.5 py-2.5 text-[15px] text-ink/90 leading-relaxed focus:outline-none focus:border-sky/40 resize-y"
           />
-        </div>
-
-        {/* แนบรูป */}
-        <div>
-          <label className="text-[11px] font-extrabold tracking-wider uppercase text-muted">{t('chapters.expand.reference')}</label>
-          <div className="mt-1.5">
-            <ImageDrop
-              onTags={(tg, bk) => { setTags(tg); setBuckets(bk); if (tg.length) toast(t('chapters.expand.detected', { n: tg.length }), '🏷️'); }}
-              labels={{ attach: t('chapters.expand.attachImage'), analyzing: t('chapters.expand.analyzing'), change: t('chapters.expand.changeImage'), failed: t('chapters.expand.tagFailed') }}
-            />
-          </div>
-          {previewTags.length > 0 && (
-            <div className="flex flex-wrap gap-1 mt-2">
-              {previewTags.map((tg) => (
-                <span key={tg} className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: pal('lilac').soft, color: pal('lilac').c }}>{tg}</span>
-              ))}
-            </div>
-          )}
-          {/* อ่านชุด/ท่าจากรูป → บรีฟไทยที่แก้ได้ก่อนเอาไปเขียนต่อ/กำหนด outfit */}
-          {(buckets || tags.length > 0) && (
-            <div className="mt-2">
-              <Btn variant="soft" color="lilac" className="w-full" disabled={briefBusy} onClick={readBrief}>
-                {briefBusy ? <Spinner size={14} color={pal('lilac').c} /> : '🔍'} {briefBusy ? t('chapters.expand.briefBusy') : t('chapters.expand.briefBtn')}
-              </Btn>
-              {brief && (
-                <div className="mt-2 rounded-2xl border-2 border-line bg-white px-3 py-2.5">
-                  <div className="text-[11px] font-extrabold tracking-wider uppercase text-muted mb-1">{t('chapters.expand.briefTitle')}</div>
-                  <textarea
-                    value={brief}
-                    onChange={(e) => setBrief(e.target.value)}
-                    rows={5}
-                    className="w-full rounded-xl border-2 border-line bg-cream/40 px-2.5 py-2 text-[13px] text-ink/90 leading-relaxed focus:outline-none focus:border-lilac/40 resize-y"
-                  />
-                  <p className="text-[11px] text-muted mt-1 leading-snug">{t('chapters.expand.briefHint')}</p>
-                  <div className="flex gap-2 mt-1.5">
-                    <Btn variant="primary" color="lilac" className="flex-1" onClick={briefToDraft}>↘ {t('chapters.expand.briefToDraft')}</Btn>
-                    <Btn variant="soft" color="slate" onClick={copyBrief}>📋 {t('chapters.expand.copy')}</Btn>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
         </div>
 
         {/* โหมด */}
