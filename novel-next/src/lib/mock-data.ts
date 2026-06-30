@@ -188,9 +188,6 @@ export const LOCATIONS: Location[] = [
   { id: 'l5', name: 'The Reach', zone: 'Frontier', color: 'sun', mood: 'Vast, shifting', desc: 'A borderland that rearranges itself daily beneath the falling ash.' },
 ];
 
-export const POSES = ['🧍 standing', '🙆 3/4 turn', '🏃 action', '🙂 portrait', '🪑 seated', '🔙 back'];
-export const PROVIDERS = ['NovelAI', 'TensorArt', 'Civitai', 'ComfyUI'];
-
 export const LOGS: AILog[] = [
   { id: 1, time: '14:02:11', endpoint: '/continue', provider: 'NovelAI', model: 'kayra-v1', status: 'ok', ms: 1240 },
   { id: 2, time: '13:51:48', endpoint: '/review', provider: 'OpenAI', model: 'gpt-4o', status: 'ok', ms: 880 },

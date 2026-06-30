@@ -21,7 +21,6 @@ export const NAV: Record<NavGroupKey, NavItemDef[]> = {
     { id: 'chapters', emoji: '📖', color: 'sky', href: '/chapters' },
     { id: 'chat', emoji: '💬', color: 'bubble', href: '/chat' },
     { id: 'timeline', emoji: '⏱️', color: 'sun', href: '/timeline' },
-    { id: 'imagegen', emoji: '🖼️', color: 'lilac', href: '/imagegen' },
   ],
   SYSTEM: [
     { id: 'ailog', emoji: '📋', color: 'slate', href: '/ailog' },

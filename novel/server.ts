@@ -132,9 +132,9 @@ ${RULE_ADULT}
 === คำเรียกฉาก R18 (กฎกลาง — ใช้เมื่อต้นฉบับเป็นฉากผู้ใหญ่) ===
 ${RULE_R18_LEXICON}`;
 
-type Provider = 'openrouter' | 'deepseek' | 'lmstudio';
+type Provider = 'openrouter' | 'deepseek';
 
-// keyEnv ว่าง = ไม่ต้องใช้ API key (local เช่น LM Studio) → ถือว่า available เสมอ
+// cloud-only (ตัด local LM Studio ออกแล้ว — VPS ไม่มี GPU/local LLM)
 const PROVIDER_CONFIG: Record<Provider, { url: string; defaultModel: string; keyEnv: string }> = {
   openrouter: {
     url: 'https://openrouter.ai/api/v1/chat/completions',
@@ -146,15 +146,9 @@ const PROVIDER_CONFIG: Record<Provider, { url: string; defaultModel: string; key
     defaultModel: process.env.DEEPSEEK_MODEL ?? 'deepseek-chat',
     keyEnv: 'DEEPSEEK_API_KEY',
   },
-  // LM Studio (local, OpenAI-compatible) — ไม่ต้องมี key, รัน Gemma local ได้
-  lmstudio: {
-    url: process.env.LMSTUDIO_URL ?? 'http://localhost:1234/v1/chat/completions',
-    defaultModel: process.env.LMSTUDIO_MODEL ?? 'gemma-4-e4b-it-uncensored',
-    keyEnv: '',
-  },
 };
 
-const ALL_PROVIDERS: Provider[] = ['openrouter', 'deepseek', 'lmstudio'];
+const ALL_PROVIDERS: Provider[] = ['openrouter', 'deepseek'];
 const isProvider = (s?: string): s is Provider => !!s && (ALL_PROVIDERS as string[]).includes(s);
 
 // default = deepseek (cloud ที่โปรเจคใช้จริงบน VPS) — openrouter ไม่มี key ในเส้น deploy ไหนเลย
@@ -176,7 +170,7 @@ function resolveProvider(req?: string): Provider {
   if (providerAvailable(DEFAULT_PROVIDER)) return DEFAULT_PROVIDER;
   const fallback = ALL_PROVIDERS.find((p) => p !== DEFAULT_PROVIDER && providerAvailable(p));
   if (fallback) return fallback;
-  throw new Error('no provider available (set OPENROUTER_API_KEY / DEEPSEEK_API_KEY or run LM Studio)');
+  throw new Error('no provider available (set DEEPSEEK_API_KEY / OPENROUTER_API_KEY)');
 }
 
 // provider สำหรับใส่ log ตอน error — ห้าม throw ซ้ำใน catch (เช่นกรณี error ต้นทางคือ "no provider available")
@@ -349,25 +343,6 @@ async function logCall(data: {
     console.error('[ai_log] write failed:', (e as any).message);
   }
 }
-
-// SD prompt builder สำหรับฉากแชท (ChatChar + ฉากไทย → booru อังกฤษ) — Illustrious/SDXL
-const CHAT_SCENE_SD_SYSTEM = `You are an expert Stable Diffusion prompt engineer for an anime Illustrious/SDXL model.
-Convert a character profile + a Thai roleplay scene into a booru-style English image prompt.
-
-Output JSON ONLY: {"positive": "...", "negative": "..."}
-
-positive rules:
-- Start with: masterpiece, best quality, absurdres, ultra detailed
-- Character identity (translate the Thai profile into booru tags): count (1girl/1boy), race/species, ears, hair length+color+style, eye color, skin, notable face features, body proportions (breast size, waist, hips, butt)
-- ⚠️ DISGUISE OVERRIDE: if the "story so far / scene" indicates the character is currently disguised, transformed, or shapeshifted (different hair color, different race/ears, hidden marks, human-passing form, masked, etc.), build the VISIBLE identity tags from that DISGUISED appearance — NOT the true profile. Draw what others would see in this scene. Only use the true profile's identity when the scene shows the true form revealed.
-- Outfit: use the profile's default outfit BUT adjust to the scene — if the scene shows clothes removed/opened/changed/damaged, reflect that exact state instead (e.g. open robe, topless, nude, clothes pulled aside)
-- Scene: derive pose, action, interaction with viewer, facial expression, gaze, and any explicit acts from the Thai scene; add the matching booru tags
-- Setting & camera: location, time of day, lighting, mood, and camera angle (pov / from above / etc.) from the scene
-- Comma-separated booru tags, English only, ~50-80 tags max
-negative rules:
-- Always include: (worst quality, low quality:1.4), lowres, bad anatomy, bad hands, extra digits, deformed face, text, watermark, signature, child, loli, multiple views
-NSFW is allowed (adult fiction, all characters 18+); use explicit booru tags when the scene is explicit.
-Return JSON only, no commentary.`;
 
 // จับเวลาแต่ละ request ด้วย WeakMap keyed by Request (ปลอดภัยกับ concurrency)
 const reqStart = new WeakMap<Request, number>();
@@ -600,12 +575,10 @@ const app = new Elysia()
       available: {
         openrouter: providerAvailable('openrouter'),
         deepseek: providerAvailable('deepseek'),
-        lmstudio: providerAvailable('lmstudio'),
       },
       models: {
         openrouter: PROVIDER_CONFIG.openrouter.defaultModel,
         deepseek: PROVIDER_CONFIG.deepseek.defaultModel,
-        lmstudio: PROVIDER_CONFIG.lmstudio.defaultModel,
       },
     };
   })
@@ -764,8 +737,8 @@ const app = new Elysia()
     const rel = Math.max(-100, Math.min(100, b.rel ?? 0));
     const t0 = Date.now();
     try {
-      // local (Gemma) token น้อย — สั่งความยาวคำตอบสั้นลง ไม่ให้โดน max_tokens ตัดกลางประโยค
-      const compact = resolveProvider(b.provider) === 'lmstudio';
+      // cloud-only แล้ว — ไม่ต้องบีบความยาว (compact ไว้สำหรับ local Gemma เดิม)
+      const compact = false;
       // structured state: ถ้า client ส่ง stateCard มา → render เป็นข้อความเอง + เปิดโหมดให้โมเดลปล่อย [[state:]] delta
       // (เฉพาะ char mode — narrator ไม่ต้องติดตามสถานะตัวละคร)
       const trackState = !!b.stateCard && b.mode !== 'narrator';
@@ -924,56 +897,6 @@ const app = new Elysia()
         embedErrorAt: lastEmbedError()?.at ?? null,
       };
     } catch (e: any) { return { ok: false, error: e.message }; }
-  })
-
-  // --- AI: ฉากแชท → SD prompt (อังกฤษ) → ComfyUI → รูปประกอบ ---
-  .post('/api/chat/scene-image', async ({ body }) => {
-    const b = body as {
-      char: { name: string; appearance?: string; outfit?: string; description?: string };
-      sceneText: string;
-      summary?: string;
-      sessionId?: string;
-      provider?: string;
-      model?: string;
-      width?: number; height?: number; steps?: number; cfg?: number;
-    };
-    if (!b?.char?.name || !b?.sceneText) return { ok: false, error: 'char.name + sceneText required' };
-    const t0 = Date.now();
-    try {
-      const c = b.char;
-      const userMsg =
-        `Character profile (TRUE identity):\nname: ${c.name}\nappearance: ${c.appearance ?? ''}\ndefault outfit: ${c.outfit ?? ''}\nextra: ${c.description ?? ''}\n\n` +
-        `${b.summary?.trim() ? `Story so far (for current state / disguise — what the character looks like RIGHT NOW may differ from the true profile):\n${b.summary.trim()}\n\n` : ''}` +
-        `Scene (Thai):\n${b.sceneText}\n\nApply the DISGUISE OVERRIDE rule using the story-so-far + scene. Build the image prompt JSON.`;
-      const out = await callAI({ system: CHAT_SCENE_SD_SYSTEM, user: userMsg, provider: b.provider, temperature: 0.5, max_tokens: 800 });
-      let parsed: any = null;
-      try { const m = out.text.match(/\{[\s\S]*\}/); parsed = JSON.parse(m ? m[0] : out.text); }
-      catch { return { ok: false, error: 'LLM returned non-JSON', raw: out.text.slice(0, 300) }; }
-      if (!parsed?.positive) return { ok: false, error: 'no positive prompt from LLM' };
-
-      const img = await generateComfyUI({
-        prompt: parsed.positive,
-        negative_prompt: parsed.negative,
-        model: b.model ?? 'wai_illustrious_v17.safetensors',
-        book: 'chat', ch: b.sessionId || 'session',
-        width: b.width ?? 832, height: b.height ?? 1216,
-        steps: b.steps ?? 28, cfg_scale: b.cfg ?? 5,
-      } as any);
-
-      logCall({
-        endpoint: 'chat/scene-image', system: CHAT_SCENE_SD_SYSTEM, user: userMsg, response: parsed.positive,
-        provider: out.provider, model: out.model ?? '', usage: out.usage, temperature: 0.5, maxTokens: 800,
-        ok: true, ms: Date.now() - t0,
-      }).catch(() => {});
-      return { ok: true, url: (img as any).url, prompt: parsed.positive, negative: parsed.negative };
-    } catch (e: any) {
-      logCall({
-        endpoint: 'chat/scene-image', system: CHAT_SCENE_SD_SYSTEM, user: b.sceneText, response: '',
-        provider: providerForLog(b.provider), model: '', usage: null, temperature: 0.5, maxTokens: 800,
-        ok: false, error: e.message, ms: Date.now() - t0,
-      }).catch(() => {});
-      return { ok: false, error: e.message };
-    }
   })
 
   // --- AI สร้าง "บทบาทผู้เล่น" ที่เข้ากับฉากของตัวละคร (player persona auto-fill) ---

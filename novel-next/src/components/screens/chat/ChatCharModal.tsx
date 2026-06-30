@@ -5,7 +5,6 @@ import { pal, type ColorKey } from '@/lib/theme';
 import { keysToText, textToKeys } from '@/lib/chat-lore';
 import { exportCardPng, exportCardJson, importCardFile } from '@/lib/card-client';
 import { generateCharFields, translateCharFields } from '@/lib/chat-api';
-import { useChatProvider } from '@/lib/uiPrefs';
 import { fileToScaledDataUrl } from '@/lib/image-resize';
 import type { ChatChar, LoreEntry } from '@/lib/chat-types';
 
@@ -33,7 +32,7 @@ export function ChatCharModal({ char, onClose, onSave, onDelete }: Props) {
   };
 
   // ---- AI ช่วยเจนฟิลด์ตัวละคร (สถานะ local ไม่เก็บลง ChatChar) ----
-  const { provider } = useChatProvider();
+  const provider = 'deepseek';   // cloud-only — ใช้ DeepSeek เสมอ
   const [brief, setBrief] = useState('');           // ไอเดียคร่าว ๆ ที่ผู้ใช้พิมพ์
   const [genBusy, setGenBusy] = useState(false);     // กำลังเจนแบบ bulk
   const [fieldBusy, setFieldBusy] = useState<string | null>(null); // key ที่กำลังเจนรายช่อง

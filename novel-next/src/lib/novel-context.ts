@@ -32,13 +32,11 @@ export interface BuildOpts {
   mode: GenMode;
   eventCurrent: string;
   chapterNum: number;   // 1-based — ใช้ดึงสรุปบทก่อนหน้าเป็น eventOrder
-  provider?: string;    // 'lmstudio'/local → cap eventOrder กัน ctx ล้น 8K (cloud ไม่ cap แรง)
+  provider?: string;    // ส่งต่อให้ backend เลือกผู้ให้บริการ (cloud เท่านั้น)
   recalled?: string[];  // ความจำระยะยาว (RAG) ที่ recall มา → ฉีดเข้า prompt ผ่าน ctx.recalled
   concise?: boolean;    // โหมดกระชับ — ลดพรรณนาฟุ่มเฟือย เน้นบทสนทนา/การกระทำ
 }
 
-// local (Gemma 8K) เก็บ eventOrder ได้น้อย ไม่งั้น ctx ล้น — cloud เก็บได้เยอะ
-const LOCAL_EVENT_CAP = 12;
 const CLOUD_EVENT_CAP = 40;
 
 export function buildNovelContext(story: Story, opts: BuildOpts) {
@@ -50,7 +48,7 @@ export function buildNovelContext(story: Story, opts: BuildOpts) {
   const chs = [...(story.chapters ?? [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   // บทก่อนหน้าทั้งหมด (เรียงแล้ว) → cap ตาม provider: เก็บบท pivotal/major + บทล่าสุดไว้ก่อน
   const prevChs = chs.slice(0, Math.max(0, opts.chapterNum - 1));
-  const cap = opts.provider === 'lmstudio' ? LOCAL_EVENT_CAP : CLOUD_EVENT_CAP;
+  const cap = CLOUD_EVENT_CAP;
   const impById = new Map(
     chapterRefs(story.chapters ?? [], story.timeline ?? []).map((r) => [r.id, r.importance] as const),
   );

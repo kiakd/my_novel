@@ -16,11 +16,8 @@ function render(text: string) {
 interface Props {
   msg: ChatMsg;
   charColor: ColorKey;
-  drawing?: boolean;
   busy?: boolean;
-  onRegen?: () => void;       // วาดรูปฉากใหม่ (บนรูป)
   onRegenText?: () => void;   // ตอบใหม่ (regen ข้อความ) — โชว์เฉพาะคำตอบ AI ล่าสุด
-  onDelete?: () => void;
   onDeleteMsg?: () => void;
 }
 
@@ -34,17 +31,11 @@ const RegenBtn = ({ onClick, busy }: { onClick?: () => void; busy?: boolean }) =
     className="opacity-30 hover:opacity-100 focus:opacity-100 h-6 w-6 grid place-items-center rounded-lg text-[12px] text-muted hover:bg-bubble/15 hover:text-bubble disabled:opacity-20 transition shrink-0 self-center">{busy ? '⏳' : '🔄'}</button>
 );
 
-export function ChatBubble({ msg, charColor, drawing, busy, onRegen, onRegenText, onDelete, onDeleteMsg }: Props) {
-  // รูปประกอบฉาก + ปุ่มวาดใหม่/ลบ
+export function ChatBubble({ msg, charColor, busy, onRegenText, onDeleteMsg }: Props) {
+  // รูปประกอบฉาก (แสดงรูปที่มีอยู่แล้ว — ไม่มีปุ่มวาด/สร้างใหม่)
   const imageBlock = msg.image ? (
     <div className="relative mt-2 w-full max-w-[340px] not-italic">
       <img src={msg.image} alt="ฉาก" loading="lazy" className="rounded-xl w-full border-2 border-line" />
-      <div className="absolute top-1.5 right-1.5 flex gap-1">
-        <button onClick={onRegen} disabled={drawing} title="วาดใหม่"
-          className="h-7 w-7 grid place-items-center rounded-lg bg-black/55 text-white text-[13px] hover:bg-black/75 disabled:opacity-50 backdrop-blur transition">{drawing ? '⏳' : '🔄'}</button>
-        <button onClick={onDelete} disabled={drawing} title="ลบรูป"
-          className="h-7 w-7 grid place-items-center rounded-lg bg-black/55 text-white text-[13px] hover:bg-black/75 disabled:opacity-50 backdrop-blur transition">🗑</button>
-      </div>
     </div>
   ) : null;
 

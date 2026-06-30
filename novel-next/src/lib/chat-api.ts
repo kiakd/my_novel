@@ -207,17 +207,6 @@ export async function extractState(body: {
   } catch { return null; }
 }
 
-// ---- ฉากแชท → SD prompt (อังกฤษ) → ComfyUI → รูปประกอบ ----
-export const chatSceneImage = (body: {
-  char: { name: string; appearance?: string; outfit?: string; description?: string };
-  sceneText: string;
-  summary?: string;
-  sessionId?: string;
-  provider?: string;
-}) => jsonFetch<{ ok: boolean; url?: string; prompt?: string; negative?: string; error?: string }>(
-  '/api/chat/scene-image', { method: 'POST', body: JSON.stringify(body) },
-);
-
 // ---- ผู้ตัดสินความสัมพันธ์ (fallback เมื่อโมเดลแชทไม่ใส่แท็ก [[rel:NN]]) ----
 const JUDGE_SYSTEM =
   'คุณเป็นผู้ประเมิน "ระดับความสัมพันธ์" ของตัวละครต่อผู้เล่นในเกมโรลเพลย์ สเกล -100..100. ' +

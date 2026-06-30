@@ -3,10 +3,6 @@
     "blender": {
       "command": "C:\\Users\\Admin\\AppData\\Roaming\\Python\\Python314\\Scripts\\uvx.exe",
       "args": ["blender-mcp"]
-    },
-    "lmstudio": {
-      "command": "bun",
-      "args": ["run", "novel/mcp-lmstudio.ts"]
     }
   }
 }

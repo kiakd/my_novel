@@ -17,10 +17,6 @@ import { buildNovelContext, cleanRoleplayArtifacts } from '@/lib/novel-context';
 import { useConciseMode } from '@/lib/uiPrefs';
 
 const LS_LIST_OPEN = 'ns_chapterlist_open';
-const LS_PROVIDER = 'ns_gen_provider';
-
-/** provider ที่ใช้เจน prose — สลับ DeepSeek (cloud) ↔ Gemma local (LM Studio) */
-export type GenProvider = 'deepseek' | 'lmstudio';
 
 const STATUS_COLOR: Record<ChapterStatus, string> = { done: 'mint', draft: 'sun', empty: 'slate' };
 
@@ -66,7 +62,7 @@ export function ChaptersScreen() {
   // โหมดการ์ดบท: 'read' = อ่านสวย ๆ (immersive) · 'write' = แก้ไข
   const [mode, setMode] = useState<'read' | 'write'>('write');
   const [aiMenuOpen, setAiMenuOpen] = useState(false);
-  const [provider, setProviderState] = useState<GenProvider>('deepseek');
+  const provider = 'deepseek';   // cloud-only — ใช้ DeepSeek เสมอ
   const { concise, set: setConcise } = useConciseMode();
   // รีวิว: ผลวิจารณ์บท → โชว์ใน modal (null = ปิด)
   const [review, setReview] = useState<string | null>(null);
@@ -78,8 +74,6 @@ export function ChaptersScreen() {
     const saved = localStorage.getItem(LS_LIST_OPEN);
     setListOpen(saved === '1' || (saved == null && window.innerWidth >= 768));
   }, []);
-  useEffect(() => { const p = localStorage.getItem(LS_PROVIDER); if (p === 'lmstudio' || p === 'deepseek') setProviderState(p); }, []);
-  const setProvider = (p: GenProvider) => { setProviderState(p); try { localStorage.setItem(LS_PROVIDER, p); } catch { /* ignore */ } };
   const toggleList = () => setListOpen((v) => {
     const n = !v;
     try { localStorage.setItem(LS_LIST_OPEN, n ? '1' : '0'); } catch { /* ignore */ }
@@ -199,9 +193,7 @@ export function ChaptersScreen() {
       r18: 'เขียนต่อจากเนื้อเรื่องด้านล่าง เข้าสู่ฉากเลิฟซีนผู้ใหญ่แบบเต็มอารมณ์ (เต็มใจทั้งสองฝ่ายตาม lore lock)',
     };
     // อ่าน "ทั้งบท" ไม่ใช่แค่ท้าย — กันหลงทาง/ชุดหลุด. ถ้ายาวเกิน cap เก็บหัวบท (setup ชุด/ฉาก) + ท้ายบท (จุดต่อ)
-    // local (Gemma 8K ctx) ต้อง cap เล็กกว่า cloud มาก ไม่งั้น context ล้น
-    const isLocal = provider === 'lmstudio';
-    const CTX_CAP = isLocal ? 4500 : 14000;
+    const CTX_CAP = 14000;
     const clip = (s: string) =>
       s.length <= CTX_CAP ? s : `${s.slice(0, 2000)}\n…\n${s.slice(-(CTX_CAP - 2000))}`;
     const full = htmlToText(active.content).trim();
@@ -267,8 +259,7 @@ export function ChaptersScreen() {
         }
       }
       const ctx = buildNovelContext(st, { mode, eventCurrent, chapterNum, provider, recalled, concise });
-      // local ช้า + ctx เล็ก → ขอ output สั้นลง
-      const maxTokens = isLocal ? (mode === 'r18' ? 1500 : 1200) : (mode === 'r18' ? 2600 : 2200);
+      const maxTokens = mode === 'r18' ? 2600 : 2200;
       const r = await generateRoleplay({ context: ctx, user_input: `เขียนต่อบท "${active.title || ''}"`, provider, max_tokens: maxTokens, prefill: prefill || undefined });
       if (r.ok && r.text) {
         // backend คืน prefill+completion (prepend ย่อหน้าเดิมกลับมา) → ตัด prefill ออก ไม่งั้นย่อหน้าสุดท้ายจะซ้ำ
@@ -420,7 +411,7 @@ export function ChaptersScreen() {
         )}
       </div>
       <ExpandPanel open={expandOpen} onClose={() => setExpandOpen(false)} initialDraft={expandDraft} chapterNum={active ? chapters.indexOf(active) + 1 : 1} onInsert={insertExpanded} />
-      <ContinueMenu open={contOpen} onClose={() => setContOpen(false)} onPick={runContinue} busy={busy} provider={provider} onProvider={setProvider} concise={concise} onConcise={setConcise} />
+      <ContinueMenu open={contOpen} onClose={() => setContOpen(false)} onPick={runContinue} busy={busy} concise={concise} onConcise={setConcise} />
       <Modal open={review != null} onClose={() => setReview(null)} size="md">
         <div className="p-6">
           <div className="flex items-center gap-2 mb-3 font-display text-xl font-semibold text-ink">🔍 {t('chapters.aiReview')}</div>

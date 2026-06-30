@@ -3,10 +3,10 @@ import { useEffect, useRef, useState } from 'react';
 import { SectionTitle, Card, Btn, Avatar, IconBtn, Spinner, EmptyState, Modal, toast } from '@/components/ui';
 import { pal } from '@/lib/theme';
 import { useChat } from '@/lib/store/ChatProvider';
-import { sendChat, summarizeChat, chatSceneImage, extractState, generatePlayerPersona, memBackfill, memIngest, memRecall, memDelete } from '@/lib/chat-api';
+import { sendChat, summarizeChat, extractState, generatePlayerPersona, memBackfill, memIngest, memRecall, memDelete } from '@/lib/chat-api';
 import { applyItem, parseRelTag, clampRel, relLevel } from '@/lib/chat-rel';
 import { activateLore, LORE_SCAN_DEPTH } from '@/lib/chat-lore';
-import { useChatFontSize, useChatProvider, useConciseMode, useShowRecall } from '@/lib/uiPrefs';
+import { useChatFontSize, useConciseMode, useShowRecall } from '@/lib/uiPrefs';
 import type { ChatChar, ChatItem, ChatMsg, ChatSession, ChatStateCard, PlayerPersona } from '@/lib/chat-types';
 import { emptyLiveState, renderLiveStateLines } from '@/lib/live-state';
 import type { LiveState } from '@/lib/live-state';
@@ -14,9 +14,6 @@ import { ChatCharModal } from './ChatCharModal';
 import { ChatWorldModal } from './ChatWorldModal';
 import { ChatBubble } from './ChatBubble';
 import { ItemBar } from './ItemBar';
-
-// แชทเลือก provider ได้ (useChatProvider): deepseek=cloud เร็ว/ฉลาด · lmstudio=Gemma E4B local (~44 tok/s)
-// E4B เร็วกว่า 12B เดิม 4 เท่า เลยกลับมาใช้แชทไหว (เดิม 12B ~7 tok/s = ~3 นาที/เทิร์น ช้าเกิน)
 
 const preview = (s: ChatSession) => {
   const last = s.messages.filter((m) => !m.item).slice(-1)[0];
@@ -55,7 +52,6 @@ export function ChatScreen() {
   const [chatMode, setChatMode] = useState<'char' | 'narrator'>('char');  // คุยกับตัวละคร / บรรยายฉาก(ผู้เล่าเรื่อง)
   const [secret, setSecret] = useState(false);                            // (narrator) ตัวละครไม่รับรู้
   const [usePower, setUsePower] = useState(false);                        // (char) ข้อความนี้ใช้อำนาจบังคับ
-  const [drawing, setDrawing] = useState(false);                          // กำลังวาดรูปฉาก (ComfyUI)
   const [memoDraft, setMemoDraft] = useState('');                         // draft ความจำ (ใน view settings)
   const [cardDraft, setCardDraft] = useState<ChatStateCard>({});          // draft บัตรสถานะ (ใน view settings)
   const [stateWarnings, setStateWarnings] = useState<string[]>([]);       // คำเตือนความขัดแย้งสถานะ (จาก live-state delta) — โชว์แบนเนอร์
@@ -63,7 +59,7 @@ export function ChatScreen() {
   const [recallOpen, setRecallOpen] = useState(false);                    // เปิด/ยุบ panel ตัวดูความจำ
   const [personaDraft, setPersonaDraft] = useState<PlayerPersona | null>(null); // draft บทบาทผู้เล่น (gate บังคับ + แก้ในsettings)
   const [personaBusy, setPersonaBusy] = useState(false);                  // กำลังให้ AI กรอกบทบาท
-  const { provider, set: setProvider } = useChatProvider();
+  const provider = 'deepseek';   // cloud-only — ใช้ DeepSeek เสมอ
   const { concise, set: setConcise } = useConciseMode();
   const { show: showRecall, set: setShowRecall } = useShowRecall();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -235,12 +231,10 @@ export function ChatScreen() {
 
   // ---- ส่งข้อความ ----
   // Rolling summary: เก็บข้อความล่าสุดแบบดิบ ที่เก่ากว่านั้นพับเข้า summary
-  // พับเมื่อ "จำนวน" เกิน FOLD_TRIGGER หรือ "ความยาวรวม" เกินงบของ provider — Gemma local ctx ~8K token ต้องพับไวกว่า cloud มาก
-  // งบ context แยกตาม provider: local (Gemma E4B ctx ~8K) ต้องบีบกว่า cloud มาก — กัน overflow + prefill เร็วขึ้น
-  const isLocalProvider = provider === 'lmstudio';
-  const RAW_KEEP = isLocalProvider ? 8 : 14;
-  const FOLD_TRIGGER = isLocalProvider ? 16 : 24;
-  const rawBudget = isLocalProvider ? 6000 : 12000;   // งบ history ดิบ (ตัวอักษร)
+  // พับเมื่อ "จำนวน" เกิน FOLD_TRIGGER หรือ "ความยาวรวม" เกินงบ context (cloud)
+  const RAW_KEEP = 14;
+  const FOLD_TRIGGER = 24;
+  const rawBudget = 12000;   // งบ history ดิบ (ตัวอักษร)
   const totalLen = (ms: ChatMsg[]) => ms.reduce((n, m) => n + m.text.length, 0);
   const speaker = (m: ChatMsg) => (m.role === 'user' ? 'ผู้เล่น' : m.role === 'narrator' ? '[ผู้เล่าเรื่อง]' : (sessChar?.name ?? 'ตัวละคร'));
   const toHist = (m: ChatMsg) =>
@@ -530,7 +524,7 @@ export function ChatScreen() {
   // regen "คำตอบ AI" — ลบคำตอบนั้น (และอะไรที่อยู่หลัง) แล้วยิงใหม่จากบริบทเดิม โดยคงข้อความผู้เล่นไว้
   // ⚠️ ไม่ย้อนบัตรสถานะ/rel ที่คำตอบเดิมเคยขยับ — ถ้าคำตอบใหม่ต่างเยอะ อาจต้องแก้บัตรเอง
   const regenMessage = async (m: ChatMsg) => {
-    if (!sessChar || !sessionId || busy || drawing) return;
+    if (!sessChar || !sessionId || busy) return;
     if (m.item || m.role === 'user') return;
     const idx = messages.findIndex((x) => x.ts === m.ts && x.role === m.role && x.text === m.text);
     if (idx < 0) return;
@@ -559,27 +553,6 @@ export function ChatScreen() {
     } else {
       await callModel('(ดำเนินเรื่องต่อ) เล่นบทต่อเองจากจังหวะก่อนหน้า — บรรยายการกระทำ ความรู้สึก ฉาก และบทพูดของตัวละครให้ไหลต่อไปอีกหนึ่งช่วงอย่างมีรายละเอียด โดยไม่ต้องรอผู้เล่นพูด คงโทนและระดับความสัมพันธ์เดิม', rel, before, 1500, false, true);
     }
-  };
-
-  // วาดรูปประกอบฉากล่าสุด (ฉาก → SD prompt อังกฤษ → ComfyUI) แล้วแนบเข้าข้อความนั้น
-  const drawScene = async (target?: ChatMsg) => {
-    if (!sessChar || !sessionId || drawing) return;
-    const t = target ?? [...messages].reverse().find((m) => (m.role === 'char' || m.role === 'narrator') && !m.item);
-    if (!t) { toast('ยังไม่มีฉากให้วาด', '⚠️'); return; }
-    setDrawing(true);
-    toast(target ? 'กำลังวาดใหม่…' : 'กำลังวาดฉาก… (~1 นาที)', '🎨');
-    try {
-      const r = await chatSceneImage({ char: sessChar, sceneText: t.text, summary: session?.summary || undefined, sessionId });
-      if (r.ok && r.url) {
-        updateSession(sessionId, (s) => ({ ...s, messages: s.messages.map((m) => (m.ts === t.ts && m.role === t.role ? { ...m, image: r.url } : m)) }));
-        toast('วาดเสร็จ', '🖼️');
-      } else toast(r.error ?? 'วาดไม่สำเร็จ (ComfyUI เปิดอยู่ไหม?)', '⚠️');
-    } catch (e) { toast((e as Error).message || 'วาดไม่สำเร็จ', '⚠️'); }
-    finally { setDrawing(false); }
-  };
-  const removeImage = (m: ChatMsg) => {
-    if (!sessionId) return;
-    updateSession(sessionId, (s) => ({ ...s, messages: s.messages.map((x) => (x.ts === m.ts && x.role === m.role ? { ...x, image: undefined } : x)) }));
   };
 
   const useItem = async (it: ChatItem) => {
@@ -675,8 +648,8 @@ export function ChatScreen() {
                     <span className="text-[11px] font-bold text-muted bg-ink/[.04] border border-line rounded-full px-3 py-1">{sceneHeaders[i]}</span>
                   </div>
                 )}
-                <ChatBubble msg={m} charColor={accent} drawing={drawing} busy={busy}
-                  onRegen={() => drawScene(m)} onDelete={() => removeImage(m)} onDeleteMsg={() => deleteMessage(m)}
+                <ChatBubble msg={m} charColor={accent} busy={busy}
+                  onDeleteMsg={() => deleteMessage(m)}
                   onRegenText={i === lastReplyIdx ? () => regenMessage(m) : undefined} />
               </div>
             ))}
@@ -728,10 +701,6 @@ export function ChatScreen() {
           {/* footer: โมเดล + ไอเท็ม + ช่องพิมพ์ */}
           <div className="shrink-0 border-t border-line px-3 pt-2 pb-3 flex flex-col gap-2 bg-white/70 backdrop-blur" style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}>
             <div className="flex items-center justify-end gap-1.5">
-              <button onClick={() => drawScene()} disabled={drawing || messages.length === 0}
-                className="rounded-full px-3 py-1 text-[11.5px] font-bold bg-grape/15 text-grape hover:bg-grape/25 disabled:opacity-40 transition">
-                {drawing ? '🎨…' : '📷 วาดฉาก'}
-              </button>
               <button onClick={continueScene} disabled={busy || messages.length === 0}
                 className="rounded-full px-3 py-1 text-[11.5px] font-bold bg-bubble/15 text-bubble hover:bg-bubble/25 disabled:opacity-40 transition">
                 ▶ ดำเนินต่อ
@@ -811,22 +780,9 @@ export function ChatScreen() {
           <IconBtn onClick={() => setView('chat')} title="กลับไปแชท">←</IconBtn>
           <div className="font-display text-xl font-semibold text-ink truncate">⚙️ ตั้งค่าแชท — {sessChar.name}</div>
         </div>
-        {/* โมเดล AI ของแชท — global pref (localStorage) ใช้กับทุกแชท: deepseek=cloud · lmstudio=Gemma E4B local */}
+        {/* โหมด AI ของแชท — DeepSeek (cloud) เท่านั้น */}
         <Card className="p-4 sm:p-5 flex flex-col gap-2.5 mb-3">
-          <div className="font-bold text-ink">🤖 โมเดล AI ของแชท</div>
-          <p className="text-[12.5px] text-muted">เลือกผู้ให้บริการที่ใช้ตอบแชท (มีผลกับทุกแชท จำค่าไว้ให้). <b>DeepSeek</b> = cloud เร็ว/ฉลาด ต้องมีเน็ต. <b>Gemma E4B</b> = รันในเครื่อง (LM Studio) ส่วนตัว 100% ไม่ผ่านเน็ต ~44 tok/s</p>
-          <div className="flex gap-1.5 bg-cream/70 rounded-full p-1 self-start">
-            {([
-              { id: 'deepseek', label: '☁️ DeepSeek', hint: 'cloud' },
-              { id: 'lmstudio', label: '💻 Gemma E4B', hint: 'local' },
-            ] as const).map((p) => (
-              <button key={p.id} onClick={() => setProvider(p.id)}
-                title={p.hint}
-                className={`rounded-full px-3.5 py-1.5 text-[12.5px] font-bold transition ${provider === p.id ? 'bg-white shadow-pop text-ink' : 'text-muted hover:text-ink'}`}>
-                {p.label}
-              </button>
-            ))}
-          </div>
+          <div className="font-bold text-ink">🤖 โหมด AI ของแชท</div>
           {/* โหมดกระชับ — global pref (localStorage) ใช้ร่วมกับนิยาย: ลดพรรณนา เน้นบทพูด/การกระทำ */}
           <label className="flex items-start gap-2.5 cursor-pointer select-none mt-1">
             <input type="checkbox" checked={concise} onChange={(e) => setConcise(e.target.checked)} className="accent-grape mt-0.5" />
