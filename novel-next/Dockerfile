@@ -2,13 +2,13 @@
 # build ด้วย bun, runtime ด้วย node (server.js ของ standalone) → image เล็ก + RAM น้อย
 
 # ---- deps: ลง node_modules แยก layer ใช้ cache ----
-FROM oven/bun:1 AS deps
+FROM oven/bun:1.3.14 AS deps
 WORKDIR /app
 COPY package.json bun.lock* bun.lockb* ./
 RUN bun install --frozen-lockfile
 
 # ---- build: สร้าง .next/standalone ----
-FROM oven/bun:1 AS build
+FROM oven/bun:1.3.14 AS build
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 # คุมหน่วยความจำ V8 ตอน build กัน OOM บนเครื่อง RAM น้อย (+ swap)
