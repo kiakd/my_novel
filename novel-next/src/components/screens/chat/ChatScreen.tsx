@@ -3,9 +3,11 @@ import { useEffect, useRef, useState } from 'react';
 import { SectionTitle, Card, Btn, Avatar, IconBtn, Spinner, EmptyState, Modal, toast } from '@/components/ui';
 import { pal } from '@/lib/theme';
 import { useChat } from '@/lib/store/ChatProvider';
-import { sendChat, summarizeChat, extractState, generatePlayerPersona, memBackfill, memIngest, memRecall, memDelete } from '@/lib/chat-api';
+import { sendChatStream, summarizeChat, extractState, generatePlayerPersona, peekPhone, memBackfill, memIngest, memRecall, memDelete } from '@/lib/chat-api';
+import { mergeFragmentedProse } from '@/lib/prose-format';
 import { applyItem, parseRelTag, clampRel, relLevel } from '@/lib/chat-rel';
 import { activateLore, LORE_SCAN_DEPTH } from '@/lib/chat-lore';
+import { buildCharContinueInput, buildNarratorContinueInput } from '@/lib/chat-continue';
 import { useChatFontSize, useConciseMode, useShowRecall } from '@/lib/uiPrefs';
 import type { ChatChar, ChatItem, ChatMsg, ChatSession, ChatStateCard, PlayerPersona } from '@/lib/chat-types';
 import { emptyLiveState, renderLiveStateLines } from '@/lib/live-state';
@@ -59,7 +61,10 @@ export function ChatScreen() {
   const [recallOpen, setRecallOpen] = useState(false);                    // เปิด/ยุบ panel ตัวดูความจำ
   const [personaDraft, setPersonaDraft] = useState<PlayerPersona | null>(null); // draft บทบาทผู้เล่น (gate บังคับ + แก้ในsettings)
   const [personaBusy, setPersonaBusy] = useState(false);                  // กำลังให้ AI กรอกบทบาท
-  const provider = 'deepseek';   // cloud-only — ใช้ DeepSeek เสมอ
+  const [peekOpen, setPeekOpen] = useState(false);                        // ป็อปอัป "แอบดูโทรศัพท์" (ข้อ 6)
+  const [peekText, setPeekText] = useState('');
+  const [peekBusy, setPeekBusy] = useState(false);
+  const provider = 'fireworks';   // ทดลอง Fireworks + streaming (เดิม deepseek)
   const { concise, set: setConcise } = useConciseMode();
   const { show: showRecall, set: setShowRecall } = useShowRecall();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -353,6 +358,7 @@ export function ChatScreen() {
   const callModel = async (userInput: string, baseRel: number, hist: ChatMsg[], maxTok?: number, judge = false, regen = false) => {
     if (!sessChar || !sessionId) return;
     setBusy(true);
+    let streamTs: number | null = null;
     try {
       const { summary, raw } = await buildMemory(hist);
       const history = raw.map(toHist);
@@ -380,12 +386,46 @@ export function ChatScreen() {
         if (!recalled.length) recalled = undefined;
       }
       setLastRecalled(recalled ?? []);   // Injection Viewer: บันทึกความจำที่ฉีดจริงเทิร์นนี้ ([] = ไม่ได้ดึงอะไร)
-      const r = await sendChat({ char: sessChar, history, user_input: userInput, rel: baseRel, summary: summary || undefined, lore: pickLore(raw, userInput), state: stateToText(session?.stateCard), stateCard: session?.liveState ?? emptyLiveState(), playerPersona: session?.playerPersona, provider, recalled, concise, max_tokens: maxTok ?? 1500 });
+      // streaming: ใส่ bubble ว่างไว้ก่อน แล้วเติมทีละ token (รู้สึกเร็วแบบ playground)
+      const bubbleTs = Date.now();
+      streamTs = bubbleTs;
+      updateSession(sessionId, (s) => ({
+        ...s,
+        messages: [...s.messages, { role: 'char', text: '', ts: bubbleTs }],
+        updatedAt: bubbleTs,
+      }));
+      let streamed = '';
+      const r = await sendChatStream(
+        { char: sessChar, history, user_input: userInput, rel: baseRel, summary: summary || undefined, lore: pickLore(raw, userInput), state: stateToText(session?.stateCard), stateCard: session?.liveState ?? emptyLiveState(), playerPersona: session?.playerPersona, provider, recalled, concise, max_tokens: maxTok ?? 1500 },
+        {
+          onToken: (chunk) => {
+            streamed += chunk;
+            const { text: live } = parseRelTag(mergeFragmentedProse(streamed));
+            updateSession(sessionId, (s) => {
+              const msgs = s.messages.slice();
+              const last = msgs[msgs.length - 1];
+              if (last && last.role === 'char' && last.ts === bubbleTs) {
+                msgs[msgs.length - 1] = { ...last, text: live };
+              }
+              return { ...s, messages: msgs, updatedAt: Date.now() };
+            });
+          },
+        },
+      );
       if (r.ok && r.text) {
-        const { text } = parseRelTag(r.text);   // ตัดแท็กออกถ้าโมเดลเผลอใส่ (ตอนนี้ใช้ judge ประเมินแทน) — backend strip แท็ก [[state:]] ให้แล้ว
+        const { text } = parseRelTag(mergeFragmentedProse(r.text));   // ตัดแท็กออกถ้าโมเดลเผลอใส่ (ตอนนี้ใช้ judge ประเมินแทน) — backend strip แท็ก [[state:]] ให้แล้ว
         const at = snapAt(r.stateCard);          // เก็บเวลา/สถานที่ ณ จังหวะคำตอบนี้
-        const ts = Date.now();
-        updateSession(sessionId, (s) => ({ ...s, messages: [...s.messages, { role: 'char', text, ts, ...(at ? { at } : {}) }], updatedAt: ts }));
+        const ts = bubbleTs;
+        updateSession(sessionId, (s) => {
+          const msgs = s.messages.slice();
+          const last = msgs[msgs.length - 1];
+          if (last && last.role === 'char' && last.ts === bubbleTs) {
+            msgs[msgs.length - 1] = { ...last, text, ...(at ? { at } : {}) };
+          } else {
+            msgs.push({ role: 'char', text, ts, ...(at ? { at } : {}) });
+          }
+          return { ...s, messages: msgs, updatedAt: Date.now() };
+        });
         // RAG: index ข้อความใหม่ (turnIdx = ตำแหน่งใน filtered array — ตรงกับ backfill)
         // judge=true = เทิร์น user จริง (user ถูก append ที่ baseN, char ที่ baseN+1)
         // judge=false = ต่อเรื่อง/regen (ไม่มี user ใหม่ — char อยู่ที่ baseN)
@@ -410,8 +450,24 @@ export function ChatScreen() {
         // ปิดระบบประเมินความสัมพันธ์ด้วย LLM แล้ว — ไม่ยิง judgeRel ทุกเทิร์น (ลดค่า API ครึ่งหนึ่ง + เลิกเลขแกว่ง)
         // rel ยังคงไว้เป็นค่าเริ่มต้น/ขยับจากไอเทมของขวัญเท่านั้น
         void judge;
-      } else toast(r.error ?? 'เชื่อมต่อไม่ได้', '⚠️');
-    } catch (e) { toast((e as Error).message || 'เชื่อมต่อไม่ได้', '⚠️'); }
+      } else {
+        // ลบ bubble ว่างถ้า fail
+        updateSession(sessionId, (s) => ({
+          ...s,
+          messages: s.messages.filter((m) => !(m.role === 'char' && m.ts === bubbleTs && !m.text)),
+        }));
+        toast(r.error ?? 'เชื่อมต่อไม่ได้', '⚠️');
+      }
+    } catch (e) {
+      if (streamTs != null) {
+        const marker = streamTs;
+        updateSession(sessionId, (s) => ({
+          ...s,
+          messages: s.messages.filter((m) => !(m.role === 'char' && m.ts === marker && !m.text?.trim())),
+        }));
+      }
+      toast((e as Error).message || 'เชื่อมต่อไม่ได้', '⚠️');
+    }
     finally { setBusy(false); }
   };
   const send = async () => {
@@ -427,19 +483,14 @@ export function ChatScreen() {
     if (useP) setUsePower(false);  // อำนาจใช้ครั้งเดียวต่อข้อความ
     await callModel(modelInput, rel, before, undefined, true);
   };
-  // ดำเนินเรื่องต่อเอง — ตัวละครเล่นบทต่อจากจังหวะก่อนหน้า โดยผู้เล่นไม่ต้องพิมพ์
+  // ดำเนินเรื่องต่อเอง — ตัวละคร/ผู้เล่าขยับหนึ่ง beat ใหม่ (Phase 1 anti-loop nudge)
   const continueScene = async () => {
     if (!sessChar || !sessionId || busy || messages.length === 0) return;
     const last = [...messages].reverse().find((m) => !m.item);
     if (last?.role === 'narrator') {
-      // ข้อความล่าสุดเป็นฉากบรรยาย → ต่อเป็นฉากบรรยาย (คงสภาพลับ/ไม่ลับเดิม)
-      await runNarrate('(ดำเนินฉากบรรยายต่อ) เล่าฉากบรรยายต่อจากช่วงก่อนหน้าให้ไหลต่อไปอีกหนึ่งช่วงอย่างมีรายละเอียด ตามเหตุการณ์ล่าสุด โดยไม่ขัดกับเรื่องเดิม', last.secret ?? false);
+      await runNarrate(buildNarratorContinueInput(last.text), last.secret ?? false);
     } else {
-      // ล่าสุดเป็นแชท → ต่อเป็นแชท
-      await callModel(
-        '(ดำเนินเรื่องต่อ) เล่นบทต่อเองจากจังหวะก่อนหน้า — บรรยายการกระทำ ความรู้สึก ฉาก และบทพูดของตัวละครให้ไหลต่อไปอีกหนึ่งช่วงอย่างมีรายละเอียด โดยไม่ต้องรอผู้เล่นพูด คงโทนและระดับความสัมพันธ์เดิม',
-        rel, messages, 1500,
-      );
+      await callModel(buildCharContinueInput(last?.text), rel, messages, 1500);
     }
   };
 
@@ -474,19 +525,57 @@ export function ChatScreen() {
         if (!recalled.length) recalled = undefined;
       }
       setLastRecalled(recalled ?? []);   // Injection Viewer (โหมดบรรยาย)
-      const r = await sendChat({ char: sessChar, history, user_input: userInput, rel, summary: fullSummary || undefined, lore: pickLore(merged, userInput), state: stateToText(session?.stateCard), playerPersona: session?.playerPersona, mode: 'narrator', provider, recalled, concise, max_tokens: 1500 });
+      const streamTs = Date.now();
+      updateSession(sessionId, (s) => ({
+        ...s,
+        messages: [...s.messages, { role: 'narrator', text: '', secret: secretFlag, ts: streamTs }],
+        updatedAt: streamTs,
+      }));
+      let streamed = '';
+      const r = await sendChatStream(
+        { char: sessChar, history, user_input: userInput, rel, summary: fullSummary || undefined, lore: pickLore(merged, userInput), state: stateToText(session?.stateCard), playerPersona: session?.playerPersona, mode: 'narrator', provider, recalled, concise, max_tokens: 1500 },
+        {
+          onToken: (chunk) => {
+            streamed += chunk;
+            const { text: live } = parseRelTag(mergeFragmentedProse(streamed));
+            updateSession(sessionId, (s) => {
+              const msgs = s.messages.slice();
+              const last = msgs[msgs.length - 1];
+              if (last && last.role === 'narrator' && last.ts === streamTs) {
+                msgs[msgs.length - 1] = { ...last, text: live };
+              }
+              return { ...s, messages: msgs, updatedAt: Date.now() };
+            });
+          },
+        },
+      );
       if (r.ok && r.text) {
-        const { text: out } = parseRelTag(r.text);
+        const { text: out } = parseRelTag(mergeFragmentedProse(r.text));
         const at = snapAt();
-        const ts = Date.now();
-        updateSession(sessionId, (s) => ({ ...s, messages: [...s.messages, { role: 'narrator', text: out, secret: secretFlag, ts, ...(at ? { at } : {}) }], updatedAt: ts }));
+        const ts = streamTs;
+        updateSession(sessionId, (s) => {
+          const msgs = s.messages.slice();
+          const last = msgs[msgs.length - 1];
+          if (last && last.role === 'narrator' && last.ts === streamTs) {
+            msgs[msgs.length - 1] = { ...last, text: out, secret: secretFlag, ...(at ? { at } : {}) };
+          } else {
+            msgs.push({ role: 'narrator', text: out, secret: secretFlag, ts, ...(at ? { at } : {}) });
+          }
+          return { ...s, messages: msgs, updatedAt: Date.now() };
+        });
         // RAG: index ข้อความผู้เล่าเรื่อง — charId:null (world-level) · secret = ฉากลับหรือไม่
         // regen narrator: ลบ id เดิมก่อน (id ชนกับคำตอบเก่า) แล้ว re-ingest ให้ข้อความใหม่ชนะ
         const row = { id: `${sessionId}:${baseN}`, scopeId: sessionId, charId: null, secret: secretFlag, speaker: 'narrator', turnIdx: baseN, ts, text: out };
         const doIngest = () => memIngest(sessionId, [row]).then(warnEmbed).catch(() => {});
         if (regen) memDelete({ ids: [row.id] }).then(doIngest).catch(doIngest);
         else void doIngest();
-      } else toast(r.error ?? 'เชื่อมต่อไม่ได้', '⚠️');
+      } else {
+        updateSession(sessionId, (s) => ({
+          ...s,
+          messages: s.messages.filter((m) => !(m.role === 'narrator' && m.ts === streamTs && !m.text)),
+        }));
+        toast(r.error ?? 'เชื่อมต่อไม่ได้', '⚠️');
+      }
     } catch (e) { toast((e as Error).message || 'เชื่อมต่อไม่ได้', '⚠️'); }
     finally { setBusy(false); }
   };
@@ -539,7 +628,7 @@ export function ChatScreen() {
     }));
 
     if (m.role === 'narrator') {
-      await runNarrate('(ดำเนินฉากบรรยายต่อ) เล่าฉากบรรยายต่อจากช่วงก่อนหน้าให้ไหลต่อไปอีกหนึ่งช่วงอย่างมีรายละเอียด ตามเหตุการณ์ล่าสุด โดยไม่ขัดกับเรื่องเดิม', m.secret ?? false, before, true);
+      await runNarrate(buildNarratorContinueInput(before.filter((x) => !x.item).slice(-1)[0]?.text), m.secret ?? false, before, true);
       return;
     }
     // คำตอบของตัวละคร: ถ้าก่อนหน้าคือข้อความผู้เล่น → ยิงด้วย input นั้นใหม่; ไม่งั้นเป็นการ "ดำเนินเรื่องต่อ"
@@ -551,7 +640,8 @@ export function ChatScreen() {
         : trigger.text;
       await callModel(userInput, rel, hist, undefined, false, true);   // judge=false: rel ขยับไปแล้วตอนคำตอบเดิม ไม่ตัดสินซ้ำ · regen=true: ลบข้อความเก่าใน RAG ก่อน
     } else {
-      await callModel('(ดำเนินเรื่องต่อ) เล่นบทต่อเองจากจังหวะก่อนหน้า — บรรยายการกระทำ ความรู้สึก ฉาก และบทพูดของตัวละครให้ไหลต่อไปอีกหนึ่งช่วงอย่างมีรายละเอียด โดยไม่ต้องรอผู้เล่นพูด คงโทนและระดับความสัมพันธ์เดิม', rel, before, 1500, false, true);
+      const prev = before.filter((x) => !x.item).slice(-1)[0]?.text;
+      await callModel(buildCharContinueInput(prev), rel, before, 1500, false, true);
     }
   };
 
@@ -567,19 +657,42 @@ export function ChatScreen() {
     await callModel(`(ผู้เล่นใช้ของวิเศษ "${it.name}"${it.note ? ' — ' + it.note : ''}) ความรู้สึกของคุณต่อผู้เล่นถูกบิดเปลี่ยนทันที ตอบสนองตามความรู้สึกใหม่นี้`, nr, before);
   };
 
+  // ข้อ 6: แอบดูโทรศัพท์ — เจนช็อตชีวิตลับหลังของตัวละคร (ไม่ยุ่งกับ thread แชท)
+  const doPeek = async () => {
+    if (!sessChar || peekBusy) return;
+    setPeekOpen(true); setPeekText(''); setPeekBusy(true);
+    const recent = messages.slice(-6).filter((m) => !m.item)
+      .map((m) => `${m.role === 'user' ? (session?.playerPersona?.name ?? 'ผู้เล่น') : sessChar.name}: ${m.text}`).join('\n');
+    const at = [...messages].reverse().find((m) => m.at)?.at;
+    try {
+      const r = await peekPhone({
+        char: { name: sessChar.name, mindset: sessChar.mindset, behavior: sessChar.behavior, scenario: sessChar.scenario },
+        summary: session?.summary || undefined,
+        recent: recent || undefined,
+        playerPersona: session?.playerPersona ? { name: session.playerPersona.name, role: session.playerPersona.role } : undefined,
+        time: at?.time ?? session?.stateCard?.time,
+        place: at?.place ?? session?.stateCard?.location,
+        provider,
+      });
+      if (r.ok && r.text) setPeekText(r.text);
+      else { setPeekOpen(false); toast(r.error ?? 'แอบดูไม่สำเร็จ', '⚠️'); }
+    } catch (e) { setPeekOpen(false); toast((e as Error).message || 'แอบดูไม่สำเร็จ', '⚠️'); }
+    finally { setPeekBusy(false); }
+  };
+
   if (!loaded) return <div className="grid place-items-center py-20 text-muted gap-2"><Spinner /> กำลังโหลด…</div>;
 
   // ================= VIEW: chat (เต็มจอ mobile) =================
   if (view === 'chat' && session && sessChar) {
     const accent = sessChar.color ?? 'coral';
     // ป้ายฉาก: โชว์เวลา/สถานที่เฉพาะเมื่อ "เปลี่ยน" จากข้อความก่อนหน้า (ช่วยจับจังหวะตอนเรื่องเดินเร็ว)
-    const sceneHeaders: (string | null)[] = [];
+    const sceneHeaders: ({ time?: string; place?: string } | null)[] = [];
     {
       let lt: string | undefined, lp: string | undefined;
       for (const m of messages) {
         const at = m.at;
         if (at && (at.time || at.place) && (at.time !== lt || at.place !== lp)) {
-          sceneHeaders.push([at.time ? `🕐 ${at.time}` : null, at.place ? `📍 ${at.place}` : null].filter(Boolean).join('   ·   '));
+          sceneHeaders.push({ time: at.time, place: at.place });
           lt = at.time; lp = at.place;
         } else sceneHeaders.push(null);
       }
@@ -611,9 +724,37 @@ export function ChatScreen() {
     }
     return (
       <>
-        <div className="fixed inset-0 z-[60] flex flex-col bg-cream md:static md:z-auto md:max-w-3xl md:mx-auto md:h-[calc(100vh-160px)] md:rounded-3xl md:border-2 md:border-line md:overflow-hidden md:shadow-pop">
+        <div className="fixed inset-0 z-[60] flex flex-col overflow-hidden" style={{ background: '#141018' }}>
+          {/* พื้นหลังฉากจากรูปตัวละคร (ข้อ 1) — คลุมเต็มจอ (มือถือ+เดสก์ท็อป) + gradient มืดหัว-ท้ายให้ตัวอักษรอ่านง่าย */}
+          {sessChar.avatar && (
+            <div className="absolute inset-0 pointer-events-none select-none" aria-hidden>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={sessChar.avatar} alt="" className="absolute inset-0 w-full h-full object-cover" />
+              <div className="absolute inset-0" style={{ background: 'linear-gradient(180deg, rgba(14,10,18,.82) 0%, rgba(14,10,18,.28) 14%, rgba(14,10,18,.10) 42%, rgba(14,10,18,.44) 74%, rgba(10,8,14,.92) 100%)' }} />
+            </div>
+          )}
+          {/* คอลัมน์เนื้อหา — พื้นหลังเต็มจอ แต่คุมความกว้างข้อความบนจอใหญ่ให้อ่านลื่น */}
+          <div className="relative z-10 flex flex-col h-full w-full max-w-3xl mx-auto">
+          {/* แถบความสัมพันธ์ (ข้อ 5) — ค้างบนสุดตลอด: ระดับ + ค่า rel + progress bar สีตามระดับ */}
+          {(() => {
+            const L = relLevel(rel);
+            const P = pal(L.color);
+            const pct = Math.round(((clampRel(rel) + 100) / 200) * 100);
+            const emo = rel <= -50 ? '💢' : rel < 0 ? '😒' : rel < 20 ? '🙂' : rel < 50 ? '😌' : rel < 75 ? '😊' : rel < 90 ? '💗' : '❤️';
+            return (
+              <div className="shrink-0 px-4 pt-2.5 pb-1.5 bg-black/30 backdrop-blur-md">
+                <div className="flex items-center justify-between text-[11.5px] mb-1" style={{ textShadow: '0 1px 2px rgba(0,0,0,.6)' }}>
+                  <span className="font-extrabold text-white flex items-center gap-1.5">{emo} {L.label}</span>
+                  <span className="font-bold text-white/75 tabular-nums">{rel > 0 ? `+${rel}` : rel} / 100</span>
+                </div>
+                <div className="h-[7px] rounded-full bg-white/15 overflow-hidden">
+                  <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, background: `linear-gradient(90deg, ${P.tint}, ${P.c})`, boxShadow: `0 0 10px ${P.c}99` }} />
+                </div>
+              </div>
+            );
+          })()}
           {/* header */}
-          <div className="shrink-0 px-3 py-2.5 border-b border-line flex items-center gap-2.5 bg-white/70 backdrop-blur">
+          <div className="shrink-0 px-3 py-2.5 border-b border-white/10 flex items-center gap-2.5 bg-black/30 backdrop-blur-md">
             <IconBtn onClick={() => { setView('sessions'); setSessionId(null); }} title="กลับ">←</IconBtn>
             {sessChar.avatar
               ? <button type="button" onClick={() => setShowAvatar(true)} title="ดูรูปเต็ม" className="shrink-0 rounded-full active:scale-95 transition">
@@ -621,14 +762,14 @@ export function ChatScreen() {
                 </button>
               : <Avatar initial={(sessChar.name || '?').slice(0, 1)} color={accent} size={38} ring />}
             <div className="min-w-0 flex-1">
-              <div className="font-bold text-ink truncate leading-tight">{sessChar.name}</div>
+              <div className="font-bold text-white truncate leading-tight" style={{ textShadow: '0 1px 3px rgba(0,0,0,.5)' }}>{sessChar.name}</div>
             </div>
             {/* ขนาดตัวอักษร + ตั้งค่า */}
             <div className="flex items-center gap-0.5 shrink-0">
-              <button onClick={font.dec} title="ตัวอักษรเล็กลง" className="h-8 w-7 grid place-items-center rounded-lg text-[12px] font-bold text-muted hover:bg-ink/[.06] active:scale-90 transition">A−</button>
-              <button onClick={font.inc} title="ตัวอักษรใหญ่ขึ้น" className="h-8 w-7 grid place-items-center rounded-lg text-[15px] font-bold text-muted hover:bg-ink/[.06] active:scale-90 transition">A+</button>
+              <button onClick={font.dec} title="ตัวอักษรเล็กลง" className="h-8 w-7 grid place-items-center rounded-lg text-[12px] font-bold text-white/70 hover:bg-white/10 active:scale-90 transition">A−</button>
+              <button onClick={font.inc} title="ตัวอักษรใหญ่ขึ้น" className="h-8 w-7 grid place-items-center rounded-lg text-[15px] font-bold text-white/70 hover:bg-white/10 active:scale-90 transition">A+</button>
               <button onClick={() => { setMemoDraft(session.summary ?? ''); setCardDraft(session.stateCard ?? {}); setView('settings'); }} title="ตั้งค่าแชท / แก้ความจำ"
-                className="h-8 w-8 grid place-items-center rounded-lg text-[16px] text-muted hover:bg-ink/[.06] active:scale-90 transition">⚙️</button>
+                className="h-8 w-8 grid place-items-center rounded-lg text-[16px] text-white/70 hover:bg-white/10 active:scale-90 transition">⚙️</button>
             </div>
           </div>
 
@@ -638,22 +779,77 @@ export function ChatScreen() {
             </div>
           </Modal>
 
+          {/* ข้อ 6: ป็อปอัปแอบดูโทรศัพท์ */}
+          <Modal open={peekOpen} onClose={() => setPeekOpen(false)}>
+            <div className="p-4 sm:p-5 max-w-md">
+              <div className="flex items-center gap-2 mb-2.5">
+                <span className="text-lg">📱</span>
+                <div className="font-bold text-ink">แอบดูว่า {sessChar.name} ทำอะไรอยู่</div>
+              </div>
+              {peekBusy && !peekText ? (
+                <div className="flex items-center gap-2 text-muted py-8 justify-center"><Spinner size={16} /> กำลังแอบดู…</div>
+              ) : (
+                <p className="text-[14px] leading-relaxed text-ink whitespace-pre-wrap italic">{peekText}</p>
+              )}
+              <div className="mt-3.5 flex justify-end gap-2">
+                <button onClick={() => setPeekOpen(false)} className="rounded-full px-4 py-2 text-[13px] font-bold text-muted hover:bg-ink/[.06] transition">ปิด</button>
+                <button onClick={doPeek} disabled={peekBusy}
+                  className="rounded-full px-4 py-2 text-[13px] font-bold border-2 border-grape/40 text-grape hover:bg-grape/10 disabled:opacity-40 transition">🔄 ดูอีกที</button>
+              </div>
+            </div>
+          </Modal>
+
           {/* messages */}
           <div ref={scrollRef} style={{ fontSize: font.size }} className="flex-1 overflow-y-auto px-3 sm:px-4 py-4 flex flex-col gap-2.5">
-            {messages.length === 0 && <div className="text-muted text-[13px] text-center py-8">เริ่มทักได้เลย</div>}
-            {messages.map((m, i) => (
+            {messages.length === 0 && (
+              <div className="flex flex-col items-center text-center gap-3 py-6 px-4" style={{ textShadow: '0 1px 4px rgba(0,0,0,.7)' }}>
+                {sessChar.avatar
+                  ? // eslint-disable-next-line @next/next/no-img-element
+                    <img src={sessChar.avatar} alt={sessChar.name} className="w-28 h-28 rounded-2xl object-cover" style={{ boxShadow: '0 0 0 2px rgba(255,255,255,.6), 0 10px 30px -6px rgba(0,0,0,.7)' }} />
+                  : <Avatar initial={(sessChar.name || '?').slice(0, 1)} color={accent} size={112} ring />}
+                <div className="flex flex-col gap-0.5">
+                  <div className="text-xl font-extrabold text-white">{sessChar.name}</div>
+                  {sessChar.outfit && <div className="text-[13px] font-bold text-white/70">{sessChar.outfit.trim().slice(0, 40)}</div>}
+                </div>
+                {(sessChar.description || sessChar.scenario || sessChar.appearance) && (
+                  <p className="max-w-sm text-[13px] leading-relaxed text-white/80">{(sessChar.description || sessChar.scenario || sessChar.appearance)!.trim().slice(0, 220)}</p>
+                )}
+                <div className="flex flex-wrap items-center justify-center gap-1.5 mt-1">
+                  {sessChar.mindset && <span className="rounded-full bg-white/[.12] border border-white/15 px-2.5 py-1 text-[11px] font-bold text-white/85">🧠 {sessChar.mindset.trim().slice(0, 20)}</span>}
+                  <span className="rounded-full bg-white/[.08] border border-white/10 px-2.5 py-1 text-[11px] font-bold text-white/45">🔒 อายุ</span>
+                  <span className="rounded-full bg-white/[.08] border border-white/10 px-2.5 py-1 text-[11px] font-bold text-white/45">🔒 สถานะ</span>
+                </div>
+                <div className="text-[12px] text-white/55 mt-1">💬 เริ่มทักเพื่อรู้จัก {sessChar.name} ให้มากขึ้น</div>
+              </div>
+            )}
+            {messages.map((m, i) => {
+              const sh = sceneHeaders[i];
+              const chips: [string, string][] = [];
+              if (sh?.time) {
+                const seg = sh.time.split(/\s*[·|,]\s*/).filter(Boolean);
+                if (seg.length >= 2) { chips.push(['🗓️', seg[0]]); chips.push(['🕛', seg.slice(1).join(' ')]); }
+                else chips.push(['🕛', sh.time]);
+              }
+              if (sh?.place) chips.push(['📍', sh.place]);
+              return (
               <div key={m.ts ? `${m.ts}-${m.role}` : i} ref={i === messages.length - 1 ? lastMsgRef : null}>
-                {sceneHeaders[i] && (
-                  <div className="flex justify-center my-1.5">
-                    <span className="text-[11px] font-bold text-muted bg-ink/[.04] border border-line rounded-full px-3 py-1">{sceneHeaders[i]}</span>
+                {chips.length > 0 && (
+                  <div className="flex justify-center my-2">
+                    <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 rounded-full bg-black/40 backdrop-blur-md border border-white/15 px-3.5 py-1.5 text-[11px] font-bold text-white/90 shadow-lg" style={{ textShadow: '0 1px 3px rgba(0,0,0,.6)' }}>
+                    {chips.map(([ic, tx], k) => (
+                      <span key={k} className="inline-flex items-center gap-1 whitespace-nowrap">{k > 0 && <span className="text-white/30 mr-1">·</span>}<span>{ic}</span><span>{tx}</span></span>
+                    ))}
+                    </div>
                   </div>
                 )}
-                <ChatBubble msg={m} charColor={accent} busy={busy}
+                <ChatBubble msg={m} charColor={accent} avatarUrl={sessChar.avatar} charName={sessChar.name}
+                  showAvatar={i === 0 || messages[i - 1]?.role !== 'char'} busy={busy}
                   onDeleteMsg={() => deleteMessage(m)}
                   onRegenText={i === lastReplyIdx ? () => regenMessage(m) : undefined} />
               </div>
-            ))}
-            {busy && <div className="flex justify-start"><div className="rounded-2xl bg-ink/[.05] px-3.5 py-2.5"><Spinner size={16} /></div></div>}
+              );
+            })}
+            {busy && <div className="flex justify-start pl-10"><div className="rounded-2xl bg-black/30 backdrop-blur px-3.5 py-2.5"><Spinner size={16} /></div></div>}
           </div>
 
           {/* แบนเนอร์เตือนความขัดแย้งสถานะ (live-state delta) — ปิดได้ */}
@@ -699,26 +895,30 @@ export function ChatScreen() {
           )}
 
           {/* footer: โมเดล + ไอเท็ม + ช่องพิมพ์ */}
-          <div className="shrink-0 border-t border-line px-3 pt-2 pb-3 flex flex-col gap-2 bg-white/70 backdrop-blur" style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}>
+          <div className="shrink-0 border-t border-white/10 px-3 pt-2 pb-3 flex flex-col gap-2 bg-black/35 backdrop-blur-md" style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}>
             <div className="flex items-center justify-end gap-1.5">
+              <button onClick={doPeek} disabled={peekBusy || messages.length === 0} title="แอบดูว่าตัวละครกำลังทำอะไรอยู่ลับหลัง"
+                className="rounded-full px-3 py-1 text-[11.5px] font-bold bg-white/10 text-white/85 hover:bg-white/20 disabled:opacity-40 transition">
+                {peekBusy ? '📱 …' : '📱 แอบดู'}
+              </button>
               <button onClick={continueScene} disabled={busy || messages.length === 0}
-                className="rounded-full px-3 py-1 text-[11.5px] font-bold bg-bubble/15 text-bubble hover:bg-bubble/25 disabled:opacity-40 transition">
+                className="rounded-full px-3 py-1 text-[11.5px] font-bold bg-bubble/25 text-white hover:bg-bubble/40 disabled:opacity-40 transition">
                 ▶ ดำเนินต่อ
               </button>
             </div>
             <ItemBar items={state.items} onUse={useItem} disabled={busy} />
             {/* โหมดป้อน: คุยกับตัวละคร / บรรยายฉาก(ผู้เล่าเรื่อง) */}
             <div className="flex items-center gap-2 flex-wrap">
-              <div className="flex rounded-full bg-ink/[.05] p-0.5">
+              <div className="flex rounded-full bg-white/10 p-0.5">
                 {([['char', '💬 คุย'], ['narrator', '🎬 บรรยาย']] as const).map(([m, lbl]) => (
                   <button key={m} onClick={() => setChatMode(m)}
-                    className={`rounded-full px-2.5 py-1 text-[11.5px] font-bold transition ${chatMode === m ? 'bg-white shadow-pop text-ink' : 'text-muted'}`}>
+                    className={`rounded-full px-2.5 py-1 text-[11.5px] font-bold transition ${chatMode === m ? 'bg-white shadow-pop text-ink' : 'text-white/60'}`}>
                     {lbl}
                   </button>
                 ))}
               </div>
               {chatMode === 'narrator' && (
-                <label className="flex items-center gap-1.5 text-[11.5px] font-bold text-muted cursor-pointer select-none">
+                <label className="flex items-center gap-1.5 text-[11.5px] font-bold text-white/75 cursor-pointer select-none">
                   <input type="checkbox" checked={secret} onChange={(e) => setSecret(e.target.checked)} className="accent-grape" />
                   👁️ ลับ (ตัวละครไม่รับรู้)
                 </label>
@@ -731,7 +931,7 @@ export function ChatScreen() {
                   </span>
                 ) : (
                   <button onClick={() => setUsePower((v) => !v)} title={sessChar.power}
-                    className={`rounded-full px-2.5 py-1 text-[11.5px] font-bold transition ${usePower ? 'bg-grape text-white shadow-pop' : 'bg-ink/[.05] text-muted'}`}>
+                    className={`rounded-full px-2.5 py-1 text-[11.5px] font-bold transition ${usePower ? 'bg-grape text-white shadow-pop' : 'bg-white/10 text-white/70'}`}>
                     ⚡ ใช้อำนาจ
                   </button>
                 )
@@ -744,12 +944,13 @@ export function ChatScreen() {
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitComposer(); } }}
                 placeholder={chatMode === 'narrator' ? 'กำกับฉาก เช่น "ชายแปลกหน้าแอบใส่ยาในเครื่องดื่ม"…' : `พูดกับ ${sessChar.name}…`}
                 rows={3}
-                className="flex-1 bg-cream/70 rounded-2xl px-4 py-2.5 text-ink placeholder:text-muted/70 border-2 border-line focus:border-grape focus:bg-white focus:outline-none transition resize-none leading-relaxed overflow-y-auto"
+                className="flex-1 bg-white/10 rounded-2xl px-4 py-2.5 text-white placeholder:text-white/45 border-2 border-white/15 focus:border-grape focus:bg-white/[.15] focus:outline-none transition resize-none leading-relaxed overflow-y-auto"
               />
               <Btn variant="primary" color={chatMode === 'narrator' ? 'grape' : 'bubble'} disabled={busy || !input.trim()} onClick={submitComposer}>
                 {chatMode === 'narrator' ? 'บรรยาย' : 'ส่ง'}
               </Btn>
             </div>
+          </div>
           </div>
         </div>
 

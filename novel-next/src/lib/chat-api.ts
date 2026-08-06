@@ -75,6 +75,67 @@ export const sendChat = (body: {
   prefill?: string;
 }) => jsonFetch<ChatReply>('/api/chat', { method: 'POST', body: JSON.stringify(body) }, { retries: 2 });
 
+/** Streaming chat — เรียก /api/chat/stream (SSE) แทน /api/chat เพื่อให้ UI โชว์ทีละ token */
+export type ChatStreamBody = Parameters<typeof sendChat>[0];
+export async function sendChatStream(
+  body: ChatStreamBody,
+  opts?: { onToken?: (chunk: string) => void },
+): Promise<ChatReply & { ttftMs?: number; ms?: number }> {
+  const res = await fetch('/api/chat/stream', {
+    method: 'POST',
+    headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(errText.slice(0, 300) || `/api/chat/stream → ${res.status}`);
+  }
+  if (!res.body) throw new Error('empty stream body');
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let donePayload: (ChatReply & { ttftMs?: number; ms?: number }) | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const parts = buf.split('\n');
+    buf = parts.pop() ?? '';
+    for (const raw of parts) {
+      const line = raw.trim();
+      if (!line.startsWith('data:')) continue;
+      const payloadStr = line.replace(/^data:\s?/, '');
+      if (!payloadStr || payloadStr === '[DONE]') continue;
+      let msg: any;
+      try { msg = JSON.parse(payloadStr); } catch { continue; }
+      if (msg.type === 'token' && typeof msg.text === 'string') {
+        opts?.onToken?.(msg.text);
+      } else if (msg.type === 'done') {
+        donePayload = {
+          ok: !!msg.ok,
+          text: msg.text,
+          provider: msg.provider,
+          model: msg.model,
+          stateCard: msg.stateCard,
+          stateDelta: msg.stateDelta,
+          stateWarnings: msg.stateWarnings,
+          importance: msg.importance,
+          persistent: msg.persistent,
+          ttftMs: msg.ttftMs,
+          ms: msg.ms,
+        };
+      } else if (msg.type === 'error') {
+        throw new Error(msg.error || 'stream error');
+      }
+    }
+  }
+
+  if (!donePayload) throw new Error('stream ended without done event');
+  return donePayload;
+}
+
 // ---- RAG memory (ฝั่ง client เรียก server-side sqlite store) ----
 export interface MemRowInput {
   id: string; scopeId: string; charId?: string | null; secret: boolean;
@@ -111,6 +172,19 @@ export const generatePlayerPersona = (body: {
   provider?: string;
 }) => jsonFetch<{ ok: boolean; persona?: { name: string; role: string; appearance: string }; error?: string }>(
   '/api/chat/generate-persona', { method: 'POST', body: JSON.stringify(body) }, { retries: 2 },
+);
+
+// ---- แอบดูโทรศัพท์/ชีวิตลับหลัง (ข้อ 6) — เจนสั้น ๆ ว่าตัวละครกำลังทำอะไรนอกสายตาผู้เล่น ----
+export const peekPhone = (body: {
+  char: { name: string; mindset?: string; behavior?: string; scenario?: string };
+  summary?: string;
+  recent?: string;
+  playerPersona?: { name?: string; role?: string };
+  time?: string;
+  place?: string;
+  provider?: string;
+}) => jsonFetch<{ ok: boolean; text?: string; error?: string }>(
+  '/api/chat/peek', { method: 'POST', body: JSON.stringify(body) }, { retries: 1 },
 );
 
 // ---- AI เติม/เจนฟิลด์ตัวละคร (autofill) — ส่ง char ที่กรอกไว้ + บรีฟ → เจนฟิลด์ที่ขาด/ที่ขอ ----
