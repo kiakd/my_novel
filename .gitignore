@@ -49,3 +49,8 @@ output/
 
 # RAG long-term memory store (runtime data — อย่า commit)
 chat-mem.sqlite*
+
+# novel-reader: โปรไฟล์ Chrome + คำแปลส่วนตัว (ไม่ commit)
+tools/novel-reader/.chrome-profile/
+tools/novel-reader/library/
+tools/novel-reader/glossary-debug.log
