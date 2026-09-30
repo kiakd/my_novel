@@ -54,3 +54,4 @@ chat-mem.sqlite*
 tools/novel-reader/.chrome-profile/
 tools/novel-reader/library/
 tools/novel-reader/glossary-debug.log
+tools/novel-reader/.own-tabs.json

@@ -1,5 +1,5 @@
 // Site adapters — เพิ่มเว็บใหม่ = เพิ่ม object ใน SITES (pattern เดียวกันหมด)
-import type { Page } from 'playwright-core';
+import type { Page } from './cdp-page.ts';
 
 export type Chapter = {
   bookId: string;

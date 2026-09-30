@@ -10,7 +10,7 @@
 //   node translate.ts --provider ollama [--model <ชื่อ>] [--ollama-url <url>]   ใช้โมเดล local ผ่าน Ollama แทน DeepSeek
 //
 // stdout = สรุปสั้น (สำหรับ skill) — เนื้อหาคำแปลอยู่ใน library/<book>/chapters/*.md และ reader.html
-import { chromium, type Page } from 'playwright-core';
+import { CdpPage, listTabs, responsive, type Page } from './cdp-page.ts';
 import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -27,7 +27,9 @@ const flag = (k: string) => argv.includes(k);
 const opt = (k: string) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : undefined; };
 const N = Number(opt('--n') ?? 1);
 const PORT = opt('--port') ?? '9222';
-const CHUNK = 1800; // ตัวอักษรจีน/ชิ้น — ชิ้นเล็กแปลขนานได้ + ไม่ชน max output
+// แปลทั้งบทในคำขอเดียว (ได้ภาพรวมทั้งฉากก่อน แล้วค่อยเกลาทั้งบท) — บทจริงยาวสุด ~3.7k ตัวจีน
+// คำแปลไทยของบท 2k ตัวจีนราว 3k token ยังห่าง max_tokens 8000 ; เกินเพดานนี้ค่อยหั่น (กันชนเพดาน output)
+const CHUNK = 6000;
 
 // ---------- env (ใช้ key เดียวกับ backend) ----------
 function loadEnv() {
@@ -66,11 +68,14 @@ function latestBook(): string | undefined {
 
 // ---------- AI ----------
 // คลังความรู้สำนวน: tools/novel-reader/style/*.md (แก้ไฟล์ได้เลย มีผลรอบถัดไป)
-// ขั้นแปลใช้เฉพาะไฟล์สำนวนนิยาย (03-*), ขั้นเกลาใช้ทั้งคลัง — อยู่ใน system prompt ส่วนต้นที่ซ้ำทุกคำขอ DeepSeek จึงคิดราคาแบบ cache
+// ขั้นแปลใช้ไฟล์ 03+04, ขั้นเกลาใช้ทั้งคลัง — อยู่ใน system prompt ส่วนต้นที่ซ้ำทุกคำขอ DeepSeek จึงคิดราคาแบบ cache
 const STYLE_DIR = join(ROOT, 'style');
-const styleFiles = existsSync(STYLE_DIR) ? readdirSync(STYLE_DIR).filter((f) => f.endsWith('.md')).sort() : [];
+// --no-style: ปิดคลังสำนวน (ไว้เทียบผล A/B)
+const styleFiles = !flag('--no-style') && existsSync(STYLE_DIR) ? readdirSync(STYLE_DIR).filter((f) => f.endsWith('.md')).sort() : [];
 const readStyle = (f: string) => readFileSync(join(STYLE_DIR, f), 'utf8').trim();
-const STYLE = styleFiles.filter((f) => f.startsWith('03')).map(readStyle).join('\n\n');
+// ขั้นแปลร่างได้ 03 (สำนวน) + 04 (โครงจีน/คำทักทาย): คำแปลตรงตัว ("เช้า!", "พวกคุณเช้า") เกิดตั้งแต่ร่างแรก
+// และขั้นเกลาไม่กล้าแก้บทพูดเพราะถูกสั่งห้ามเพิ่มเนื้อหา
+const STYLE = styleFiles.filter((f) => /^0[34]/.test(f)).map(readStyle).join('\n\n');
 const KNOWLEDGE = styleFiles.map(readStyle).join('\n\n');
 
 // นักแปลประจำแนว: translators/<ชื่อ>/{ตัวตน.md, ความรู้.md, canon.json} — ผูกกับเรื่องใน progress.json
@@ -130,6 +135,8 @@ function ollamaChat(system: string, user: string, temperature: number): Promise<
   return p;
 }
 
+const USAGE = { calls: 0, hit: 0, miss: 0, out: 0 };
+
 async function chat(system: string, user: string, temperature = 0.7): Promise<string> {
   for (let attempt = 1; ; attempt++) {
     try {
@@ -148,7 +155,13 @@ async function chat(system: string, user: string, temperature = 0.7): Promise<st
         return await ollamaChat(system, user, temperature);
       }
       if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
-      return (await res.json()).choices[0].message.content;
+      const j = await res.json();
+      // นับ token จริงที่ DeepSeek คิดเงิน (cache hit = ส่วนหัว prompt ที่ซ้ำ คิดถูกกว่ามาก)
+      USAGE.calls++;
+      USAGE.hit += j.usage?.prompt_cache_hit_tokens ?? 0;
+      USAGE.miss += j.usage?.prompt_cache_miss_tokens ?? j.usage?.prompt_tokens ?? 0;
+      USAGE.out += j.usage?.completion_tokens ?? 0;
+      return j.choices[0].message.content;
     } catch (e) {
       if (attempt >= 3) throw e;
       await sleep(1500 * attempt);
@@ -178,19 +191,26 @@ function sourceContext(source: string, thLines: number, bad: (readonly [number, 
   return [...keep].sort((a, b) => a - b).map((k) => paras[k]).join('\n');
 }
 
+// สถิติรอบแก้คำหลุด — ดูว่าอะไรทำให้ต้องเรียกเพิ่ม (สรุปท้ายรอบ)
+const FIXLOG = { cjk: new Set<string>(), eng: new Set<string>(), rude: 0 };
+
 async function fixCJK(th: string, source: string, g: Glossary): Promise<string> {
   const lines = th.split('\n');
   for (let round = 0; round < 2; round++) {
     // จีนปน หรือคำอังกฤษตัวเล็กหลุด (breakthrough ฯลฯ — ชื่อแบรนด์มักขึ้นต้นตัวใหญ่ เลยไม่โดน)
     const bad = lines.map((l, i) => [i, l] as const).filter(([, l]) => CJK.test(l) || /\b[a-z]{4,}\b/.test(l) || RUDE.test(l));
     if (!bad.length) break;
+    for (const [, l] of bad) {
+      for (const w of l.match(/[㐀-鿿豈-﫿]+/g) ?? []) FIXLOG.cjk.add(w);
+      for (const w of l.match(/\b[a-z]{4,}\b/g) ?? []) FIXLOG.eng.add(w);
+      if (RUDE.test(l)) FIXLOG.rude++;
+    }
     const names = Object.entries(relevant(g, source).characters).map(([zh, c]) => `${zh}=${c.th}`).join(', ');
     const out = await chat(FIX_SYSTEM, `ชื่อ: ${names || '-'}\n\nต้นฉบับ (เฉพาะช่วงที่เกี่ยวข้อง):\n${sourceContext(source, lines.length, bad)}\n\nบรรทัดที่ต้องแก้:\n${bad.map(([i, l]) => `[${i}] ${l}`).join('\n')}`, 0.3);
     for (const m of out.matchAll(/^\[(\d+)\]\s*(.+)$/gm)) {
       const i = Number(m[1]);
       if (bad.some(([j]) => j === i) && m[2].trim()) lines[i] = m[2].trim();
-    }
-  }
+    }  }
   // ชั้นสุดท้าย: คำเดี่ยวที่ยังดื้อ → แปลรายคำแล้ว replace ตรงๆ
   let joined = lines.join('\n');
   for (let round = 0; round < 3; round++) {
@@ -244,8 +264,9 @@ export function insane(th: string, source: string): string | null {
   return null;
 }
 
-async function polish(draft: string, source: string, g: Glossary): Promise<string> {
-  const out = await chat(POLISH_SYSTEM + PROFILE, `GLOSSARY:\n${JSON.stringify(relevant(g, source))}\n\nต้นฉบับ:\n${source}\n\nร่างคำแปล:\n${draft}`, 0.6);
+async function polish(draft: string, source: string, g: Glossary, hasTitle = false): Promise<string> {
+  const note = hasTitle ? 'บรรทัดแรกคือชื่อบท — คงไว้เป็นบรรทัดแรกบรรทัดเดียว (เกลาถ้อยคำได้)\n\n' : '';
+  const out = await chat(POLISH_SYSTEM + PROFILE, `${note}GLOSSARY:\n${JSON.stringify(relevant(g, source))}\n\nต้นฉบับ:\n${source}\n\nร่างคำแปล:\n${draft}`, 0.6);
   const th = out.trim().replace(/^=== TRANSLATION ===\s*/, '');
   // เกลาแล้วผิดรูป/สั้นลงมาก → ใช้ร่างเดิม
   return th.length > draft.length * 0.7 && !insane(th, source) ? th : draft;
@@ -254,16 +275,26 @@ async function polish(draft: string, source: string, g: Glossary): Promise<strin
 // ท้ายชิ้นก่อนหน้า (ต้นฉบับ) — ให้แต่ละชิ้นรู้ว่าเล่าต่อจากอะไร รอยต่อระหว่างชิ้นจะได้ไม่ขาดห้วน แต่ยังแปลขนานได้
 const tailOf = (prev?: string) => (prev ? prev.split('\n').filter((l) => l.trim()).slice(-3).join('\n').slice(-400) : '');
 
-async function translateChunk(text: string, g: Glossary, title: string, prev?: string): Promise<{ th: string; delta: Delta }> {
+const TITLE_NOTE = 'บรรทัดแรกของต้นฉบับคือชื่อบท — ให้บรรทัดแรกของคำแปลเป็นชื่อบทที่แปลแล้ว (บรรทัดเดียว) แล้วจึงตามด้วยเนื้อหา';
+
+// แยกคำแปล/GLOSSARY จากคำตอบ ; โมเดลลืม marker บ้าง → ตัดบรรทัด === ออกแล้วใช้คำแปลได้เลย (ข้ามคลังส่วนนี้)
+// แทนการสั่งแปลใหม่ทั้งชิ้น (เคยเสียค่าแปลซ้ำ 2 รอบใน 10 บท)
+function parseAnswer(out: string): { th: string; gl: string } {
+  const m = out.match(/=== TRANSLATION ===\s*([\s\S]*?)\s*=== GLOSSARY ===\s*([\s\S]*)$/);
+  if (m) return { th: m[1], gl: m[2] };
+  const cut = out.search(/^\s*=+\s*GLOSSARY/im);
+  const body = (cut >= 0 ? out.slice(0, cut) : out).replace(/^\s*=+\s*[A-Z ]+=+\s*$/gm, '').trim();
+  return { th: body, gl: cut >= 0 ? out.slice(cut) : '{}' };
+}
+
+async function translateChunk(text: string, g: Glossary, title: string, prev?: string, hasTitle = false): Promise<{ th: string; delta: Delta }> {
   const ctx = relevant(g, text + title);
   const before = tailOf(prev);
-  const user = `GLOSSARY ปัจจุบัน:\n${JSON.stringify(ctx)}\n\nบท: ${title}\n\n${before ? `ช่วงก่อนหน้า (บริบทเท่านั้น ห้ามแปลซ้ำ — ต้นฉบับด้านล่างเล่าต่อจากตรงนี้ ให้ประโยคแรกรับช่วงต่อได้ลื่น ไม่ขึ้นต้นเหมือนเริ่มฉากใหม่):\n${before}\n\n` : ''}ต้นฉบับ:\n${text}`;
-  let out = '';
+  const user = `GLOSSARY ปัจจุบัน:\n${JSON.stringify(ctx)}\n\nบท: ${title}\n\n${hasTitle ? TITLE_NOTE + '\n\n' : ''}${before ? `ช่วงก่อนหน้า (บริบทเท่านั้น ห้ามแปลซ้ำ — ต้นฉบับด้านล่างเล่าต่อจากตรงนี้ ให้ประโยคแรกรับช่วงต่อได้ลื่น ไม่ขึ้นต้นเหมือนเริ่มฉากใหม่):\n${before}\n\n` : ''}ต้นฉบับ:\n${text}`;
   let th = '';
   let gl = '{}';
   for (let attempt = 1; attempt <= 3; attempt++) {
-    out = await chat(SYSTEM + PROFILE, user, attempt === 1 ? 0.7 : 0.5);
-    [, th = out, gl = '{}'] = out.match(/=== TRANSLATION ===\s*([\s\S]*?)\s*=== GLOSSARY ===\s*([\s\S]*)$/) ?? [];
+    ({ th, gl } = parseAnswer(await chat(SYSTEM + PROFILE, user, attempt === 1 ? 0.7 : 0.5)));
     const bad = insane(th.trim(), text);
     if (!bad) break;
     console.error(`แปลผิดรูป (${bad}) — ลองใหม่ ${attempt}/3`);
@@ -273,7 +304,7 @@ async function translateChunk(text: string, g: Glossary, title: string, prev?: s
   try { delta = JSON.parse(json || '{}'); } catch { console.error('glossary parse fail'); }
   if (process.env.NR_DEBUG) appendFileSync(join(ROOT, 'glossary-debug.log'), gl + '\n----\n');
   const draft = await fixCJK(th.trim(), text, g);
-  const final = flag('--no-polish') ? draft : await fixCJK(await polish(draft, text, g), text, g);
+  const final = flag('--no-polish') ? draft : await fixCJK(await polish(draft, text, g, hasTitle), text, g);
   return { th: final.replaceAll('บทหยวน', 'บทบาท'), delta }; // 起着…作用 เคยหลุดเป็น "บทหยวน"
 }
 
@@ -306,39 +337,50 @@ async function waitContent(page: Page) {
   const site = siteFor(page.url());
   // หน้า Cloudflare ("Just a moment...") → รอนานขึ้นให้ผู้ใช้กดยืนยันในหน้าต่าง Chrome
   const cf = /just a moment|请稍候|attention required/i.test(await page.title().catch(() => ''));
+  if (cf) {
+    // แท็บเราปิด JS ไว้ แต่หน้ายืนยัน Cloudflare ต้องใช้ JS → เปิดกลับแล้วโหลดใหม่ให้ยืนยันได้
+    console.error(`เจอหน้า Cloudflare → เปิด JS ให้ยืนยัน (ถ้ามีปุ่ม ไปกดในแท็บนั้น): ${page.url()}`);
+    await page.setScripts(true).catch(() => {});
+    await page.goto(page.url(), { timeout: 30_000 }).catch(() => {});
+  }
   // ไม่ใช้ waitForSelector: มันรอด้วย requestAnimationFrame ซึ่ง Chrome หยุดในแท็บเบื้องหลัง
   // (แท็บใหม่ที่เราเปิดเองอยู่เบื้องหลัง) → ถาม DOM ตรงๆ ทุกครึ่งวินาทีแทน
   const deadline = Date.now() + (cf ? 120_000 : 45_000);
+  let hungSince = 0;
+  let reloaded = false;
   while (Date.now() < deadline) {
-    if (await page.evaluate((sel) => !!document.querySelector(sel), site.contentSelector).catch(() => false)) return;
+    // evaluate ไม่มี timeout ในตัว — แท็บที่ JS ในหน้าวนไม่รู้จบ (เว็บนิยายบางเว็บจงใจทำเมื่อเจอเครื่องมือคุมเบราว์เซอร์)
+    // จะค้างรอตลอดกาล → ตัดที่ 3 วิ
+    const r = await withTimeout(page.evaluate((sel) => !!document.querySelector(sel), site.contentSelector), 3000).catch(() => 'hung' as const);
+    if (r === true) return;
+    if (r === 'hung') {
+      hungSince ||= Date.now();
+      if (Date.now() - hungSince > 15_000) {
+        if (reloaded) fail(`แท็บค้าง (สคริปต์ในหน้าเว็บวนไม่หยุด) แม้โหลดใหม่แล้ว: ${page.url()} — ปิดแท็บนั้นแล้วสั่งใหม่`);
+        console.error(`แท็บค้าง → โหลดหน้าใหม่: ${page.url()}`);
+        await page.goto(page.url(), { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => {});
+        reloaded = true;
+        hungSince = 0;
+      }
+    } else hungSince = 0;
     await sleep(500);
   }
   fail('หน้าไม่โหลด/ติด Cloudflare — ไปกดยืนยันในหน้า Chrome แล้วสั่งใหม่');
 }
 
-// แท็บที่ค้าง (ไม่ตอบ CDP — เช่นโฆษณาค้าง/ถูกแช่แข็ง) ทำให้ Playwright ต่อ Chrome ไม่ได้ทั้งตัว
-// → ลองถามทุกแท็บ 3 วิ แท็บไหนเงียบให้ปิดทิ้ง (ปิดผ่าน browser process ซึ่งยังตอบอยู่)
-async function closeHungTabs() {
-  const tabs: { id: string; type: string; url: string; webSocketDebuggerUrl?: string }[] =
-    await fetch(`http://127.0.0.1:${PORT}/json/list`).then((r) => r.json(), () => []);
-  await Promise.all(tabs.filter((t) => t.type === 'page' && t.webSocketDebuggerUrl).map((t) => new Promise<void>((done) => {
-    const ws = new WebSocket(t.webSocketDebuggerUrl!);
-    const timer = setTimeout(async () => {
-      ws.close();
-      await fetch(`http://127.0.0.1:${PORT}/json/close/${t.id}`).catch(() => {});
-      console.error(`ปิดแท็บที่ค้าง: ${t.url}`);
-      done();
-    }, 3000);
-    ws.onopen = () => ws.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: { expression: '1' } }));
-    ws.onmessage = () => { clearTimeout(timer); ws.close(); done(); };
-    ws.onerror = () => { clearTimeout(timer); done(); };
-  })));
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
 }
+
+// ดึงเนื้อบท — มีเพดานเวลา กันแท็บค้างแล้วรอไม่จบ
+const extractChapter = (page: Page) =>
+  withTimeout(siteFor(page.url()).extract(page), 30_000).catch(() => fail(`ดึงเนื้อบทไม่ได้ (แท็บค้าง): ${page.url()} — ปิดแท็บนั้นแล้วสั่งใหม่`));
+
 
 // ยังไม่ได้เปิด Chrome (พอร์ต debug) → เปิดให้เอง ด้วยโปรไฟล์เดียวกับ open-chrome.cmd
 async function ensureChrome() {
   const up = () => fetch(`http://127.0.0.1:${PORT}/json/version`).then((r) => r.ok, () => false);
-  if (await up()) return closeHungTabs();
+  if (await up()) return;
   const exe = [
     join(process.env.ProgramFiles ?? 'C:\\Program Files', 'Google/Chrome/Application/chrome.exe'),
     join(process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)', 'Google/Chrome/Application/chrome.exe'),
@@ -346,21 +388,52 @@ async function ensureChrome() {
   ].find((p) => existsSync(p));
   if (!exe) fail('ไม่เจอ chrome.exe — เปิดด้วย tools/novel-reader/open-chrome.cmd เอง');
   console.error('ยังไม่ได้เปิด Chrome → เปิดให้ (โปรไฟล์ .chrome-profile)');
-  // กัน Chrome แช่แข็งแท็บเบื้องหลัง — แท็บที่ค้างจะทำให้ connectOverCDP รอจน timeout
+  // กัน Chrome แช่แข็งแท็บเบื้องหลัง (แท็บของเราเปิดอยู่เบื้องหลัง)
   const noFreeze = ['--disable-renderer-backgrounding', '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows'];
   spawn(exe, [`--remote-debugging-port=${PORT}`, `--user-data-dir=${join(ROOT, '.chrome-profile')}`, ...noFreeze, 'about:blank'], { detached: true, stdio: 'ignore' }).unref();
   for (let i = 0; i < 30; i++) { await sleep(500); if (await up()) return; }
   fail(`เปิด Chrome แล้วแต่ต่อพอร์ต ${PORT} ไม่ได้ — ถ้ามี Chrome โปรไฟล์นี้เปิดค้างอยู่แบบไม่มีพอร์ต ให้ปิดก่อน`);
 }
 
-async function pickPage(browser: Awaited<ReturnType<typeof chromium.connectOverCDP>>): Promise<Page> {
-  // --url/--continue ใช้แท็บใหม่ของตัวเองเสมอ → รันหลายรอบพร้อมกัน/อ่านอยู่ในแท็บเดิม ไม่ชนกัน
-  if (opt('--url') || flag('--continue')) return browser.contexts()[0].newPage();
-  const pages = browser.contexts().flatMap((c) => c.pages()).filter((p) => /^https?:/.test(p.url()));
-  const known = pages.filter((p) => SITES.slice(0, -1).some((s) => s.match(p.url())));
-  const page = known.at(-1) ?? pages.at(-1);
-  if (page) return page;
-  fail('ไม่เจอแท็บเว็บใน Chrome — เปิดหน้าบทนิยายไว้ก่อน');
+// แท็บของตัวแปลเอง: จดรหัสแท็บไว้ (.own-tabs.json: รหัสแท็บ → pid ของรอบที่ใช้อยู่)
+// รอบถัดไปใช้แท็บเดิมซ้ำ ถ้ายังเปิดอยู่ ตอบสนองได้ และไม่มีรอบอื่นใช้อยู่ — ไม่ต้องเปิดแท็บใหม่ทุกครั้ง และไม่ปิดแท็บใดๆ
+const OWN_TABS = join(ROOT, '.own-tabs.json');
+const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
+async function ownTab(): Promise<Page> {
+  const tabs = await listTabs(PORT);
+  const own = Object.fromEntries(Object.entries(readJson<Record<string, number>>(OWN_TABS, {})).filter(([id]) => tabs.some((t) => t.id === id)));
+  const claim = (id: string) => {
+    own[id] = process.pid;
+    writeJson(OWN_TABS, own);
+    // จบรอบ (ปกติหรือ fail) → คืนแท็บทันที (0 = ว่าง) ; ไม่พึ่งเช็ค pid อย่างเดียว เพราะบน Windows
+    // process ที่เพิ่งจบยังดูเหมือน "มีชีวิต" อยู่ครู่หนึ่ง ทำให้รอบถัดไปคิดว่าแท็บยังถูกใช้
+    process.on('exit', () => {
+      const cur = readJson<Record<string, number>>(OWN_TABS, {});
+      if (cur[id] === process.pid) { cur[id] = 0; writeJson(OWN_TABS, cur); }
+    });
+  };
+  const inUse = (pid: number) => pid !== 0 && pid !== process.pid && alive(pid);
+  for (const t of tabs.filter((t) => t.id in own && !inUse(own[t.id]))) {
+    if (await responsive(t)) {
+      claim(t.id);
+      return CdpPage.own(t).catch((e) => fail(`ต่อแท็บเดิมไม่ได้: ${e.message}`));
+    }
+    console.error(`แท็บเดิมของตัวแปลค้าง (ใช้ต่อไม่ได้ ปิดเองได้เลย): ${t.url}`);
+  }
+  const p = await CdpPage.open(PORT).catch((e) => fail(`เปิดแท็บใหม่ไม่ได้: ${e.message}`));
+  claim(p.targetId);
+  return p;
+}
+
+async function pickPage(): Promise<Page> {
+  // --url/--continue ใช้แท็บใหม่ของตัวเองเสมอ (แตะเฉพาะแท็บนี้ แปลเสร็จเปิดค้างไว้ ผู้ใช้ปิดเอง)
+  if (opt('--url') || flag('--continue')) return ownTab();
+  // ไม่มี flag = แปลแท็บนิยายที่ผู้ใช้เปิดค้างไว้
+  const tabs = (await listTabs(PORT)).filter((t) => /^https?:/.test(t.url));
+  const t = tabs.filter((x) => SITES.slice(0, -1).some((s) => s.match(x.url))).at(0) ?? tabs.at(0);
+  if (!t) fail('ไม่เจอแท็บเว็บใน Chrome — เปิดหน้าบทนิยายไว้ก่อน');
+  return CdpPage.attach(t).catch((e) => fail(`ต่อแท็บไม่ได้: ${e.message}`));
 }
 
 // ---------- reader.html ----------
@@ -533,15 +606,12 @@ if (flag('--rebuild')) {
   process.exit(0);
 }
 await ensureChrome();
-const browser = await chromium.connectOverCDP(`http://127.0.0.1:${PORT}`).catch(() =>
-  fail(`ต่อ Chrome ที่พอร์ต ${PORT} ไม่ได้ — เปิด Chrome ด้วย tools/novel-reader/open-chrome.cmd ก่อน`),
-);
-const page = await pickPage(browser);
+const page = await pickPage();
 
 let target = opt('--url');
 if (flag('--continue') && !target) {
   // แท็บใหม่ยังว่าง → ดูรหัสเรื่องจากแท็บนิยายที่เปิดอ่านอยู่แทน
-  const m = browser.contexts().flatMap((c) => c.pages()).map((p) => p.url().match(/\/txt\/(\d+)\//)).filter(Boolean).at(-1);
+  const m = (await listTabs(PORT)).map((t) => t.url.match(/\/txt\/(\d+)\//)).filter(Boolean).at(0);
   const id = opt('--book') ?? (m && existsSync(bookDir(m[1])) ? m[1] : undefined) ?? latestBook();
   let next = id && readJson<Progress>(join(bookDir(id), 'progress.json'), { bookTitle: '', order: [] }).nextUrl;
   // เรื่องใหม่ที่ยังไม่เคยแปล (--book ระบุมา) → หาบทแรกจากสารบัญ
@@ -560,7 +630,7 @@ const t0 = Date.now();
 const lines: string[] = [];
 const newChars: string[] = [];
 const done: string[] = [];
-let ch: Chapter = await siteFor(page.url()).extract(page);
+let ch: Chapter = await extractChapter(page);
 let bookId = ch.bookId;
 
 for (let i = 0; i < N; i++) {
@@ -583,8 +653,12 @@ for (let i = 0; i < N; i++) {
 
   // แปลทุกชิ้นขนานกัน (ใช้ glossary snapshot เดียวกัน) แล้วค่อย merge
   const pieces = chunk(joinBroken(ch.paragraphs));
-  const [titleR, ...results] = await Promise.all([ch.title, ...pieces].map((p, i) => translateChunk(p, g, ch.title, i > 1 ? pieces[i - 2] : undefined)));
-  const titleTh = titleR.th.split('\n')[0];
+  // ชื่อบทไปเป็นบรรทัดแรกของชิ้นแรก (ไม่แยกคำขอ) → ปกติทั้งบทคือ 1 คำขอแปล + 1 คำขอเกลา
+  const results = await Promise.all(pieces.map((p, i) => translateChunk(i === 0 ? `${ch.title}\n\n${p}` : p, g, ch.title, i > 0 ? pieces[i - 1] : undefined, i === 0)));
+  const [first, ...rest] = results[0].th.split('\n');
+  let titleTh = first.trim();
+  if (titleTh && titleTh.length <= 80 && !/[一-鿿]/.test(titleTh)) results[0].th = rest.join('\n').trim();
+  else titleTh = (await translateChunk(ch.title, g, ch.title)).th.split('\n')[0]; // โมเดลไม่ได้แยกชื่อบทไว้บรรทัดแรก → แปลชื่อแยก
   for (const r of results) newChars.push(...merge(g, r.delta));
 
   if (!prog.order.includes(ch.chapterId)) prog.order.push(ch.chapterId);
@@ -606,7 +680,7 @@ for (let i = 0; i < N; i++) {
 
   if (!hasNext) break;
   await nav;
-  ch = await siteFor(page.url()).extract(page);
+  ch = await extractChapter(page);
 }
 
 const report = await checkBook(bookId, done); // ตรวจเฉพาะบทที่เพิ่งแปลรอบนี้
@@ -617,5 +691,7 @@ console.log(`ตัวละครใหม่: ${newChars.length ? newChars.joi
 console.log(`คลังตอนนี้: ${Object.keys(g.characters).length} ตัวละคร, ${Object.keys(g.terms).length} คำศัพท์`);
 console.log(`อ่าน: ${join(bookDir(bookId), 'reader.html')}`);
 console.log(`เวลา: ${((Date.now() - t0) / 1000).toFixed(0)} วิ`);
-if (opt('--url') || flag('--continue')) await page.close().catch(() => {}); // ปิดเฉพาะแท็บที่เปิดเอง
+if (USAGE.calls) console.log(`token: เรียก ${USAGE.calls} ครั้ง | ขาเข้า ${USAGE.hit + USAGE.miss} (cache hit ${USAGE.hit}) | ขาออก ${USAGE.out}`);
+if (FIXLOG.cjk.size || FIXLOG.eng.size || FIXLOG.rude)
+  console.log(`คำหลุดที่ต้องแก้: จีน [${[...FIXLOG.cjk].join(' ')}] | อังกฤษ [${[...FIXLOG.eng].join(' ')}] | กู/มึง ${FIXLOG.rude} บรรทัด`);
 process.exit(0); // ไม่เรียก browser.close() — กันไปปิด Chrome ของผู้ใช้
