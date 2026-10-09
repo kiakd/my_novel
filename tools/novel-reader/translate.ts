@@ -6,11 +6,14 @@
 //   node translate.ts --url <ลิงก์บท>   เปิดลิงก์นี้ก่อนแล้วแปล
 //   node translate.ts --continue --book 43484 --n 5   ต่อเรื่องที่ระบุ (มีหลายเรื่อง)
 //   node translate.ts --list          ดูเรื่องทั้งหมดใน library
+//   node translate.ts --repolish --book 43484 --ch 3,5-7   เกลาสำนวนบทที่แปลแล้วใหม่ (ไม่ต้องต่อ Chrome)
 //   node translate.ts --translator <ชื่อ> --book 90442   ผูกนักแปลประจำแนว (translators/<ชื่อ>/) กับเรื่อง — จำไว้ ครั้งต่อไปไม่ต้องใส่
+//   node translate.ts --url <ลิงก์> --model deepseek-v4-pro [--thinking low|high|max]   เลือกรุ่น (ค่าเริ่มต้นปิดการคิด)
 //   node translate.ts --provider ollama [--model <ชื่อ>] [--ollama-url <url>]   ใช้โมเดล local ผ่าน Ollama แทน DeepSeek
 //
 // stdout = สรุปสั้น (สำหรับ skill) — เนื้อหาคำแปลอยู่ใน library/<book>/chapters/*.md และ reader.html
 import { CdpPage, listTabs, responsive, type Page } from './cdp-page.ts';
+import { HttpPage } from './http-page.ts';
 import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -27,6 +30,9 @@ const flag = (k: string) => argv.includes(k);
 const opt = (k: string) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : undefined; };
 const N = Number(opt('--n') ?? 1);
 const PORT = opt('--port') ?? '9222';
+// วิธีดึงหน้าเว็บ: chrome = คุมแท็บ Chrome ผ่าน CDP · http = impit ไม่ต้องมี Chrome (ใช้บน VPS) — ดู http-page.ts
+// ค่าเริ่มต้น: Windows ใช้ chrome (เหมือนเดิม) อย่างอื่น http · เปลี่ยนด้วย --fetch หรือ NR_FETCH
+const HTTP = (opt('--fetch') ?? process.env.NR_FETCH ?? (process.platform === 'win32' ? 'chrome' : 'http')) === 'http';
 // แปลทั้งบทในคำขอเดียว (ได้ภาพรวมทั้งฉากก่อน แล้วค่อยเกลาทั้งบท) — บทจริงยาวสุด ~3.7k ตัวจีน
 // คำแปลไทยของบท 2k ตัวจีนราว 3k token ยังห่าง max_tokens 8000 ; เกินเพดานนี้ค่อยหั่น (กันชนเพดาน output)
 const CHUNK = 6000;
@@ -47,7 +53,11 @@ let PROVIDER = opt('--provider') ?? process.env.NR_PROVIDER ?? 'deepseek';
 const OLLAMA_URL = (opt('--ollama-url') ?? process.env.OLLAMA_URL ?? 'http://localhost:11434').replace(/\/+$/, '');
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? 'gemma4-e4b-uncensored:latest';
 const KEY = process.env.DEEPSEEK_API_KEY;
-let MODEL = opt('--model') ?? (PROVIDER === 'ollama' ? OLLAMA_MODEL : process.env.DEEPSEEK_MODEL ?? 'deepseek-chat');
+// รุ่นที่ใช้: --model > library/settings.json (ตั้งจากหน้าเว็บ ⚙ → โมเดล AI) > DEEPSEEK_MODEL ใน .env
+const SETTINGS = (() => { try { return JSON.parse(readFileSync(join(LIB, 'settings.json'), 'utf8')) as { model?: string }; } catch { return {}; } })();
+let MODEL = opt('--model') ?? (PROVIDER === 'ollama' ? OLLAMA_MODEL : SETTINGS.model ?? process.env.DEEPSEEK_MODEL ?? 'deepseek-chat');
+const THINKING = opt('--thinking'); // ไม่ใส่ = ปิดการคิด (เร็ว/ถูก เหมือน deepseek-chat)
+if (THINKING && !['low', 'high', 'max'].includes(THINKING)) fail('--thinking ต้องเป็น low|high|max');
 if (PROVIDER !== 'deepseek' && PROVIDER !== 'ollama') fail(`ไม่รู้จัก --provider ${PROVIDER} (deepseek|ollama)`);
 if (PROVIDER === 'deepseek' && !KEY) fail('ไม่พบ DEEPSEEK_API_KEY ใน novel/.env');
 
@@ -68,14 +78,14 @@ function latestBook(): string | undefined {
 
 // ---------- AI ----------
 // คลังความรู้สำนวน: tools/novel-reader/style/*.md (แก้ไฟล์ได้เลย มีผลรอบถัดไป)
-// ขั้นแปลใช้ไฟล์ 03+04, ขั้นเกลาใช้ทั้งคลัง — อยู่ใน system prompt ส่วนต้นที่ซ้ำทุกคำขอ DeepSeek จึงคิดราคาแบบ cache
+// ขั้นแปลใช้ไฟล์ 03+04+05, ขั้นเกลาใช้ทั้งคลัง — อยู่ใน system prompt ส่วนต้นที่ซ้ำทุกคำขอ DeepSeek จึงคิดราคาแบบ cache
 const STYLE_DIR = join(ROOT, 'style');
 // --no-style: ปิดคลังสำนวน (ไว้เทียบผล A/B)
 const styleFiles = !flag('--no-style') && existsSync(STYLE_DIR) ? readdirSync(STYLE_DIR).filter((f) => f.endsWith('.md')).sort() : [];
 const readStyle = (f: string) => readFileSync(join(STYLE_DIR, f), 'utf8').trim();
-// ขั้นแปลร่างได้ 03 (สำนวน) + 04 (โครงจีน/คำทักทาย): คำแปลตรงตัว ("เช้า!", "พวกคุณเช้า") เกิดตั้งแต่ร่างแรก
-// และขั้นเกลาไม่กล้าแก้บทพูดเพราะถูกสั่งห้ามเพิ่มเนื้อหา
-const STYLE = styleFiles.filter((f) => /^0[34]/.test(f)).map(readStyle).join('\n\n');
+// ขั้นแปลร่างได้ 03 (สำนวน) + 04 (โครงจีน/คำทักทาย) + 05 (น้ำเสียง/อารมณ์): คำแปลตรงตัว ("เช้า!", "พวกคุณเช้า")
+// และมุกแบน ๆ เกิดตั้งแต่ร่างแรก ขั้นเกลาไม่กล้าแก้บทพูดเพราะถูกสั่งห้ามเพิ่มเนื้อหา
+const STYLE = styleFiles.filter((f) => /^0[345]/.test(f)).map(readStyle).join('\n\n');
 const KNOWLEDGE = styleFiles.map(readStyle).join('\n\n');
 
 // นักแปลประจำแนว: translators/<ชื่อ>/{ตัวตน.md, ความรู้.md, canon.json} — ผูกกับเรื่องใน progress.json
@@ -98,19 +108,24 @@ const SYSTEM = `คุณคือนักแปลนิยายเว็บ�
 - ห้ามใช้ "กู" "มึง" เด็ดขาด แม้ต้นฉบับจะหยาบหรือสนิทกันมาก (老子/你丫/他妈的 ฯลฯ) → ใช้ ฉัน/นาย/แก/เธอ และแสดงความหยาบ/ความสนิทผ่านน้ำเสียงและคำลงท้ายแทน
 - คงน้ำเสียงการพูดของแต่ละตัวละครตาม speech
 ${STYLE}
-- แปลครบทุกย่อหน้า ไม่ย่อ ไม่เพิ่มเนื้อหา ไม่ใส่หมายเหตุผู้แปล คงการแบ่งย่อหน้าเดิม
-- สำนวน/มุกจีนที่คนไทยไม่เข้าใจ ให้แปลเป็นความหมายที่เทียบเท่า
+- แปลครบทุกย่อหน้า ไม่ย่อ ไม่เพิ่มเนื้อหา คงการแบ่งย่อหน้าเดิม ไม่ใส่หมายเหตุผู้แปลอื่นนอกจากหมายเหตุสำนวนจีนตามข้อด้านล่าง
 - ในส่วน TRANSLATION ห้ามมีอักษรจีนแม้แต่ตัวเดียว และห้ามทับศัพท์อังกฤษ (breakthrough, deal ฯลฯ) ให้ใช้คำไทย ยกเว้นชื่อแบรนด์ ทุกคำต้องเป็นภาษาไทย (ชื่อ/สถานที่ถอดเสียงเป็นไทย)
 - สกุลเงินจีนคงเป็น "หยวน" เสมอ (元/块/块钱 = หยวน) และแปลงตัวเลขเป็นหลักไทยให้ถูก: 万=หมื่น, 十万=แสน, 百万=ล้าน เช่น 三十万=สามแสน, 六十多万=หกแสนกว่า, 两百万=สองล้าน ห้ามเขียน "หกสิบหมื่น"/"สามร้อยหมื่น" ห้ามแปลงเป็นบาทหรือสกุลอื่น
 - ชื่ออาหาร/ขนม/ของเฉพาะจีน: ใช้ชื่อที่คนไทยรู้จัก (เช่น 糖葫芦=ถังหูลู่, 淀粉肠=ไส้กรอกแป้งทอด, 臭豆腐=เต้าหู้เหม็น, 棉花糖=สายไหม) ถ้าไม่มีชื่อไทยให้ถอดเสียง + อธิบายสั้นในวงเล็บ ห้ามแปลตามตัวอักษรจนผิดความหมาย
 - แฟนฟิค/อ้างอิงงานดัง (แฮร์รี่ พอตเตอร์, วันพีซ, นารูโตะ ฯลฯ): ชื่อคน สถานที่ คาถา ศัพท์เฉพาะ ใช้ตามฉบับแปลไทยทางการที่คนไทยคุ้น (เช่น 霍格沃茨=ฮอกวอตส์, 邓布利多=ดัมเบิลดอร์, 斯内普=สเนป, 格兰芬多=กริฟฟินดอร์) ไม่ใช่ถอดเสียงจีน
 - ชื่อวิชา/สถานที่/สิ่งของในงานดังที่ฉบับไทยมีชื่อแปลแล้ว (เช่น 变形术=วิชาแปลงร่าง) ใช้ชื่อไทยนั้น ห้ามถอดเสียงอังกฤษ — ยกเว้นเมื่อต้นฉบับยกคำอังกฤษ/ละตินมาเป็น "คำร่ายคาถา" หรืออธิบายการออกเสียง ให้คงคำร่ายแบบถอดเสียง/ตัวอังกฤษไว้
-- สำนวนจีน/成语/มุกอินเทอร์เน็ต: แปลตามความหมายจริงเป็นสำนวนไทยที่เทียบเท่า ห้ามแปลคำต่อคำ
+- สำนวน/คำพังเพย/成语/การอ้างเรื่องเล่าโบราณ แบ่ง 3 แบบ (แบบนิยายจีนแปลไทย):
+  (1) มีสำนวนไทยน้ำหนักเท่ากันที่คนไทยใช้จริง (一箭双雕=ยิงปืนนัดเดียวได้นกสองตัว, 引狼入室=ชักศึกเข้าบ้าน) → ใช้สำนวนไทย ไม่มีหมายเหตุ
+  (2) สำนวนที่มีภาพเปรียบ/ที่มาเฉพาะแบบจีน ไม่มีสำนวนไทยตรงกัน (井底之蛙, 画蛇添足, 卧薪尝胆, 塞翁失马) → คงภาพแบบจีนไว้ แปลเป็นถ้อยคำไทยสละสลวย (เช่น "กบในก้นบ่อ" "วาดงูเติมขา") แล้วต่อท้ายสำนวนทันทีด้วยเครื่องหมาย [^1] [^2] … และอธิบายความหมายในส่วน NOTES
+  (3) คำสี่พยางค์ที่ใช้เป็นคำบรรยายธรรมดา (一模一样, 莫名其妙, 目瞪口呆) และมุกอินเทอร์เน็ต/คำแสลงสมัยใหม่ → แปลตามความหมายเป็นไทยธรรมดา ไม่มีหมายเหตุ
+  ใส่หมายเหตุเฉพาะจุดที่ผู้อ่านไทยไม่เข้าใจจริงๆ ไม่เกินราว 6 จุดต่อคำขอ เลขเริ่มที่ 1 ทุกคำขอ
 - เขียนแบบนิยายไทย: บทพูดในเครื่องหมาย "..." บรรยายกระชับ ไม่ติดโครงประโยคจีน
 
 รูปแบบคำตอบ (ต้องตรงเป๊ะ):
 === TRANSLATION ===
 <คำแปล>
+=== NOTES ===
+<บรรทัดละข้อ: [^เลข]: สำนวนตามที่เขียนในคำแปล — ความหมาย (และที่มาสั้นๆ ถ้ามี) ภาษาไทยล้วน ห้ามมีอักษรจีน; ถ้าไม่มีสำนวนแบบ (2) ให้เว้นบรรทัดว่าง
 === GLOSSARY ===
 <JSON: {"characters":{"ชื่อจีน":{"th":"","gender":"ชาย|หญิง","role":"","self":"","called":"","speech":"","relations":""}},"terms":{"คำจีน":"คำไทย"}}>
 characters = เฉพาะบุคคลที่มีชื่อจริง (ห้ามใส่สรรพนาม/คำเรียกแทนตัว เช่น 老子 我 他 เป็นตัวละคร) ใช้ชื่อเต็มภาษาจีนเป็น key
@@ -137,14 +152,33 @@ function ollamaChat(system: string, user: string, temperature: number): Promise<
 
 const USAGE = { calls: 0, hit: 0, miss: 0, out: 0 };
 
-async function chat(system: string, user: string, temperature = 0.7): Promise<string> {
+// บันทึกทุกคำขอ AI ลง library/usage.jsonl ไว้วิเคราะห์ว่าเงินไปหมดที่ขั้นไหน (ดูสรุปที่ /usage ในเว็บ)
+// CTX = งานที่กำลังทำ: mode new|retranslate|repolish|check|fix, ch = เลขตอน
+const CTX = { book: '', ch: 0, mode: '' };
+const USAGE_LOG = join(LIB, 'usage.jsonl');
+function logUsage(stage: string, ms: number, u?: { prompt_cache_hit_tokens?: number; prompt_cache_miss_tokens?: number; prompt_tokens?: number; completion_tokens?: number }, err?: string) {
+  const row = {
+    t: new Date().toISOString(), book: CTX.book, ch: CTX.ch, mode: CTX.mode || 'other', stage, provider: PROVIDER, model: MODEL, ms,
+    hit: u?.prompt_cache_hit_tokens ?? 0, miss: u?.prompt_cache_miss_tokens ?? u?.prompt_tokens ?? 0, out: u?.completion_tokens ?? 0, ...(err ? { err } : {}),
+  };
+  try { mkdirSync(LIB, { recursive: true }); appendFileSync(USAGE_LOG, JSON.stringify(row) + '\n'); } catch {}
+}
+
+// stage = ขั้นที่เรียก (translate / translate-retry / polish / fix-lines / fix-words / fix-para) — ไว้แยกค่าใช้จ่ายใน log
+async function chat(system: string, user: string, temperature = 0.7, stage = 'other'): Promise<string> {
   for (let attempt = 1; ; attempt++) {
+    const t0 = Date.now();
     try {
-      if (PROVIDER === 'ollama') return await ollamaChat(system, user, temperature);
+      if (PROVIDER === 'ollama') { const r = await ollamaChat(system, user, temperature); logUsage(stage, Date.now() - t0); return r; }
       const res = await fetch('https://api.deepseek.com/v1/chat/completions', {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${KEY}` },
-        body: JSON.stringify({ model: MODEL, temperature, max_tokens: 8000, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] }),
+        // V4.x "คิดก่อนตอบ" เมื่อเรียกชื่อรุ่นตรงๆ (deepseek-flash/deepseek-v4-pro) — ความคิดนับเป็น token ขาออก
+        // และเคยกิน max_tokens หมดจนคำแปลว่าง → ปิดไว้ (deepseek-chat ปิดอยู่แล้ว) เปิดด้วย --thinking low|high|max
+        body: JSON.stringify({
+          model: MODEL, temperature, messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+          ...(THINKING ? { reasoning_effort: THINKING, max_tokens: 32000 } : { thinking: { type: 'disabled' }, max_tokens: 8000 }),
+        }),
       });
       if (res.status === 402 && !flag('--no-fallback')) {
         if (PROVIDER === 'deepseek') {
@@ -152,10 +186,13 @@ async function chat(system: string, user: string, temperature = 0.7): Promise<st
           PROVIDER = 'ollama';
           MODEL = OLLAMA_MODEL;
         }
-        return await ollamaChat(system, user, temperature);
+        const r = await ollamaChat(system, user, temperature);
+        logUsage(stage, Date.now() - t0);
+        return r;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
       const j = await res.json();
+      logUsage(stage, Date.now() - t0, j.usage);
       // นับ token จริงที่ DeepSeek คิดเงิน (cache hit = ส่วนหัว prompt ที่ซ้ำ คิดถูกกว่ามาก)
       USAGE.calls++;
       USAGE.hit += j.usage?.prompt_cache_hit_tokens ?? 0;
@@ -163,6 +200,7 @@ async function chat(system: string, user: string, temperature = 0.7): Promise<st
       USAGE.out += j.usage?.completion_tokens ?? 0;
       return j.choices[0].message.content;
     } catch (e) {
+      logUsage(stage, Date.now() - t0, undefined, String((e as Error).message ?? e).slice(0, 200));
       if (attempt >= 3) throw e;
       await sleep(1500 * attempt);
     }
@@ -172,10 +210,14 @@ async function chat(system: string, user: string, temperature = 0.7): Promise<st
 const RUDE = /(?<!ตระ|ฟิ)กู(?![่้๊๋]|เกิล|รู)|มึง/; // ข้าม ตระกูล/กูรู/กู้/กูเกิล/ฟิกูเรชัน
 const CJK = /[㐀-鿿豈-﫿]/;
 
+// อักษรต่างชาติอื่นที่โมเดลหลุดมา (รัสเซีย/อาหรับ/คานะ/ฮันกึล) เช่น "четыวีสลีย์"
+const OTHER = /[Ѐ-ӿ؀-ۿ぀-ゟ가-힯]+|[ァ-ヺ]{2,}/; // ไม่นับกรีก/คาตาคานะตัวเดียว — มักเป็นอีโมติคอน (=ω=) （￣（エ）￣）
+const OTHER_G = new RegExp(OTHER.source, 'g');
+
 // DeepSeek ชอบหลุดคำจีนสั้นๆ ปนในคำแปล → ส่งเฉพาะบรรทัดที่ยังมีจีนกลับไปเกลาใหม่ (สูงสุด 2 รอบ)
-const FIX_SYSTEM = `คุณคือบรรณาธิการนิยายแปลไทย บรรทัดคำแปลต่อไปนี้ยังมีคำภาษาจีน/ภาษาอังกฤษหลงเหลือ หรือใช้ กู/มึง (ห้ามใช้ — เปลี่ยนเป็น ฉัน และเรียกคนฟังตามเพศ: ผู้ชาย=นาย ผู้หญิง=เธอ)
+const FIX_SYSTEM = `คุณคือบรรณาธิการนิยายแปลไทย บรรทัดคำแปลต่อไปนี้ยังมีคำภาษาจีน/ภาษาอังกฤษ/ภาษาอื่น (เช่น รัสเซีย) หลงเหลือ หรือใช้ กู/มึง (ห้ามใช้ — เปลี่ยนเป็น ฉัน และเรียกคนฟังตามเพศ: ผู้ชาย=นาย ผู้หญิง=เธอ)
 ให้เขียนแต่ละบรรทัดใหม่เป็นภาษาไทยล้วน สำนวนนิยายลื่นไหล คงความหมายและชื่อตัวละครเดิม ใช้ต้นฉบับจีนเป็นบริบท
-ห้ามมีอักษรจีนหรือคำอังกฤษ (ยกเว้นชื่อแบรนด์) ตอบเป็นบรรทัดรูปแบบ [เลข] ข้อความ ตามเลขเดิม ครบทุกบรรทัด ไม่ต้องอธิบาย`;
+ห้ามมีอักษรจีน อักษรต่างชาติอื่น หรือคำอังกฤษ (ยกเว้นชื่อแบรนด์) เครื่องหมายหมายเหตุ [^1] [^2] ในบรรทัดให้คงไว้ตำแหน่งเดิม ตอบเป็นบรรทัดรูปแบบ [เลข] ข้อความ ตามเลขเดิม ครบทุกบรรทัด ไม่ต้องอธิบาย`;
 
 // ส่งเฉพาะย่อหน้าต้นฉบับที่เกี่ยวกับบรรทัดที่ต้องแก้ แทนต้นฉบับทั้งชิ้น (ประหยัด token):
 // ย่อหน้าตำแหน่งใกล้เคียงตามสัดส่วน ±2 + ย่อหน้าที่มีคำจีนที่หลุดมา
@@ -198,15 +240,16 @@ async function fixCJK(th: string, source: string, g: Glossary): Promise<string> 
   const lines = th.split('\n');
   for (let round = 0; round < 2; round++) {
     // จีนปน หรือคำอังกฤษตัวเล็กหลุด (breakthrough ฯลฯ — ชื่อแบรนด์มักขึ้นต้นตัวใหญ่ เลยไม่โดน)
-    const bad = lines.map((l, i) => [i, l] as const).filter(([, l]) => CJK.test(l) || /\b[a-z]{4,}\b/.test(l) || RUDE.test(l));
+    const bad = lines.map((l, i) => [i, l] as const).filter(([, l]) => CJK.test(l) || OTHER.test(l) || /\b[a-z]{4,}\b/.test(l) || RUDE.test(l));
     if (!bad.length) break;
     for (const [, l] of bad) {
       for (const w of l.match(/[㐀-鿿豈-﫿]+/g) ?? []) FIXLOG.cjk.add(w);
       for (const w of l.match(/\b[a-z]{4,}\b/g) ?? []) FIXLOG.eng.add(w);
+      for (const w of l.match(OTHER_G) ?? []) FIXLOG.eng.add(w);
       if (RUDE.test(l)) FIXLOG.rude++;
     }
     const names = Object.entries(relevant(g, source).characters).map(([zh, c]) => `${zh}=${c.th}`).join(', ');
-    const out = await chat(FIX_SYSTEM, `ชื่อ: ${names || '-'}\n\nต้นฉบับ (เฉพาะช่วงที่เกี่ยวข้อง):\n${sourceContext(source, lines.length, bad)}\n\nบรรทัดที่ต้องแก้:\n${bad.map(([i, l]) => `[${i}] ${l}`).join('\n')}`, 0.3);
+    const out = await chat(FIX_SYSTEM, `ชื่อ: ${names || '-'}\n\nต้นฉบับ (เฉพาะช่วงที่เกี่ยวข้อง):\n${sourceContext(source, lines.length, bad)}\n\nบรรทัดที่ต้องแก้:\n${bad.map(([i, l]) => `[${i}] ${l}`).join('\n')}`, 0.3, 'fix-lines');
     for (const m of out.matchAll(/^\[(\d+)\]\s*(.+)$/gm)) {
       const i = Number(m[1]);
       if (bad.some(([j]) => j === i) && m[2].trim()) lines[i] = m[2].trim();
@@ -218,7 +261,7 @@ async function fixCJK(th: string, source: string, g: Glossary): Promise<string> 
     if (!words.length) break;
     // ส่งประโยครอบๆ ไปด้วย → ได้คำที่เข้าบริบท (เช่น 凭什么 = มีสิทธิ์อะไร ไม่ใช่ "อาศัยอะไร")
     const ctx = words.map((w) => `${w}: ${joined.split('\n').find((l) => l.includes(w))?.slice(0, 120) ?? ''}`).join('\n');
-    const out = await chat('แปลคำ/วลีจีนแต่ละคำเป็นภาษาไทยให้เข้ากับประโยคที่ให้มา (คำไทยต้องไม่มีอักษรจีน) ตอบ JSON object {"คำจีน":"คำไทย"} เท่านั้น', ctx, 0.2 + round * 0.3);
+    const out = await chat('แปลคำ/วลีจีนแต่ละคำเป็นภาษาไทยให้เข้ากับประโยคที่ให้มา (คำไทยต้องไม่มีอักษรจีน) ตอบ JSON object {"คำจีน":"คำไทย"} เท่านั้น', ctx, 0.2 + round * 0.3, 'fix-words');
     try {
       const map: Record<string, string> = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1));
       // ใช้ทุก key ที่โมเดลตอบมา ไม่ใช่แค่ที่ตรงเป๊ะ — คำซ้ำอย่าง 正经正经 มักถูกตอบกลับเป็น key "正经"
@@ -235,7 +278,7 @@ const POLISH_SYSTEM = `คุณคือบรรณาธิการนิย
 - ตัดโครงประโยคจีนที่แข็ง คำซ้ำ คำเชื่อมเกินจำเป็น ใช้ลำดับคำและคำลงท้ายแบบไทย
 - บทพูดต้องฟังเป็นธรรมชาติ ตรงบุคลิก อายุ ความสนิท ของผู้พูด (ดูช่อง self/called/speech)
 - ชื่อวิชา/สถานที่ในงานดังใช้ชื่อฉบับแปลไทย (ดู GLOSSARY) แต่ถ้าเป็นคำร่ายคาถาหรือการสอนออกเสียง ให้คงคำร่ายไว้
-- เทียบต้นฉบับ: ชื่ออาหาร/ขนม/สิ่งของเฉพาะจีน ต้องเป็นชื่อที่คนไทยรู้จักหรือถอดเสียง+อธิบายสั้น; สำนวนจีนต้องแปลตามความหมาย ไม่ใช่ตามตัวอักษร
+- เทียบต้นฉบับ: ชื่ออาหาร/ขนม/สิ่งของเฉพาะจีน ต้องเป็นชื่อที่คนไทยรู้จักหรือถอดเสียง+อธิบายสั้น; สำนวนจีนต้องแปลตามความหมาย ไม่ใช่ตามตัวอักษร — ยกเว้นสำนวนที่มีเครื่องหมายหมายเหตุ [^1] [^2] ต่อท้าย: คงภาพแบบจีนและเครื่องหมายไว้ตำแหน่งเดิม ห้ามลบ ห้ามเปลี่ยนเลข ห้ามเพิ่มเครื่องหมายใหม่
 - คำเรียกคู่สนทนา (你) เลือกตามเพศของ "คนที่ถูกพูดด้วย" ไม่ใช่ผู้พูด: พูดกับผู้ชาย → นาย/แก, พูดกับผู้หญิง → เธอ (ห้ามเรียกผู้หญิงว่า "นาย"), ผู้ใหญ่/ผู้อาวุโส → คุณ/ท่าน/คำเรียกญาติ — เช็คเพศจาก GLOSSARY ทุกครั้ง; 你 ในคำบรรยายที่หมายถึงคนทั่วไป → "ใคร"/ละไว้
 - ห้ามใช้ "กู" "มึง" เด็ดขาด แม้ต้นฉบับจะหยาบหรือสนิทกันมาก (老子/你丫/他妈的 ฯลฯ) → ใช้ ฉัน/นาย/แก/เธอ และแสดงความหยาบ/ความสนิทผ่านน้ำเสียงและคำลงท้ายแทน
 - สกุลเงินคงเป็น "หยวน" ห้ามเปลี่ยนเป็นบาท และตัวเลขต้องเป็นหลักไทยที่ถูก (六十万=หกแสน ไม่ใช่ หกสิบหมื่น)
@@ -266,10 +309,14 @@ export function insane(th: string, source: string): string | null {
 
 async function polish(draft: string, source: string, g: Glossary, hasTitle = false): Promise<string> {
   const note = hasTitle ? 'บรรทัดแรกคือชื่อบท — คงไว้เป็นบรรทัดแรกบรรทัดเดียว (เกลาถ้อยคำได้)\n\n' : '';
-  const out = await chat(POLISH_SYSTEM + PROFILE, `${note}GLOSSARY:\n${JSON.stringify(relevant(g, source))}\n\nต้นฉบับ:\n${source}\n\nร่างคำแปล:\n${draft}`, 0.6);
-  const th = out.trim().replace(/^=== TRANSLATION ===\s*/, '');
+  const out = await chat(POLISH_SYSTEM + PROFILE, `${note}GLOSSARY:\n${JSON.stringify(relevant(g, source))}\n\nต้นฉบับ:\n${source}\n\nร่างคำแปล:\n${draft}`, 0.6, 'polish');
+  let th = out.trim().replace(/^=== TRANSLATION ===\s*/, '');
+  // เครื่องหมายหมายเหตุสำนวน [^n]: ตัดตัวที่เกลาเพิ่มเอง; ทำตัวเดิมหาย → ใช้ร่างเดิม (หมายเหตุท้ายบทจะไม่มีที่อ้าง)
+  const had = new Set(draft.match(/\[\^\d+\]/g) ?? []);
+  th = th.replace(/\[\^\d+\]/g, (m) => (had.has(m) ? m : ''));
+  const kept = [...had].every((m) => th.includes(m));
   // เกลาแล้วผิดรูป/สั้นลงมาก → ใช้ร่างเดิม
-  return th.length > draft.length * 0.7 && !insane(th, source) ? th : draft;
+  return kept && th.length > draft.length * 0.7 && !insane(th, source) ? th : draft;
 }
 
 // ท้ายชิ้นก่อนหน้า (ต้นฉบับ) — ให้แต่ละชิ้นรู้ว่าเล่าต่อจากอะไร รอยต่อระหว่างชิ้นจะได้ไม่ขาดห้วน แต่ยังแปลขนานได้
@@ -279,22 +326,42 @@ const TITLE_NOTE = 'บรรทัดแรกของต้นฉบับค
 
 // แยกคำแปล/GLOSSARY จากคำตอบ ; โมเดลลืม marker บ้าง → ตัดบรรทัด === ออกแล้วใช้คำแปลได้เลย (ข้ามคลังส่วนนี้)
 // แทนการสั่งแปลใหม่ทั้งชิ้น (เคยเสียค่าแปลซ้ำ 2 รอบใน 10 บท)
-function parseAnswer(out: string): { th: string; gl: string } {
+function parseAnswer(out: string): { th: string; gl: string; notes: string } {
+  // ส่วน NOTES (หมายเหตุสำนวนจีน) อยู่ระหว่าง TRANSLATION กับ GLOSSARY — ตัดออกก่อน
+  let notes = '';
+  const nm = out.match(/^\s*=+\s*NOTES\s*=+\s*$/m);
+  if (nm) {
+    const rest = out.slice(nm.index! + nm[0].length);
+    const g = rest.search(/^\s*=+\s*GLOSSARY/im);
+    notes = g >= 0 ? rest.slice(0, g) : rest;
+    out = out.slice(0, nm.index) + (g >= 0 ? '\n' + rest.slice(g) : '');
+  }
   const m = out.match(/=== TRANSLATION ===\s*([\s\S]*?)\s*=== GLOSSARY ===\s*([\s\S]*)$/);
-  if (m) return { th: m[1], gl: m[2] };
+  if (m) return { th: m[1], gl: m[2], notes };
   const cut = out.search(/^\s*=+\s*GLOSSARY/im);
   const body = (cut >= 0 ? out.slice(0, cut) : out).replace(/^\s*=+\s*[A-Z ]+=+\s*$/gm, '').trim();
-  return { th: body, gl: cut >= 0 ? out.slice(cut) : '{}' };
+  return { th: body, gl: cut >= 0 ? out.slice(cut) : '{}', notes };
 }
 
-async function translateChunk(text: string, g: Glossary, title: string, prev?: string, hasTitle = false): Promise<{ th: string; delta: Delta }> {
+// "[^1]: กบในก้นบ่อ — คนที่โลกทัศน์คับแคบ" → Map(1 → ข้อความ) ; ตัดอักษรจีนที่หลุดมาในคำอธิบาย
+function parseNotes(t: string): Map<number, string> {
+  const map = new Map<number, string>();
+  for (const m of t.matchAll(/^\s*\[\^?(\d+)\]:?\s*(.+)$/gm)) {
+    const txt = m[2].replace(/[（(]?[㐀-鿿豈-﫿]+[)）]?/g, '').replace(/\s{2,}/g, ' ').trim();
+    if (txt && txt !== '-') map.set(Number(m[1]), txt);
+  }
+  return map;
+}
+
+async function translateChunk(text: string, g: Glossary, title: string, prev?: string, hasTitle = false): Promise<{ th: string; delta: Delta; notes: Map<number, string> }> {
   const ctx = relevant(g, text + title);
   const before = tailOf(prev);
   const user = `GLOSSARY ปัจจุบัน:\n${JSON.stringify(ctx)}\n\nบท: ${title}\n\n${hasTitle ? TITLE_NOTE + '\n\n' : ''}${before ? `ช่วงก่อนหน้า (บริบทเท่านั้น ห้ามแปลซ้ำ — ต้นฉบับด้านล่างเล่าต่อจากตรงนี้ ให้ประโยคแรกรับช่วงต่อได้ลื่น ไม่ขึ้นต้นเหมือนเริ่มฉากใหม่):\n${before}\n\n` : ''}ต้นฉบับ:\n${text}`;
   let th = '';
   let gl = '{}';
+  let notes = '';
   for (let attempt = 1; attempt <= 3; attempt++) {
-    ({ th, gl } = parseAnswer(await chat(SYSTEM + PROFILE, user, attempt === 1 ? 0.7 : 0.5)));
+    ({ th, gl, notes } = parseAnswer(await chat(SYSTEM + PROFILE, user, attempt === 1 ? 0.7 : 0.5, attempt === 1 ? 'translate' : 'translate-retry')));
     const bad = insane(th.trim(), text);
     if (!bad) break;
     console.error(`แปลผิดรูป (${bad}) — ลองใหม่ ${attempt}/3`);
@@ -303,12 +370,71 @@ async function translateChunk(text: string, g: Glossary, title: string, prev?: s
   const json = gl.slice(gl.indexOf('{'), gl.lastIndexOf('}') + 1); // ตัด ```json / ข้อความเกินหน้า-หลัง
   try { delta = JSON.parse(json || '{}'); } catch { console.error('glossary parse fail'); }
   if (process.env.NR_DEBUG) appendFileSync(join(ROOT, 'glossary-debug.log'), gl + '\n----\n');
+  if (process.env.NR_DEBUG_RAW) appendFileSync(process.env.NR_DEBUG_RAW, `===== TH\n${th}\n===== NOTES\n${notes}\n`);
   const draft = await fixCJK(th.trim(), text, g);
   const final = flag('--no-polish') ? draft : await fixCJK(await polish(draft, text, g, hasTitle), text, g);
-  return { th: final.replaceAll('บทหยวน', 'บทบาท'), delta }; // 起着…作用 เคยหลุดเป็น "บทหยวน"
+  return { th: final.replaceAll('บทหยวน', 'บทบาท'), delta, notes: parseNotes(notes) }; // 起着…作用 เคยหลุดเป็น "บทหยวน"
 }
 
 const CHUNK_MARK = '\n\n<!-- chunk -->\n\n';
+// หมายเหตุสำนวนจีนท้ายบท: "<!-- notes -->" แล้วตามด้วย "[^1]: …" — เนื้อบทอยู่ก่อนตัวคั่นนี้เสมอ
+const NOTES_MARK = '<!-- notes -->';
+// [เนื้อบท, ส่วนหมายเหตุพร้อมตัวคั่น (ไว้ต่อท้ายคืนตอนเขียนไฟล์)]
+const splitNotes = (t: string): [string, string] => {
+  const i = t.indexOf(NOTES_MARK);
+  return i < 0 ? [t, ''] : [t.slice(0, i).replace(/\s+$/, '\n'), '\n' + t.slice(i)];
+};
+const notesBlock = (notes: string[]) => (notes.length ? `\n${NOTES_MARK}\n\n${notes.join('\n\n')}\n` : '');
+const parseNoteLines = (tail: string) => [...tail.matchAll(/^\s*\[\^\d+\]:\s*(.+)$/gm)].map((m) => m[1].trim());
+
+// รอบหมายเหตุสำนวน (หลังเกลา): ขั้นแปลเคยถูกสั่งให้ใส่ [^n] เอง แต่โมเดลตอบ NOTES ว่างแทบทุกครั้ง
+// → แยกเป็นงานเดียวโฟกัส: หาสำนวน/คำเปรียบที่คนไทยไม่เข้าใจ + คำสำคัญที่ต้องแปลให้เหมือนกันทุกตอน + แก้ความหมายผิดชัดๆ
+// โปรแกรมแทรก [^n] เองตามข้อความที่โมเดลบอก (ไม่พึ่งให้โมเดลเขียนเครื่องหมายเอง)
+const IDIOM_SYSTEM = `คุณคือบรรณาธิการนิยายแปลจีน→ไทย ตรวจคำแปลเทียบต้นฉบับเฉพาะเรื่อง "สำนวน คำเปรียบ คำแสลง ศัพท์เฉพาะ"
+ตอบ JSON อย่างเดียว:
+{"notes":[{"zh":"","th":"","note":""}],"terms":[{"zh":"","th":""}],"replace":[{"from":"","to":"","why":""}]}
+- notes: สำนวน/คำเปรียบ/成语/คำแสลงเน็ตจีน/การอ้างอิงวัฒนธรรมจีน ที่คำแปลคงภาพแบบจีนไว้ จนคนไทยอ่านแล้วอาจไม่เข้าใจ (เช่น "แสงจันทร์สีขาว" จาก 白月光, "ปากยื่นจนแขวนขวดน้ำส้มได้" จาก 嘴撅得能挂醋瓶子, "เลี้ยงเป็นภรรยาเด็ก" จาก 童养媳)
+  th = ข้อความที่ปรากฏในคำแปล "ตรงตัวอักษรทุกตัว" (คัดลอกมา 2–15 คำ) ; note = อธิบายความหมาย/ที่มาสั้นๆ 1–2 ประโยค ภาษาไทยล้วน
+  ไม่ต้องใส่คำที่ไทยเข้าใจอยู่แล้ว หรือที่แปลเป็นความหมายไทยไปแล้ว ; บทละไม่เกิน 6 ข้อ เลือกที่ช่วยคนอ่านที่สุด
+- terms: คำสำคัญที่วนซ้ำในเรื่องและควรแปลเหมือนกันทุกตอน (คำเปรียบประจำเรื่อง ชื่อเรียกเฉพาะ) ที่ GLOSSARY ยังไม่มี ; th = คำแปลที่ควรใช้ตลอดเรื่อง
+- replace: แก้เฉพาะ (ก) จุดที่ "ผิดความหมายชัดเจน" เทียบต้นฉบับ (เช่น 衣冠禽兽 แปลเป็น "หน้าตัวเมีย") หรือ (ข) คำใน GLOSSARY terms ที่คำแปลใช้คำอื่น → ใส่ "all":true เพื่อแทนทุกที่ ; from = ข้อความในคำแปลตรงตัวทุกตัวอักษร ; to = ข้อความแทน
+  ห้ามแก้ตามรสนิยม ห้ามตัดคำ/ชื่อยี่ห้อ ห้ามแก้จุดที่ความหมายถูกอยู่แล้ว ; ถ้าแก้คำหนึ่งที่โผล่หลายที่ ต้อง "all":true ให้สม่ำเสมอ
+ห้ามมีอักษรจีนใน th/note/to ; ไม่มีให้ใส่ [] ; ห้ามใช้ กู/มึง`;
+
+async function idiomPass(body: string, source: string, g: Glossary, notes: string[]): Promise<{ body: string; notes: string[]; added: number; fixed: number }> {
+  const terms = relevant(g, source).terms;
+  const out = await chat(IDIOM_SYSTEM, `GLOSSARY terms:\n${JSON.stringify(terms)}\n\nต้นฉบับ:\n${source.replaceAll('<!-- chunk -->', '')}\n\nคำแปล:\n${body.replaceAll('<!-- chunk -->', '')}`, 0.2, 'idioms').catch(() => '');
+  let r: { notes?: { zh?: string; th?: string; note?: string }[]; terms?: { zh?: string; th?: string }[]; replace?: { from?: string; to?: string; all?: boolean }[] } = {};
+  try { r = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1)); } catch { return { body, notes, added: 0, fixed: 0 }; }
+  const thai = (s?: string) => (s ?? '').trim() && !CJK.test(s!) && !RUDE.test(s!) ? s!.trim() : '';
+  let fixed = 0;
+  for (const x of r.replace ?? []) {
+    const from = (x.from ?? '').trim(), to = thai(x.to);
+    // แทนเฉพาะข้อความที่เจอครั้งเดียว — เคยลอง "แทนทุกที่" เพื่อให้คำสม่ำเสมอ แล้วไปตัดนามสกุลชื่อเล่นตัวละครทิ้งทั้งบท
+    // ความสม่ำเสมอของคำให้ได้จาก GLOSSARY ในการแปลรอบหน้าแทน
+    if (from && to && from !== to && from.length >= 2 && body.split(from).length === 2) { body = body.replace(from, () => to); fixed++; }
+  }
+  // คำสำคัญประจำเรื่องเข้า GLOSSARY ได้เฉพาะสำนวน/คำเปรียบที่ใส่หมายเหตุในบทนี้ และโผล่ ≥2 ครั้ง (เช่น 白月光)
+  // — กันชื่อเล่น/คำครั้งเดียวหลุดเข้าคลัง แล้วไปบังคับคำแปลผิดๆ ทั้งเรื่อง
+  const noted = new Set((r.notes ?? []).map((n) => (n.zh ?? '').trim()).filter(Boolean));
+  for (const t of r.terms ?? []) {
+    const zh = (t.zh ?? '').trim(), th = thai(t.th);
+    if (!zh || !th || !CJK.test(zh) || zh.length < 2 || g.terms[zh] || g.characters[zh] || !noted.has(zh)) continue;
+    if (source.split(zh).length - 1 < 2) continue;
+    g.terms[zh] = th;
+  }
+  let added = 0;
+  for (const n of (r.notes ?? []).slice(0, Math.max(0, 8 - notes.length))) {
+    const th = (n.th ?? '').trim(), note = thai(n.note)?.replace(/\s*\n\s*/g, ' ');
+    if (!th || !note || th.length < 2) continue;
+    const i = body.indexOf(th);
+    if (i < 0 || /^\[\^\d+\]/.test(body.slice(i + th.length))) continue; // ไม่เจอตรงตัว / มีหมายเหตุแล้ว
+    notes = [...notes, `[^${notes.length + 1}]: ${th} — ${note}`];
+    body = body.slice(0, i + th.length) + `[^${notes.length}]` + body.slice(i + th.length);
+    added++;
+  }
+  return { body, notes, added, fixed };
+}
 
 // เว็บต้นทางชอบขึ้นบรรทัดใหม่กลางประโยค (ลงท้าย ，/、) → ต่อกลับเป็นย่อหน้าเดียว ไม่งั้นคำแปลขาดเป็นท่อนๆ
 function joinBroken(paras: string[]): string[] {
@@ -335,6 +461,14 @@ function chunk(paras: string[]): string[] {
 // ---------- browser ----------
 async function waitContent(page: Page) {
   const site = siteFor(page.url());
+  // http: โหลดมาครบแล้วในครั้งเดียว — มีเนื้อบทก็จบ ไม่มีก็ไม่มีทางรอ
+  if (HTTP) {
+    if (await page.evaluate((sel) => !!document.querySelector(sel), site.contentSelector)) return;
+    const t = await page.title().catch(() => '');
+    fail(/just a moment|请稍候|attention required/i.test(t)
+      ? `ติด Cloudflare (HTTP ${(page as HttpPage).status}) — ลองใหม่ทีหลัง หรือแปลจากเครื่องที่มี Chrome (--fetch chrome): ${page.url()}`
+      : `ไม่เจอเนื้อบท (HTTP ${(page as HttpPage).status}): ${page.url()}`);
+  }
   // หน้า Cloudflare ("Just a moment...") → รอนานขึ้นให้ผู้ใช้กดยืนยันในหน้าต่าง Chrome
   const cf = /just a moment|请稍候|attention required/i.test(await page.title().catch(() => ''));
   if (cf) {
@@ -446,7 +580,7 @@ function buildReader(id: string, prog: Progress) {
       if (!existsSync(p)) return '';
       const zp = p.replace(/\.md$/, '.zh.md');
       const split = (f: string) => {
-        const [head, ...rest] = readFileSync(f, 'utf8').split('\n');
+        const [head, ...rest] = splitNotes(readFileSync(f, 'utf8'))[0].split('\n');
         const chunks = rest.join('\n').split('<!-- chunk -->').map((c) => c.split('\n').map((l) => l.trim()).filter(Boolean));
         return { head: head.replace(/^#\s*/, ''), chunks };
       };
@@ -482,11 +616,12 @@ const SAFE_FIXES: [RegExp, (...m: string[]) => string][] = [
   [new RegExp(`(${NUM})ร้อย(กว่า)?หมื่น`, 'g'), (_, d, k) => `${d}ล้าน${k ?? ''}`],
 ];
 const BRANDS = /^(hello|kitty)$/; // คำอังกฤษที่เป็นชื่อแบรนด์ ไม่นับเป็นปัญหา
-const leftovers = (t: string) => [...new Set([...(t.match(/[㐀-鿿豈-﫿]+/g) ?? []), ...(t.match(/\b[a-z]{4,}\b/g) ?? []).filter((w) => !BRANDS.test(w))])];
+const leftovers = (t: string) => [...new Set([...(t.match(/[㐀-鿿豈-﫿]+/g) ?? []), ...(t.match(OTHER_G) ?? []), ...(t.match(/\b[a-z]{4,}\b/g) ?? []).filter((w) => !BRANDS.test(w))])];
 
 async function checkChapter(file: string, g: Glossary): Promise<string | null> {
   const orig = readFileSync(file, 'utf8');
-  const [head, ...rest] = orig.split('\n');
+  const [bodyText, notesTail] = splitNotes(orig);
+  const [head, ...rest] = bodyText.split('\n');
   const zhFile = file.replace(/\.md$/, '.zh.md');
   const zhChunks = existsSync(zhFile) ? readFileSync(zhFile, 'utf8').split('\n').slice(1).join('\n').split('<!-- chunk -->') : [];
   const chunks = rest.join('\n').split('<!-- chunk -->');
@@ -497,14 +632,14 @@ async function checkChapter(file: string, g: Glossary): Promise<string | null> {
     if (leftovers(c).length || RUDE.test(c)) { const before = leftovers(c).length; c = await fixCJK(c.trim(), zhChunks[k]?.trim() ?? '', g); fixed += before - leftovers(c).length; c = `\n\n${c}\n\n`; }
     chunks[k] = c;
   }
-  const out = [head, ...chunks.join('<!-- chunk -->').split('\n')].join('\n').replace(/\n{3,}/g, '\n\n');
+  const out = [head, ...chunks.join('<!-- chunk -->').split('\n')].join('\n').replace(/\n{3,}/g, '\n\n') + notesTail;
   if (out !== orig) writeFileSync(file, out);
   const issues: string[] = [];
   // เทียบแต่ละก้อนกับต้นฉบับ — ผิดรูป (ติดลูป/ขาดหาย) ต้องแปลบทนั้นใหม่
   const broken = chunks.map((c, k) => (zhChunks[k] ? insane(c.trim(), zhChunks[k].trim()) : null)).filter(Boolean);
   if (broken.length) issues.push(`⚠ ผิดรูป: ${broken.join(', ')} → แปลใหม่: --url <ลิงก์บทนี้>`);
   if (fixed) issues.push(`แก้อัตโนมัติ ${fixed} จุด`);
-  const left = leftovers(out.replaceAll('<!-- chunk -->', ''));
+  const left = leftovers(out.replaceAll('<!-- chunk -->', '').replaceAll(NOTES_MARK, ''));
   if (left.length) issues.push(`ยังเหลือ: ${left.join(', ')}`);
   const rude = (out.match(new RegExp(RUDE.source, 'g')) ?? []).length;
   if (rude) issues.push(`กู/มึง ${rude} จุด`);
@@ -519,6 +654,7 @@ async function checkBook(id: string, only?: string[]): Promise<string[]> {
     if (only && !only.includes(cid)) continue;
     const f = join(bookDir(id), 'chapters', `chapter${i + 1}.md`);
     if (!existsSync(f)) continue;
+    Object.assign(CTX, { book: id, ch: i + 1, mode: CTX.mode || 'check' });
     const r = await checkChapter(f, g);
     if (r) report.push(`  บทที่ ${i + 1}: ${r}`);
   }
@@ -529,7 +665,7 @@ async function checkBook(id: string, only?: string[]): Promise<string[]> {
 // ---------- main ----------
 // --list: ดูเรื่องทั้งหมด + บทล่าสุด
 if (flag('--list')) {
-  for (const d of existsSync(LIB) ? readdirSync(LIB) : []) {
+  for (const d of existsSync(LIB) ? readdirSync(LIB).filter((d) => !d.startsWith('_') && existsSync(join(LIB, d, 'progress.json'))) : []) {
     const p = readJson<Progress>(join(bookDir(d), 'progress.json'), { bookTitle: '', order: [] });
     console.log(`${d}  ${p.bookTitle || '-'}  (${p.order.length} บท)  นักแปล: ${p.translator ?? '-'}`);
   }
@@ -598,6 +734,170 @@ if (flag('--check')) {
   console.log(r.length ? `ผลตรวจ:\n${r.join('\n')}` : 'ผลตรวจ: ไม่พบปัญหา');
   process.exit(0);
 }
+// --repolish --book <id> --ch 3,5-7: เกลาสำนวนบทที่แปลแล้วใหม่ (ร่าง = คำแปลเดิม เทียบต้นฉบับ .zh.md) ไม่ต้องต่อ Chrome
+// --notes --book <id> --ch …: ใส่หมายเหตุสำนวน/คำสำคัญให้บทที่แปลแล้วอย่างเดียว (ไม่เกลา ถูกกว่า)
+if (flag('--repolish') || flag('--notes')) {
+  const polishToo = flag('--repolish');
+  const id = opt('--book') ?? fail('ต้องระบุ --book <รหัสเรื่อง>');
+  const prog = readJson<Progress>(join(bookDir(id), 'progress.json'), { bookTitle: '', order: [] });
+  PROFILE = prog.translator ? loadProfile(prog.translator) : '';
+  const gPath = join(bookDir(id), 'glossary.json');
+  const g = readJson<Glossary>(gPath, emptyGlossary());
+  const nums = (opt('--ch') ?? fail('ต้องระบุ --ch <เลขบท เช่น 3,5-7>')).split(',').flatMap((s) => {
+    const [a, b = a] = s.split('-').map(Number);
+    return Array.from({ length: Math.max(0, b - a + 1) }, (_, k) => a + k);
+  });
+  const lines: string[] = [];
+  for (const n of nums) {
+    const file = join(bookDir(id), 'chapters', `chapter${n}.md`);
+    const zhFile = file.replace(/\.md$/, '.zh.md');
+    Object.assign(CTX, { book: id, ch: n, mode: polishToo ? 'repolish' : 'notes' });
+    if (!existsSync(file) || !existsSync(zhFile)) { lines.push(`✗ บทที่ ${n}: ไม่มีไฟล์คำแปลหรือต้นฉบับ`); continue; }
+    const [bodyText, notesTail] = splitNotes(readFileSync(file, 'utf8'));
+    const [head, ...rest] = bodyText.split('\n');
+    let th = rest.join('\n').split('<!-- chunk -->').map((c) => c.trim());
+    let zh = readFileSync(zhFile, 'utf8').split('\n').slice(1).join('\n').split('<!-- chunk -->').map((c) => c.trim());
+    // ก้อนไม่ตรงกัน → เกลาทั้งบทเป็นก้อนเดียว
+    if (th.length !== zh.length) { th = [th.join('\n\n')]; zh = [zh.join('\n\n')]; }
+    const out = polishToo ? await Promise.all(th.map(async (c, k) => fixCJK(await polish(c, zh[k], g), zh[k], g))) : th;
+    const same = out.every((c, k) => c === th[k]);
+    const ip = await idiomPass(out.join(CHUNK_MARK), zh.join(CHUNK_MARK), g, parseNoteLines(notesTail));
+    writeFileSync(file, `${head}\n\n${ip.body}\n${notesBlock(ip.notes)}`);
+    const extra = `หมายเหตุ +${ip.added}${ip.fixed ? ` · แก้ ${ip.fixed} จุด` : ''}`;
+    lines.push(polishToo ? `✓ เกลาใหม่ บทที่ ${n}: ${head.replace(/^#\s*/, '')}${same ? ' (คงเดิม — ผลเกลาผิดรูป)' : ''} · ${extra}` : `✓ บทที่ ${n}: ${extra}`);
+  }
+  writeJson(gPath, g); // รอบหมายเหตุอาจเพิ่มคำสำคัญประจำเรื่อง
+  const report = await checkBook(id, nums.map((n) => prog.order[n - 1]).filter(Boolean));
+  console.log(lines.join('\n'));
+  console.log(report.length ? `ผลตรวจ:\n${report.join('\n')}` : 'ผลตรวจ: ไม่พบปัญหา');
+  if (USAGE.calls) console.log(`token: เรียก ${USAGE.calls} ครั้ง | ขาเข้า ${USAGE.hit + USAGE.miss} (cache hit ${USAGE.hit}) | ขาออก ${USAGE.out}`);
+  process.exit(lines.some((l) => l.startsWith('✓')) ? 0 : 1);
+}
+// --fix <req.json>: แก้เฉพาะย่อหน้าที่ผู้อ่านเลือกจากโหมดแก้ไขในเว็บ (server.ts) ไม่ต้องต่อ Chrome
+// req = {book, n, items:[{p, note}]} (p = ลำดับย่อหน้าไทยในบท นับจาก 1 ข้ามก้อน)
+// เขียนแค่ข้อเสนอลง <req>.out.json — ไม่แตะไฟล์บท ผู้อ่านเทียบก่อน-หลังแล้วกดยืนยันในเว็บเอง
+const FIX_PARA_SYSTEM = `คุณคือบรรณาธิการนิยายแปลจีน→ไทย ผู้อ่านชี้ย่อหน้าที่แปลผิดหรืออ่านแปลก พร้อมบอกว่าผิดอย่างไร
+ให้แก้เฉพาะย่อหน้าที่ระบุ:
+- ทำตามที่ผู้อ่านบอกเป็นหลัก แล้วเทียบต้นฉบับจีนให้ความหมายถูก (ผู้อ่านไม่ได้บอก → หาจุดผิด/แข็งเอง)
+- ชื่อ เพศ สรรพนาม คำเรียก ตาม GLOSSARY; ห้ามใช้ กู/มึง; ภาษาไทยล้วน ห้ามมีอักษรจีน
+- คงน้ำเสียงและเนื้อหาเดิม ไม่ตัด ไม่เพิ่มเนื้อหา ย่อหน้าละ 1 บรรทัด ให้ต่อกับย่อหน้าก่อน-หลังลื่น
+- เครื่องหมายหมายเหตุ [^1] [^2] ในย่อหน้าเดิม ให้คงไว้ต่อท้ายสำนวนเดิม ห้ามลบ ห้ามเพิ่ม
+ตอบเป็น JSON อย่างเดียว: {"fixes":[{"p":<เลขย่อหน้า>,"th":"<ย่อหน้าที่แก้แล้ว>","why":"<สรุปสั้นๆ ว่าแก้อะไร>"}]}
+
+${STYLE}`;
+if (opt('--fix')) {
+  const reqPath = opt('--fix')!;
+  const req = JSON.parse(readFileSync(reqPath, 'utf8')) as { book: string; n: number; items: { p: number; note?: string }[] };
+  const dir = bookDir(req.book);
+  Object.assign(CTX, { book: req.book, ch: req.n, mode: 'fix' });
+  const prog = readJson<Progress>(join(dir, 'progress.json'), { bookTitle: '', order: [] });
+  PROFILE = prog.translator ? loadProfile(prog.translator) : '';
+  const g = readJson<Glossary>(join(dir, 'glossary.json'), emptyGlossary());
+  const file = join(dir, 'chapters', `chapter${req.n}.md`);
+  const paras = (f: string) => splitNotes(readFileSync(f, 'utf8'))[0].split('\n').slice(1).join('\n').split('<!-- chunk -->').map((c) => c.split('\n').map((l) => l.trim()).filter(Boolean));
+  const th = paras(file);
+  const zhFile = file.replace(/\.md$/, '.zh.md');
+  const zh = existsSync(zhFile) ? paras(zhFile) : [];
+  const flat = th.flatMap((c, ci) => c.map((l, j) => ({ l, ci, j })));
+  // ก้อนที่จำนวนย่อหน้าเท่าต้นฉบับ → จับคู่ทีละย่อหน้าได้; ไม่เท่า → ส่งต้นฉบับทั้งก้อนให้หาเอง
+  const zhOf = (ci: number, j: number) => (zh[ci]?.length === th[ci].length ? zh[ci][j] : null);
+  const items = req.items.filter((it) => flat[it.p - 1]);
+  const srcs: string[] = [];
+  const blocks = items.map(({ p, note }) => {
+    const x = flat[p - 1];
+    const src = zhOf(x.ci, x.j) ?? `(จับคู่ทีละย่อหน้าไม่ได้ — หาส่วนที่ตรงจากต้นฉบับทั้งก้อนนี้)\n${(zh[x.ci] ?? []).join('\n')}`;
+    srcs.push(src);
+    return `### ย่อหน้า ${p}\nย่อหน้าก่อน: ${flat[p - 2]?.l ?? '-'}\nย่อหน้านี้: ${x.l}\nย่อหน้าถัดไป: ${flat[p]?.l ?? '-'}\nต้นฉบับ: ${src}\nผู้อ่านบอกว่า: ${note?.trim() || '(ไม่ได้ระบุ — หาจุดผิด/แข็งเอง)'}`;
+  });
+  if (!blocks.length) fail('ไม่พบย่อหน้าที่เลือก');
+  const user = `GLOSSARY:\n${JSON.stringify(relevant(g, srcs.join('\n') + items.map((it) => flat[it.p - 1].l).join('\n')))}\n\n${blocks.join('\n\n')}`;
+  let fixes: { p: number; th: string; why?: string }[] = [];
+  for (let attempt = 1; attempt <= 2 && !fixes.length; attempt++) {
+    const out = await chat(FIX_PARA_SYSTEM + PROFILE, user, 0.4, 'fix-para');
+    try { fixes = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1)).fixes ?? []; } catch { console.error(`อ่าน JSON ไม่ได้ — ลองใหม่ ${attempt}/2`); }
+  }
+  const result = items.map(({ p, note }) => {
+    const f = fixes.find((x) => Number(x.p) === p);
+    const t = f?.th?.replace(/\s*\n\s*/g, ' ').trim();
+    return { p, note: note ?? '', old: flat[p - 1].l, th: t && !CJK.test(t) ? t : null, why: f?.why ?? '' };
+  });
+  writeFileSync(reqPath.replace(/\.json$/, '.out.json'), JSON.stringify({ book: req.book, n: req.n, items: result }, null, 2));
+  const ok = result.filter((r) => r.th && r.th !== r.old).length;
+  console.log(`${ok ? '✓' : '✗'} ตอนที่ ${req.n}: เสนอแก้ ${ok}/${result.length} ย่อหน้า`);
+  if (USAGE.calls) console.log(`token: เรียก ${USAGE.calls} ครั้ง | ขาเข้า ${USAGE.hit + USAGE.miss} (cache hit ${USAGE.hit}) | ขาออก ${USAGE.out}`);
+  process.exit(ok ? 0 : 1);
+}
+// --discover <หน้า> [--cat <หมวด>]: ดึงรายการนิยายจบแล้วจาก 69shuba (50 เรื่อง/หน้า) + แปลชื่อ/คำโปรย → library/_discover/<หมวด>-<หน้า>.json
+// หน้าเว็บ (server.ts /discover) เรียกตอนเลื่อนลงถึงท้ายรายการ ; หมวด 0 = ทั้งหมด (ดู DISCOVER_CATS ใน server.ts)
+const DISCOVER_SYSTEM = `คุณคือบรรณาธิการนิยายแปลจีน→ไทย ได้รับรายการนิยายจีน (ชื่อเรื่อง หมวด คำโปรย) เป็น JSON
+ให้แปลแต่ละเรื่องเป็นไทย:
+- title_th: ชื่อเรื่องภาษาไทยที่ดึงดูดแบบนิยายแปลไทย (แปลความหมาย ไม่ถอดเสียงทั้งชื่อ; ชื่อคน/สถานที่ถอดเสียง; แฟนฟิคงานดังใช้ชื่อฉบับไทย เช่น 霍格沃茨=ฮอกวอตส์)
+- intro_th: คำโปรยภาษาไทยครบใจความ อ่านลื่น 2–5 ประโยค (ตัดชื่ออื่นของเรื่อง/โฆษณาท้ายคำโปรยออก)
+- สรรพนามตามยุคของเรื่อง: ยุคปัจจุบัน/ชีวิตเมือง/เกม/ไซไฟ ใช้ ผม/ฉัน/เขา/เธอ; จีนโบราณ/กำลังภายใน/เซียน/แฟนตาซีโลกเก่า ใช้ ข้า/เจ้า
+ภาษาไทยล้วน ห้ามมีอักษรจีน ห้ามใช้ กู/มึง
+ตอบเป็น JSON อย่างเดียว: {"items":[{"id":"","title_th":"","intro_th":""}]}`;
+if (opt('--discover')) {
+  const pageNo = Math.max(1, Number(opt('--discover')) || 1);
+  const cat = String(Number(opt('--cat') ?? 0) || 0);
+  Object.assign(CTX, { book: '_discover', ch: pageNo, mode: 'discover' });
+  const tab: Page = HTTP ? new HttpPage() : (await ensureChrome(), await ownTab());
+  // ต้องอยู่บนโดเมน 69shuba ก่อน fetch (คุกกี้ Cloudflare) — หน้าแรกของรายการโหลดเร็ว แม้ปิด JS
+  if (!HTTP && !/69shuba\.com/.test(tab.url())) await tab.goto('https://www.69shuba.com/novels/full', { timeout: 60_000 }).catch(() => {});
+  const grab = () => tab.evaluate(async (u) => {
+    const r = await fetch(u);
+    if (!r.ok) return { status: r.status, items: [] };
+    const html = new TextDecoder('gbk').decode(await r.arrayBuffer()); // เว็บนี้ส่ง GBK
+    const doc = new DOMParser().parseFromString(`<ul>${html}</ul>`, 'text/html');
+    const items = [...doc.querySelectorAll('li')].map((li) => {
+      const a = [...li.querySelectorAll('h3 a')].find((x) => x.textContent?.trim());
+      const labels = [...li.querySelectorAll('.labelbox label')].map((l) => l.textContent?.trim() ?? '');
+      return {
+        id: a?.getAttribute('href')?.match(/book\/(\d+)/)?.[1] ?? '',
+        title: a?.textContent?.trim() ?? '',
+        author: labels[0] ?? '', cat: labels[1] ?? '', status: labels[2] ?? '',
+        intro: (li.querySelector('ol')?.textContent ?? '').trim().replace(/\s*\n\s*/g, '\n'),
+        latest: li.querySelector('.zxzj p')?.textContent?.replace('最近章节', '').trim() ?? '',
+        cover: li.querySelector('img')?.getAttribute('data-src') ?? '',
+      };
+    }).filter((x) => x.id && x.title);
+    return { status: r.status, items };
+  }, `https://www.69shuba.com/ajax_novels/full/${cat}/${pageNo}.htm`, 60_000);
+  let got = await grab().catch((e) => ({ status: 0, items: [], err: String(e.message) }));
+  if (!got.items.length && !HTTP) {
+    // ติด Cloudflare → เปิด JS ให้หน้าเว็บยืนยันตัว แล้วลองใหม่
+    await tab.setScripts(true).catch(() => {});
+    await tab.goto('https://www.69shuba.com/novels/full', { timeout: 60_000 }).catch(() => {});
+    await sleep(8000);
+    got = await grab().catch((e) => ({ status: 0, items: [], err: String(e.message) }));
+    await tab.setScripts(false).catch(() => {});
+  }
+  if (!got.items.length) fail(`ดึงรายการไม่ได้ (HTTP ${got.status}) — ลองเปิด https://www.69shuba.com/novels/full ใน Chrome ให้ผ่าน Cloudflare ก่อน`);
+  // แปลทีละ 10 เรื่องขนานกัน (คำโปรยยาว — กันชนเพดาน output)
+  const groups: (typeof got.items)[] = [];
+  for (let i = 0; i < got.items.length; i += 10) groups.push(got.items.slice(i, i + 10));
+  const th = new Map<string, { title_th: string; intro_th: string }>();
+  await Promise.all(groups.map(async (g) => {
+    const input = JSON.stringify(g.map(({ id, title, cat, intro }) => ({ id, title, cat, intro: intro.slice(0, 400) })));
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const out = await chat(DISCOVER_SYSTEM, input, 0.4, 'discover').catch(() => '');
+      try {
+        for (const x of JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1)).items ?? []) {
+          const clean = (s: unknown) => String(s ?? '').replace(/[㐀-鿿豈-﫿]+/g, '').trim();
+          if (x?.id) th.set(String(x.id), { title_th: clean(x.title_th), intro_th: clean(x.intro_th) });
+        }
+        if (g.every((x) => th.has(x.id))) break;
+      } catch { console.error(`อ่าน JSON ไม่ได้ — ลองใหม่ ${attempt}/2`); }
+    }
+  }));
+  const dir = join(LIB, '_discover');
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, `${cat}-${pageNo}.json`);
+  writeJson(file, { at: Date.now(), cat, page: pageNo, items: got.items.map((x) => ({ ...x, ...(th.get(x.id) ?? { title_th: '', intro_th: '' }) })) });
+  console.log(`✓ หน้า ${pageNo}: ${got.items.length} เรื่อง (แปลแล้ว ${th.size})`);
+  console.log(file);
+  if (USAGE.calls) console.log(`token: เรียก ${USAGE.calls} ครั้ง | ขาเข้า ${USAGE.hit + USAGE.miss} (cache hit ${USAGE.hit}) | ขาออก ${USAGE.out}`);
+  process.exit(0);
+}
 // --rebuild: สร้าง reader.html ใหม่อย่างเดียว (หลังแก้ไฟล์บทเอง) ไม่ต้องต่อ Chrome
 if (flag('--rebuild')) {
   const id = opt('--book') ?? latestBook() ?? fail('ยังไม่มีเรื่องใน library');
@@ -605,13 +905,13 @@ if (flag('--rebuild')) {
   console.log(`สร้างใหม่แล้ว: ${join(bookDir(id), 'reader.html')}`);
   process.exit(0);
 }
-await ensureChrome();
-const page = await pickPage();
+if (HTTP && !opt('--url') && !flag('--continue')) fail('--fetch http ต้องใช้คู่กับ --url หรือ --continue (ไม่มีแท็บ Chrome ให้แปล)');
+const page: Page = HTTP ? new HttpPage() : (await ensureChrome(), await pickPage());
 
 let target = opt('--url');
 if (flag('--continue') && !target) {
   // แท็บใหม่ยังว่าง → ดูรหัสเรื่องจากแท็บนิยายที่เปิดอ่านอยู่แทน
-  const m = (await listTabs(PORT)).map((t) => t.url.match(/\/txt\/(\d+)\//)).filter(Boolean).at(0);
+  const m = HTTP ? null : (await listTabs(PORT)).map((t) => t.url.match(/\/txt\/(\d+)\//)).filter(Boolean).at(0);
   const id = opt('--book') ?? (m && existsSync(bookDir(m[1])) ? m[1] : undefined) ?? latestBook();
   let next = id && readJson<Progress>(join(bookDir(id), 'progress.json'), { bookTitle: '', order: [] }).nextUrl;
   // เรื่องใหม่ที่ยังไม่เคยแปล (--book ระบุมา) → หาบทแรกจากสารบัญ
@@ -645,6 +945,8 @@ for (let i = 0; i < N; i++) {
   const g = readJson<Glossary>(gPath, emptyGlossary());
   const prog = readJson<Progress>(pPath, { bookTitle: ch.bookTitle, order: [] });
   prog.bookTitle ||= ch.bookTitle;
+  const known = prog.order.indexOf(ch.chapterId);
+  Object.assign(CTX, { book: ch.bookId, ch: known >= 0 ? known + 1 : prog.order.length + 1, mode: known >= 0 ? 'retranslate' : 'new' });
   const chapterUrl = page.url(); // เก็บไว้ก่อน prefetch พาแท็บไปบทถัดไป
 
   // prefetch: ขณะแปลบทนี้ ให้แท็บไปโหลดบทถัดไปรอเลย
@@ -664,7 +966,17 @@ for (let i = 0; i < N; i++) {
   if (!prog.order.includes(ch.chapterId)) prog.order.push(ch.chapterId);
   // ตั้งชื่อตามลำดับบท: chapter1.md, chapter2.md, …
   const base = join(dir, 'chapters', `chapter${prog.order.indexOf(ch.chapterId) + 1}`);
-  writeFileSync(`${base}.md`, `# ${titleTh}\n\n${results.map((r) => r.th).join(CHUNK_MARK)}\n`);
+  // เลขหมายเหตุของแต่ละก้อนเริ่ม 1 → เรียงเลขใหม่ต่อกันทั้งบท; เครื่องหมายที่ไม่มีคำอธิบายตัดทิ้ง
+  const notes: string[] = [];
+  const bodies = results.map((r) => r.th.replace(/\[\^(\d+)\]/g, (_, d) => {
+    const t = r.notes.get(Number(d));
+    if (!t) return '';
+    notes.push(`[^${notes.length + 1}]: ${t}`);
+    return `[^${notes.length}]`;
+  }));
+  // รอบหมายเหตุสำนวน + คำสำคัญประจำเรื่อง (ปิดด้วย --no-notes)
+  const ip = flag('--no-notes') ? { body: bodies.join(CHUNK_MARK), notes, added: 0, fixed: 0 } : await idiomPass(bodies.join(CHUNK_MARK), pieces.join(CHUNK_MARK), g, notes);
+  writeFileSync(`${base}.md`, `# ${titleTh}\n\n${ip.body}\n${notesBlock(ip.notes)}`);
   writeFileSync(`${base}.zh.md`, `# ${ch.title}\n\n${pieces.join(CHUNK_MARK)}\n`); // ต้นฉบับ — แสดงคู่ใน reader
   // แปลบทเก่าซ้ำ (--url) ต้องไม่ย้อนจุด --continue กลับไป
   if (prog.order.indexOf(ch.chapterId) === prog.order.length - 1) {

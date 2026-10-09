@@ -53,7 +53,17 @@ const shuba69: Site = {
   async firstChapter(page, bookId) {
     await page.goto(`https://www.69shuba.com/book/${bookId}/`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector(`a[href*="/txt/${bookId}/"]`, { timeout: 60_000 }).catch(() => null);
-    return page.evaluate((id) => document.querySelector<HTMLAnchorElement>(`a[href*="/txt/${id}/"]`)?.href ?? null, bookId);
+    // สารบัญเว็บนี้เรียงตอนล่าสุดขึ้นก่อน (ตอน 448 → 1) — ห้ามหยิบลิงก์แรก (เคยได้ตอนท้ายสุด/ตอนพิเศษ)
+    // เลือกลิงก์ที่เลขตอน "第N章" น้อยสุด ; ไม่มีเลขตอน → รหัสบทน้อยสุด (รหัสเรียงตามลำดับที่ลง)
+    return page.evaluate((id) => {
+      const links = [...document.querySelectorAll<HTMLAnchorElement>(`a[href*="/txt/${id}/"]`)].map((a) => ({
+        href: a.href,
+        no: Number(a.textContent?.match(/第\s*(\d+)\s*章/)?.[1] ?? NaN),
+        cid: Number(a.href.match(/\/txt\/\d+\/(\d+)/)?.[1] ?? NaN),
+      }));
+      const numbered = links.filter((l) => l.no > 0).sort((a, b) => a.no - b.no || a.cid - b.cid);
+      return (numbered[0] ?? links.filter((l) => l.cid > 0).sort((a, b) => a.cid - b.cid)[0])?.href ?? null;
+    }, bookId);
   },
 };
 

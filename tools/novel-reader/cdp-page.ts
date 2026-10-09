@@ -127,4 +127,5 @@ export class CdpPage {
   }
 }
 
-export type Page = CdpPage;
+// แท็บ Chrome (CdpPage) หรือแบบไม่ใช้ Chrome (HttpPage ใน http-page.ts) — ใช้แทนกันได้
+export type Page = Pick<CdpPage, 'url' | 'goto' | 'title' | 'evaluate' | 'waitForSelector' | 'setScripts'>;

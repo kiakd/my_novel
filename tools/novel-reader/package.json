@@ -3,9 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "tr": "node translate.ts"
+    "tr": "node translate.ts",
+    "serve": "node server.ts"
   },
   "dependencies": {
+    "impit": "0.14.5",
+    "linkedom": "^0.18.13",
     "playwright-core": "^1.63.0"
   },
   "devDependencies": {
