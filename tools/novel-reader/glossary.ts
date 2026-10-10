@@ -60,7 +60,9 @@ export function merge(g: Glossary, d: Delta): string[] {
   }
   for (const [zh, th] of Object.entries(d.terms ?? {})) {
     // เช่น 炼丹殿 → "ตำหนัก炼丹" เคยหลุดเข้าคลัง แล้วถูกส่งกลับไปเป็น "คำที่ถูกต้อง" ในบทถัดไป
-    if (typeof th === 'string' && th.trim() && !HAN.test(th) && !g.terms[zh]) g.terms[zh] = th.trim();
+    // คำอังกฤษก็ห้าม (เคยได้ 虚空假面 → "หน้ากาก Void") ยกเว้นต้นฉบับมีตัวอังกฤษอยู่แล้ว เช่น ชื่อผู้อ่าน 山风krx
+    const eng = /[A-Za-z]{3,}/.test(th ?? '') && !/[A-Za-z]/.test(zh);
+    if (typeof th === 'string' && th.trim() && !HAN.test(th) && !eng && !g.terms[zh]) g.terms[zh] = th.trim();
   }
   return added;
 }

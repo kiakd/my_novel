@@ -974,8 +974,13 @@ for (let i = 0; i < N; i++) {
   const results = await Promise.all(pieces.map((p, i) => translateChunk(i === 0 ? `${ch.title}\n\n${p}` : p, g, ch.title, i > 0 ? pieces[i - 1] : undefined, i === 0)));
   const [first, ...rest] = results[0].th.split('\n');
   let titleTh = first.trim();
-  if (titleTh && titleTh.length <= 80 && !/[一-鿿]/.test(titleTh)) results[0].th = rest.join('\n').trim();
-  else titleTh = (await translateChunk(ch.title, g, ch.title)).th.split('\n')[0]; // โมเดลไม่ได้แยกชื่อบทไว้บรรทัดแรก → แปลชื่อแยก
+  // ชื่อบทไทยบางเรื่องยาวเกิน 80 ตัว (มีวงเล็บท้าย "(ขอสมัครสมาชิก)") — เคยตกไปทางแปลชื่อแยก แต่บรรทัดชื่อบทยังค้างในเนื้อ → หัวบทซ้ำ
+  const looksTitle = /^(บทที่|ตอนที่)\s*\d+/.test(titleTh);
+  if (titleTh && (titleTh.length <= 80 || looksTitle) && !/[一-鿿]/.test(titleTh)) results[0].th = rest.join('\n').trim();
+  else {
+    titleTh = (await translateChunk(ch.title, g, ch.title)).th.split('\n')[0]; // โมเดลไม่ได้แยกชื่อบทไว้บรรทัดแรก → แปลชื่อแยก
+    if (looksTitle) results[0].th = rest.join('\n').trim(); // บรรทัดแรกเป็นชื่อบท (มีอักษรจีนปน) → ทิ้ง ไม่ให้ซ้ำกับหัวบท
+  }
   for (const r of results) newChars.push(...merge(g, r.delta));
 
   if (!prog.order.includes(ch.chapterId)) prog.order.push(ch.chapterId);
