@@ -35,6 +35,10 @@ services:
       - MONGODB_DB=${MONGODB_DB:-novel}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
       - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      - FIREWORKS_API=${FIREWORKS_API:-}
+      - FIREWORKS_API_KEY=${FIREWORKS_API_KEY:-}
+      - FIREWORKS_MODEL=${FIREWORKS_MODEL:-accounts/fireworks/models/qwen3p7-plus}
+      - AI_PROVIDER=${AI_PROVIDER:-deepseek}
       - LMSTUDIO_URL=${LMSTUDIO_URL:-http://host.docker.internal:1234/v1/chat/completions}
       - LMSTUDIO_MODEL=${LMSTUDIO_MODEL:-gemma-4-e4b-it-uncensored}
       - COMFYUI_URL=${COMFYUI_URL:-http://host.docker.internal:8188}
@@ -62,8 +66,9 @@ services:
     restart: unless-stopped
     environment:
       - NEXT_TELEMETRY_DISABLED=1
+      - BACKEND_URL=http://novel:3000
     ports:
-      - "3001:3001"                          # << เปิดเว็บที่นี่ (ชี้ reverse proxy/tunnel มาที่นี่)
+      - "127.0.0.1:3001:3001"                          # << เปิดเว็บที่นี่ (ชี้ reverse proxy/tunnel มาที่นี่)
     mem_limit: 640m
     depends_on:
       novel:

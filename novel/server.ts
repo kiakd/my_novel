@@ -2,13 +2,14 @@ import { Elysia } from 'elysia';
 import { getDb } from './db';
 import { logRequest, logActivity, logError, ensureLogIndexes, APP_LOG_COLLECTION } from './logger';
 import { assembleSystemPrompt, buildNovelReminder, type NovelContext } from './prompts';
-import { assembleChatPrompt, assembleNarratorPrompt, buildPersonaReminder, type ChatCharLite, type PlayerPersonaLite } from './chat-prompt';
+import { assembleChatPrompt, assembleNarratorPrompt, buildPersonaReminder, buildContinueTailNudge, isContinueInput, type ChatCharLite, type PlayerPersonaLite } from './chat-prompt';
 import { getMemDb, ingestMemory, recall, deleteScope, deleteMemory, syncScope, type MemRow } from './chat-memory';
 import { embedTexts, embedOne, embedConfigured, lastEmbedError } from './embed';
 import { RULE_ADULT, RULE_R18_LEXICON } from './shared-rules';
 import { pickStory, writeStoryMd, type Story } from './story-md';
 import { toCard, fromCard, embedCardInPng, extractCardFromPng, makeSolidPng, type NovelChar } from './card-v2';
 import { renderStateCard, processChatState, deltaImportance, type StateCard } from './state-card';
+import { mergeFragmentedProse } from './prose-format';
 
 const PORT = Number(process.env.PORT ?? 3000);
 
@@ -50,9 +51,11 @@ ${RULE_ADULT}
 === คำเรียกฉาก R18 (กฎกลาง — ใช้เมื่อต้นฉบับเป็นฉากผู้ใหญ่) ===
 ${RULE_R18_LEXICON}`;
 
-type Provider = 'openrouter' | 'deepseek';
+type Provider = 'openrouter' | 'deepseek' | 'fireworks';
 
 // cloud-only (ตัด local LM Studio ออกแล้ว — VPS ไม่มี GPU/local LLM)
+// Fireworks: รองรับทั้ง FIREWORKS_API (ชื่อใน prod) และ FIREWORKS_API_KEY (ชื่อมาตรฐาน docs)
+const fireworksKeyEnv = process.env.FIREWORKS_API ? 'FIREWORKS_API' : 'FIREWORKS_API_KEY';
 const PROVIDER_CONFIG: Record<Provider, { url: string; defaultModel: string; keyEnv: string }> = {
   openrouter: {
     url: 'https://openrouter.ai/api/v1/chat/completions',
@@ -64,9 +67,14 @@ const PROVIDER_CONFIG: Record<Provider, { url: string; defaultModel: string; key
     defaultModel: process.env.DEEPSEEK_MODEL ?? 'deepseek-chat',
     keyEnv: 'DEEPSEEK_API_KEY',
   },
+  fireworks: {
+    url: 'https://api.fireworks.ai/inference/v1/chat/completions',
+    defaultModel: process.env.FIREWORKS_MODEL ?? 'accounts/fireworks/models/deepseek-v4-flash',
+    keyEnv: fireworksKeyEnv,
+  },
 };
 
-const ALL_PROVIDERS: Provider[] = ['openrouter', 'deepseek'];
+const ALL_PROVIDERS: Provider[] = ['openrouter', 'deepseek', 'fireworks'];
 const isProvider = (s?: string): s is Provider => !!s && (ALL_PROVIDERS as string[]).includes(s);
 
 // default = deepseek (cloud ที่โปรเจคใช้จริงบน VPS) — openrouter ไม่มี key ในเส้น deploy ไหนเลย
@@ -75,6 +83,7 @@ const DEFAULT_PROVIDER: Provider = isProvider(process.env.AI_PROVIDER) ? process
 
 function providerAvailable(p: Provider): boolean {
   const cfg = PROVIDER_CONFIG[p];
+  if (p === 'fireworks') return !!(process.env.FIREWORKS_API || process.env.FIREWORKS_API_KEY);
   return cfg.keyEnv ? !!process.env[cfg.keyEnv] : true; // keyless = local = พร้อมเสมอ
 }
 
@@ -88,7 +97,7 @@ function resolveProvider(req?: string): Provider {
   if (providerAvailable(DEFAULT_PROVIDER)) return DEFAULT_PROVIDER;
   const fallback = ALL_PROVIDERS.find((p) => p !== DEFAULT_PROVIDER && providerAvailable(p));
   if (fallback) return fallback;
-  throw new Error('no provider available (set DEEPSEEK_API_KEY / OPENROUTER_API_KEY)');
+  throw new Error('no provider available (set DEEPSEEK_API_KEY / OPENROUTER_API_KEY / FIREWORKS_API)');
 }
 
 // provider สำหรับใส่ log ตอน error — ห้าม throw ซ้ำใน catch (เช่นกรณี error ต้นทางคือ "no provider available")
@@ -106,16 +115,49 @@ async function callAI(payload: {
   prefill?: string;   // assistant prefix — บังคับโมเดล "เขียนต่อ" จากท่อนนี้ ลด soft-refusal/การเลี่ยงคำ
   history?: { role: 'user' | 'assistant'; content: string }[];   // ประวัติสนทนา (โหมดแชทหลายเทิร์น)
 }) {
+  const built = buildAIRequest(payload);
+  const res = await fetch(built.url, {
+    method: 'POST',
+    headers: built.headers,
+    body: JSON.stringify(built.body),
+  });
+
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(`${built.provider} ${res.status}: ${JSON.stringify(json).slice(0, 500)}`);
+  }
+  // prefill เป็น assistant prefix ที่โมเดล "เขียนต่อ" — response คืนเฉพาะส่วนต่อ ไม่รวม prefix
+  // ต้อง prepend กลับ ไม่งั้นประโยคเปิดที่ผู้ใช้กำหนดจะหายไป (output ขึ้นต้นกลางประโยค)
+  const completion = json.choices?.[0]?.message?.content ?? '';
+  return {
+    provider: built.provider,
+    text: payload.prefill ? payload.prefill + completion : completion,
+    usage: json.usage,
+    model: json.model,
+  };
+}
+
+type CallAIPayload = {
+  model?: string;
+  system?: string;
+  user: string;
+  temperature?: number;
+  max_tokens?: number;
+  provider?: string;
+  prefill?: string;
+  history?: { role: 'user' | 'assistant'; content: string }[];
+};
+
+function buildAIRequest(payload: CallAIPayload) {
   const provider = resolveProvider(payload.provider);
   const cfg = PROVIDER_CONFIG[provider];
-  const apiKey = cfg.keyEnv ? process.env[cfg.keyEnv]! : 'lm-studio'; // local ไม่เช็ค key (ส่ง dummy)
+  const apiKey = process.env[cfg.keyEnv] || (provider === 'fireworks' ? (process.env.FIREWORKS_API || process.env.FIREWORKS_API_KEY) : undefined) || 'lm-studio';
 
   const messages: any[] = [];
   if (payload.system) messages.push({ role: 'system', content: payload.system });
   if (payload.history?.length) messages.push(...payload.history);
   messages.push({ role: 'user', content: payload.user });
 
-  // prefill / prefix completion
   let url = cfg.url;
   if (payload.prefill) {
     if (provider === 'deepseek') {
@@ -143,28 +185,82 @@ async function callAI(payload: {
     temperature: payload.temperature ?? 0.9,
     max_tokens: payload.max_tokens ?? 1200,
   };
-  // DeepSeek V4 (flash/pro) เปิด thinking เป็น default → token ถูกเผาเป็น reasoning จน content ว่าง
-  // แอปนี้ต้องการตอบเร็ว/ตรง ไม่ใช้ reasoning — ปิดเสมอ (ref: api-docs.deepseek.com/guides/thinking_mode)
-  if (provider === 'deepseek' && model.includes('v4')) body.thinking = { type: 'disabled' };
+  // DeepSeek V4 (official + Fireworks): thinking default เปิด → ปิดเสมอ
+  if ((provider === 'deepseek' || provider === 'fireworks') && /v4|deepseek/i.test(model)) {
+    body.thinking = { type: 'disabled' };
+  }
+  // Qwen3.x บน Fireworks: ถ้าไม่ปิดจะเท thinking ลง content เป็น "Thinking Process:..."
+  if (provider === 'fireworks' && /qwen/i.test(model)) {
+    body.reasoning_effort = 'none';
+  }
 
-  const res = await fetch(url, {
+  return { provider, url, headers, body, model };
+}
+
+/** Streaming แยกจาก callAI — ยิง OpenAI-compatible stream แล้วเรียก onToken ทีละชิ้น (รู้สึกเร็วแบบ playground) */
+async function callAIStream(
+  payload: CallAIPayload,
+  handlers?: { onToken?: (chunk: string) => void },
+): Promise<{ provider: string; text: string; usage: unknown; model: string; ttftMs?: number }> {
+  const built = buildAIRequest(payload);
+  const body = { ...built.body, stream: true };
+  // Fireworks: ขอ usage ใน chunk สุดท้าย
+  if (built.provider === 'fireworks') {
+    (body as any).stream_options = { include_usage: true };
+  }
+
+  const t0 = Date.now();
+  const res = await fetch(built.url, {
     method: 'POST',
-    headers,
+    headers: built.headers,
     body: JSON.stringify(body),
   });
-
-  const json = await res.json();
   if (!res.ok) {
-    throw new Error(`${provider} ${res.status}: ${JSON.stringify(json).slice(0, 500)}`);
+    const detail = await res.text().catch(() => '');
+    throw new Error(`${built.provider} ${res.status}: ${detail.slice(0, 500)}`);
   }
-  // prefill เป็น assistant prefix ที่โมเดล "เขียนต่อ" — response คืนเฉพาะส่วนต่อ ไม่รวม prefix
-  // ต้อง prepend กลับ ไม่งั้นประโยคเปิดที่ผู้ใช้กำหนดจะหายไป (output ขึ้นต้นกลางประโยค)
-  const completion = json.choices?.[0]?.message?.content ?? '';
+  if (!res.body) throw new Error(`${built.provider}: empty stream body`);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let completion = '';
+  let usage: unknown = null;
+  let model = built.model;
+  let ttftMs: number | undefined;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop() ?? '';
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (!line || line === 'data: [DONE]') continue;
+      if (!line.startsWith('data:')) continue;
+      const payloadStr = line.replace(/^data:\s?/, '');
+      if (payloadStr === '[DONE]') continue;
+      try {
+        const json = JSON.parse(payloadStr);
+        const delta = json.choices?.[0]?.delta?.content ?? json.choices?.[0]?.text ?? '';
+        if (delta) {
+          if (ttftMs === undefined) ttftMs = Date.now() - t0;
+          completion += delta;
+          handlers?.onToken?.(delta);
+        }
+        if (json.usage) usage = json.usage;
+        if (json.model) model = json.model;
+      } catch { /* ข้ามบรรทัดที่ parse ไม่ได้ */ }
+    }
+  }
+
   return {
-    provider,
+    provider: built.provider,
     text: payload.prefill ? payload.prefill + completion : completion,
-    usage: json.usage,
-    model: json.model,
+    usage,
+    model,
+    ttftMs,
   };
 }
 
@@ -247,6 +343,7 @@ async function logCall(data: {
   ok: boolean;
   error?: string;
   ms: number;
+  meta?: Record<string, unknown>;
 }) {
   try {
     const db = await getDb();
@@ -255,7 +352,7 @@ async function logCall(data: {
       _id: id as any,
       ts: new Date(),
       ...data,
-      meta: extractPromptMeta(data.system, data.user),
+      meta: { ...extractPromptMeta(data.system, data.user), ...(data.meta ?? {}) },
     });
   } catch (e) {
     console.error('[ai_log] write failed:', (e as any).message);
@@ -591,10 +688,12 @@ const app = new Elysia()
       available: {
         openrouter: providerAvailable('openrouter'),
         deepseek: providerAvailable('deepseek'),
+        fireworks: providerAvailable('fireworks'),
       },
       models: {
         openrouter: PROVIDER_CONFIG.openrouter.defaultModel,
         deepseek: PROVIDER_CONFIG.deepseek.defaultModel,
+        fireworks: PROVIDER_CONFIG.fireworks.defaultModel,
       },
     };
   })
@@ -755,6 +854,10 @@ const app = new Elysia()
     try {
       // cloud-only แล้ว — ไม่ต้องบีบความยาว (compact ไว้สำหรับ local Gemma เดิม)
       const compact = false;
+      // Phase 1 anti-loop: ปุ่มดำเนินเรื่องต่อ → บังคับ concise + tail nudge (แม้ client เก่า/ไม่ได้เปิดโหมดกระชับ)
+      const continuing = isContinueInput(b.user_input);
+      const useConcise = !!b.concise || continuing;
+      const chatMode = b.mode === 'narrator' ? 'narrator' as const : 'char' as const;
       // structured state: ถ้า client ส่ง stateCard มา → render เป็นข้อความเอง + เปิดโหมดให้โมเดลปล่อย [[state:]] delta
       // (เฉพาะ char mode — narrator ไม่ต้องติดตามสถานะตัวละคร)
       const trackState = !!b.stateCard && b.mode !== 'narrator';
@@ -762,22 +865,23 @@ const app = new Elysia()
       const liveText = b.stateCard ? renderStateCard(b.stateCard) : undefined;
       const stateText = [liveText, b.state].filter(Boolean).join('\n') || undefined;
       const system = b.mode === 'narrator'
-        ? assembleNarratorPrompt(b.char, b.summary, compact, b.lore, stateText, b.playerPersona, b.concise)
-        : assembleChatPrompt(b.char, rel, b.summary, compact, b.lore, stateText, trackState, b.playerPersona, b.recalled, b.concise);
+        ? assembleNarratorPrompt(b.char, b.summary, compact, b.lore, stateText, b.playerPersona, useConcise)
+        : assembleChatPrompt(b.char, rel, b.summary, compact, b.lore, stateText, trackState, b.playerPersona, b.recalled, useConcise);
       const history = (b.history ?? []).map((m) => ({
         role: m.role === 'char' ? ('assistant' as const) : ('user' as const),
         content: m.content,
       }));
       // กัน persona drift: แทรกเตือนความจำ "ใกล้ท้าย" prompt ทุกเทิร์น (recency bias — ตำแหน่งท้ายมีอิทธิพลสูงสุด)
       // เป็น server-side เท่านั้น ไม่ถูกเก็บลง history ฝั่ง client
-      const reminder = buildPersonaReminder(b.char, rel, b.mode === 'narrator' ? 'narrator' : 'char', trackState, b.playerPersona, b.concise);
+      const reminder = buildPersonaReminder(b.char, rel, chatMode, trackState, b.playerPersona, useConcise);
       // nudge ท้าย user message: ดันให้แท็ก [[state:]] เป็นสิ่งสุดท้ายที่โมเดลเห็น (recency) — cloud อย่าง DeepSeek ลืมใส่บ่อยถ้าไม่ย้ำท้ายสุด
       const stateNudge = trackState ? '\n\n[ระบบ: ปิดท้ายคำตอบนี้ด้วยบรรทัด [[state: ...]] เสมอ — สรุปเฉพาะสิ่งที่เปลี่ยน หรือ [[state: none]] ถ้าไม่เปลี่ยน]' : '';
       // explicit nudge: เฉพาะฉาก R18 (char mode) — "แซนด์วิช" คำสั่ง lexicon ท้ายสุด (recency) ดันให้ Gemma เลิกเลี่ยงคำ. ทดสอบแล้วได้ผลเฉพาะเมื่อมีทั้ง reminder+nudge (สูตร D)
       const lexNudge = (b.mode !== 'narrator' && looksExplicit(b.user_input, b.history?.slice(-1)[0]?.content))
         ? R18_LEX_NUDGE
         : '';
-      const userMsg = `${reminder}\n\n${b.user_input}${lexNudge}${stateNudge}`;
+      const continueNudge = continuing ? buildContinueTailNudge(chatMode) : '';
+      const userMsg = `${reminder}\n\n${b.user_input}${continueNudge}${lexNudge}${stateNudge}`;
       const max_tokens = b.max_tokens ?? 700;
       const out = await callAI({
         system,
@@ -801,9 +905,9 @@ const app = new Elysia()
         // Phase 3 Part B: ให้คะแนนความสำคัญของเทิร์นจาก delta (piggyback ไม่เพิ่ม LLM call)
         // client เอา importance/persistent ไป tag memory row → recall บูสต์เหตุการณ์เชิงปม
         const { importance, persistent } = deltaImportance(delta);
-        return { ok: true, ...out, text: cleaned, stateCard: next, stateDelta: delta, stateWarnings: warnings, importance, persistent };
+        return { ok: true, ...out, text: mergeFragmentedProse(cleaned), stateCard: next, stateDelta: delta, stateWarnings: warnings, importance, persistent };
       }
-      return { ok: true, ...out };
+      return { ok: true, ...out, text: mergeFragmentedProse(out.text) };
     } catch (e: any) {
       logCall({
         endpoint: 'chat', system: '', user: b.user_input, response: '',
@@ -812,6 +916,116 @@ const app = new Elysia()
       }).catch(() => {});
       return { ok: false, error: e.message };
     }
+  })
+
+  // --- AI chat streaming (SSE) — แยกจาก /api/chat เพื่อทดลอง TTFT / UX แบบ playground ---
+  .post('/api/chat/stream', async ({ body }) => {
+    const b = body as {
+      char: ChatCharLite;
+      history?: { role: 'user' | 'char'; content: string }[];
+      user_input: string;
+      rel?: number;
+      summary?: string;
+      lore?: string[];
+      state?: string;
+      stateCard?: StateCard;
+      playerPersona?: PlayerPersonaLite;
+      mode?: 'char' | 'narrator';
+      recalled?: string[];
+      provider?: string;
+      prefill?: string;
+      temperature?: number;
+      max_tokens?: number;
+      concise?: boolean;
+    };
+    if (!b?.char?.name) return { ok: false, error: 'missing "char.name"' };
+    if (!b?.user_input) return { ok: false, error: 'missing "user_input"' };
+
+    const rel = Math.max(-100, Math.min(100, b.rel ?? 0));
+    const t0 = Date.now();
+    const compact = false;
+    const continuing = isContinueInput(b.user_input);
+    const useConcise = !!b.concise || continuing;
+    const chatMode = b.mode === 'narrator' ? 'narrator' as const : 'char' as const;
+    const trackState = !!b.stateCard && b.mode !== 'narrator';
+    const liveText = b.stateCard ? renderStateCard(b.stateCard) : undefined;
+    const stateText = [liveText, b.state].filter(Boolean).join('\n') || undefined;
+    const system = b.mode === 'narrator'
+      ? assembleNarratorPrompt(b.char, b.summary, compact, b.lore, stateText, b.playerPersona, useConcise)
+      : assembleChatPrompt(b.char, rel, b.summary, compact, b.lore, stateText, trackState, b.playerPersona, b.recalled, useConcise);
+    const history = (b.history ?? []).map((m) => ({
+      role: m.role === 'char' ? ('assistant' as const) : ('user' as const),
+      content: m.content,
+    }));
+    const reminder = buildPersonaReminder(b.char, rel, chatMode, trackState, b.playerPersona, useConcise);
+    const stateNudge = trackState ? '\n\n[ระบบ: ปิดท้ายคำตอบนี้ด้วยบรรทัด [[state: ...]] เสมอ — สรุปเฉพาะสิ่งที่เปลี่ยน หรือ [[state: none]] ถ้าไม่เปลี่ยน]' : '';
+    const lexNudge = (b.mode !== 'narrator' && looksExplicit(b.user_input, b.history?.slice(-1)[0]?.content))
+      ? R18_LEX_NUDGE
+      : '';
+    const continueNudge = continuing ? buildContinueTailNudge(chatMode) : '';
+    const userMsg = `${reminder}\n\n${b.user_input}${continueNudge}${lexNudge}${stateNudge}`;
+    const max_tokens = b.max_tokens ?? 700;
+
+    const stream = new ReadableStream({
+      async start(controller) {
+        const enc = new TextEncoder();
+        const send = (obj: unknown) => controller.enqueue(enc.encode(`data: ${JSON.stringify(obj)}\n\n`));
+        try {
+          const out = await callAIStream({
+            system,
+            user: userMsg,
+            history,
+            provider: b.provider,
+            prefill: b.prefill,
+            temperature: b.temperature ?? 0.9,
+            max_tokens,
+          }, {
+            onToken: (chunk) => send({ type: 'token', text: chunk }),
+          });
+
+          logCall({
+            endpoint: 'chat/stream', system, user: userMsg, response: out.text,
+            provider: out.provider, model: out.model ?? '', usage: out.usage,
+            temperature: b.temperature ?? 0.9, maxTokens: max_tokens, ok: true, ms: Date.now() - t0,
+            meta: { ttftMs: out.ttftMs },
+          }).catch(() => {});
+
+          if (trackState) {
+            const withTag = await ensureStateTag(out.text, b.stateCard, b.provider);
+            const { cleaned, next, delta, warnings } = processChatState(withTag, b.stateCard);
+            const { importance, persistent } = deltaImportance(delta);
+            send({
+              type: 'done', ok: true, text: mergeFragmentedProse(cleaned), provider: out.provider, model: out.model,
+              stateCard: next, stateDelta: delta, stateWarnings: warnings, importance, persistent,
+              ttftMs: out.ttftMs, ms: Date.now() - t0,
+            });
+          } else {
+            send({
+              type: 'done', ok: true, text: mergeFragmentedProse(out.text), provider: out.provider, model: out.model,
+              ttftMs: out.ttftMs, ms: Date.now() - t0,
+            });
+          }
+        } catch (e: any) {
+          logCall({
+            endpoint: 'chat/stream', system: '', user: b.user_input, response: '',
+            provider: providerForLog(b.provider), model: '', usage: null,
+            temperature: b.temperature ?? 0.9, maxTokens: b.max_tokens ?? 700, ok: false, error: e.message, ms: Date.now() - t0,
+          }).catch(() => {});
+          send({ type: 'error', ok: false, error: e.message, ms: Date.now() - t0 });
+        } finally {
+          controller.close();
+        }
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      },
+    });
   })
 
   // --- RAG memory: backfill = content-aware reconcile (heal edit/ลบ/regen) — embed เฉพาะแถวที่เปลี่ยน/ยังไม่มีเวกเตอร์ ---
@@ -932,6 +1146,39 @@ const app = new Elysia()
       try { const m = out.text.match(/\{[\s\S]*\}/); parsed = JSON.parse(m ? m[0] : out.text); } catch { return { ok: false, error: 'LLM non-JSON', raw: out.text.slice(0, 200) }; }
       if (!parsed?.name) return { ok: false, error: 'no name in result' };
       return { ok: true, persona: { name: String(parsed.name).trim(), role: String(parsed.role ?? '').trim(), appearance: String(parsed.appearance ?? '').trim() } };
+    } catch (e: any) { return { ok: false, error: e.message }; }
+  })
+  // แอบดูโทรศัพท์/ชีวิตลับหลัง (ข้อ 6) — เผยว่าตัวละครกำลังทำอะไรอยู่ตอนนี้ นอกสายตาผู้เล่น
+  .post('/api/chat/peek', async ({ body }) => {
+    const b = body as {
+      char?: { name?: string; mindset?: string; behavior?: string; scenario?: string };
+      summary?: string; recent?: string;
+      playerPersona?: { name?: string; role?: string };
+      time?: string; place?: string; provider?: string;
+    };
+    const c = b?.char;
+    if (!c?.name) return { ok: false, error: 'char.name required' };
+    const who = b.playerPersona?.name?.trim() || 'ผู้เล่น';
+    const system =
+      'คุณคือผู้เล่าเรื่องบุคคลที่สาม เผย "ช็อตชีวิตลับหลัง" ของตัวละคร — สิ่งที่เขากำลังทำอยู่ตอนนี้จริง ๆ นอกสายตาผู้เล่น. ' +
+      'เขียนบรรยายสั้น 2-4 ประโยค ให้เห็นภาพชัดว่าตอนนี้เขาอยู่ที่ไหน ทำอะไร คิด/รู้สึกอะไรอยู่ สอดคล้องกับนิสัย ภูมิหลัง และความสัมพันธ์ล่าสุด. ' +
+      'ใส่รายละเอียดเล็ก ๆ ที่ชวนให้ผู้เล่นอยากรู้ต่อ (ความลับ ความคิดถึง แผนการ หรือความรู้สึกที่ไม่ได้พูดออกมา). ' +
+      'ภาษาไทย โทนนิยาย ห้ามพูดกับผู้เล่นตรง ๆ ห้ามมีหัวข้อ/markdown/คำนำ.';
+    const user =
+      `ตัวละคร: ${c.name}\n` +
+      `นิสัย/พฤติกรรม: ${c.behavior ?? '-'}\n` +
+      `วิธีคิด/ค่านิยม: ${c.mindset ?? '-'}\n` +
+      `ฉาก/สถานการณ์ตั้งต้น: ${c.scenario ?? '-'}\n` +
+      `เวลา/สถานที่ตอนนี้: ${[b.time, b.place].filter(Boolean).join(' · ') || '-'}\n` +
+      `ผู้เล่นในเรื่องคือ: ${who}${b.playerPersona?.role ? ` (${b.playerPersona.role})` : ''}\n` +
+      `สรุปเรื่องที่ผ่านมา: ${b.summary ?? '-'}\n` +
+      `บทสนทนาล่าสุด: ${b.recent ?? '-'}\n\n` +
+      `เผยว่าตอนนี้ ${c.name} กำลังทำอะไรอยู่ลับหลัง ${who}`;
+    try {
+      const out = await callAI({ system, user, provider: b.provider, temperature: 0.95, max_tokens: 260 });
+      const text = out.text.trim();
+      if (!text) return { ok: false, error: 'empty result' };
+      return { ok: true, text };
     } catch (e: any) { return { ok: false, error: e.message }; }
   })
 
