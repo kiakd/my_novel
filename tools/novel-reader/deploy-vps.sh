@@ -24,7 +24,7 @@ if [ "$MODE" = "--pull-library" ]; then
   echo "✓ เสร็จ"; exit 0
 fi
 
-FILES="server.ts auth.ts translate.ts sites.ts cdp-page.ts http-page.ts glossary.ts pronoun-fix.ts package.json style translators"
+FILES="server.ts auth.ts translate.ts sites.ts cdp-page.ts http-page.ts glossary.ts pronoun-fix.ts senses.json package.json style translators"
 [ "$MODE" = "--push-library" ] && FILES="$FILES library" && echo "⚠ จะทับ library บน VPS ($(du -sh library | cut -f1))"
 echo "→ ส่งโค้ด"
 # ไม่ส่ง: ความลับ/บัญชี, log ค่าใช้จ่าย, สำรองคำแปล, โปรไฟล์ Chrome

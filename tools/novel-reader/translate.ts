@@ -21,7 +21,7 @@ import { spawn } from 'node:child_process';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import { siteFor, SITES, type Chapter } from './sites.ts';
-import { emptyGlossary, merge, pronounRules, relevant, type Delta, type Glossary } from './glossary.ts';
+import { emptyGlossary, merge, pronounRules, relevant, sensesNote, type Delta, type Glossary } from './glossary.ts';
 import { applyRule, candidates, mechanicalFixes, normalizeZhNumbers, rulesFrom } from './pronoun-fix.ts';
 
 const ROOT = import.meta.dirname;
@@ -78,6 +78,8 @@ function fail(msg: string): never { console.log('ERROR: ' + msg); process.exit(1
 type Progress = { bookTitle: string; lastUrl?: string; nextUrl?: string | null; order: string[]; translator?: string };
 const bookDir = (id: string) => join(LIB, id);
 const readJson = <T>(p: string, d: T): T => (existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : d);
+// คลังความหมายคำกลาง (ทุกเรื่อง) — โตขึ้นจากผลตรวจ ; เรื่องไหนต่างก็ทับได้ที่ glossary.json → senses
+const SENSES = readJson<Record<string, string>>(join(ROOT, 'senses.json'), {});
 const writeJson = (p: string, v: unknown) => writeFileSync(p, JSON.stringify(v, null, 2));
 
 function latestBook(): string | undefined {
@@ -469,7 +471,7 @@ async function translateChunk(text: string, g: Glossary, title: string, prev?: s
   text = normalizeZhNumbers(text); // 8000万 → 80,000,000 ก่อนแปล (โมเดลแปลงหลักพลาดบ่อย) — ไฟล์ .zh.md ที่บันทึกยังเป็นต้นฉบับเดิม
   const ctx = relevant(g, text + title);
   const before = tailOf(prev);
-  const user = `${pronounRules(ctx)}GLOSSARY ปัจจุบัน:\n${JSON.stringify(ctx)}\n\nบท: ${title}\n\n${hasTitle ? TITLE_NOTE + '\n\n' : ''}${before ? `ช่วงก่อนหน้า (บริบทเท่านั้น ห้ามแปลซ้ำ — ต้นฉบับด้านล่างเล่าต่อจากตรงนี้ ให้ประโยคแรกรับช่วงต่อได้ลื่น ไม่ขึ้นต้นเหมือนเริ่มฉากใหม่):\n${before}\n\n` : ''}${NUM_NOTE}\n\nต้นฉบับ:\n${numberParas(text)}`;
+  const user = `${pronounRules(ctx)}GLOSSARY ปัจจุบัน:\n${JSON.stringify(ctx)}\n\n${sensesNote(SENSES, g, text)}บท: ${title}\n\n${hasTitle ? TITLE_NOTE + '\n\n' : ''}${before ? `ช่วงก่อนหน้า (บริบทเท่านั้น ห้ามแปลซ้ำ — ต้นฉบับด้านล่างเล่าต่อจากตรงนี้ ให้ประโยคแรกรับช่วงต่อได้ลื่น ไม่ขึ้นต้นเหมือนเริ่มฉากใหม่):\n${before}\n\n` : ''}${NUM_NOTE}\n\nต้นฉบับ:\n${numberParas(text)}`;
   const nSrc = paraLines(text).length;
   let th = '';
   let gl = '{}';
@@ -554,7 +556,7 @@ async function idiomPass(body: string, source: string, g: Glossary, notes: strin
   const bigTerms = Object.fromEntries(Object.entries(BIG).filter(([zh]) => new RegExp(`(?<![\\d.])${zh}`).test(source)));
   const miss = missingTerms({ ...terms, ...bigTerms }, source.replaceAll('<!-- chunk -->', ''), body);
   const missNote = miss.length ? `ศัพท์ที่ต้นฉบับมี แต่คำแปลยังไม่ใช้คำตาม GLOSSARY — หาคำที่แปลแทนไว้ แล้วใส่ใน replace ให้เป็นคำนี้ ("all":true ถ้าโผล่หลายที่):\n${miss.map(([zh, th]) => `- ${zh} = ${th}`).join('\n')}\n\n` : '';
-  const out = await chat(IDIOM_SYSTEM, `${pronounRules(rel)}${missNote}GLOSSARY terms:\n${JSON.stringify(terms)}\n\nต้นฉบับ:\n${source.replaceAll('<!-- chunk -->', '')}\n\nคำแปล:\n${body.replaceAll('<!-- chunk -->', '')}`, 0.2, 'idioms').catch(() => '');
+  const out = await chat(IDIOM_SYSTEM, `${pronounRules(rel)}${missNote}GLOSSARY terms:\n${JSON.stringify(terms)}\n\n${sensesNote(SENSES, g, source)}ต้นฉบับ:\n${source.replaceAll('<!-- chunk -->', '')}\n\nคำแปล:\n${body.replaceAll('<!-- chunk -->', '')}`, 0.2, 'idioms').catch(() => '');
   let r: { notes?: { zh?: string; th?: string; note?: string }[]; terms?: { zh?: string; th?: string }[]; replace?: { from?: string; to?: string; all?: boolean }[] } = {};
   try { r = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1)); } catch { return { body, notes, added: 0, fixed: 0 }; }
   // คำอังกฤษห้ามเข้ามาทาง replace ด้วย — รอบนี้รันหลัง fixCJK จึงไม่มีอะไรจับอีก (เคยได้ "โจวโจวsucked ลิ้น", "Cost")

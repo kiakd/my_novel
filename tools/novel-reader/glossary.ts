@@ -18,7 +18,18 @@ export type Glossary = {
   // หลักสรรพนามประจำเรื่อง (แก้มือ) — ใช้กับตัวที่ยังไม่มี self: ตัวใหม่ ตัวประกอบไร้ชื่อ กลุ่มทหาร
   // เช่น "ลูกน้องชายของตัวเอก: ข้า · ขอรับ · เรียกตัวเอกว่า ท่านลอร์ด"
   pronouns?: string[];
+  // ความหมายคำทั่วไปที่เรื่องนี้เคยแปลพลาด (เสริม/ทับ senses.json กลาง) — "感慨": "รำพึง/ทอดถอนใจ — ไม่ใช่ แปลกใจ"
+  senses?: Record<string, string>;
 };
+
+// คลังความหมายคำที่โมเดลเลือกความหมายผิดซ้ำ (จากผลตรวจจริง) → ส่งเฉพาะคำที่อยู่ในข้อความนี้ ไม่ส่งทั้งคลัง
+// (ส่งทั้งพจนานุกรมไม่คุ้ม: คำที่ผิดส่วนใหญ่โมเดลรู้จักอยู่แล้ว แค่เลือกความหมายผิดในบริบท)
+export function sensesNote(shared: Record<string, string>, g: Glossary, text: string): string {
+  const all = { ...shared, ...(g.senses ?? {}) };
+  const hit = Object.entries(all).filter(([zh]) => zh && text.includes(zh)).slice(0, 30);
+  if (!hit.length) return '';
+  return `ความหมายคำในข้อความนี้ที่เคยแปลพลาด (ใช้ความหมายนี้เมื่อบริบทตรงกัน):\n${hit.map(([zh, th]) => `- ${zh} = ${th}`).join('\n')}\n\n`;
+}
 
 export const emptyGlossary = (): Glossary => ({ characters: {}, terms: {} });
 
@@ -26,6 +37,7 @@ export const emptyGlossary = (): Glossary => ({ characters: {}, terms: {} });
 export function relevant(g: Glossary, text: string): Glossary {
   const pick = <T>(rec: Record<string, T>) =>
     Object.fromEntries(Object.entries(rec).filter(([zh]) => text.includes(zh)));
+  // senses ไม่ส่งใน JSON (ส่งเป็นรายการแยกผ่าน sensesNote แทน)
   return { characters: pick(g.characters), terms: pick(g.terms), ...(g.pronouns?.length ? { pronouns: g.pronouns } : {}) };
 }
 
