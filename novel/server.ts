@@ -69,7 +69,7 @@ const PROVIDER_CONFIG: Record<Provider, { url: string; defaultModel: string; key
   },
   fireworks: {
     url: 'https://api.fireworks.ai/inference/v1/chat/completions',
-    defaultModel: process.env.FIREWORKS_MODEL ?? 'accounts/fireworks/models/deepseek-v4-flash',
+    defaultModel: process.env.FIREWORKS_MODEL ?? 'accounts/fireworks/models/deepseek-v4p1-flash',
     keyEnv: fireworksKeyEnv,
   },
 };
@@ -966,10 +966,17 @@ const app = new Elysia()
     const userMsg = `${reminder}\n\n${b.user_input}${continueNudge}${lexNudge}${stateNudge}`;
     const max_tokens = b.max_tokens ?? 700;
 
+    // ผู้ใช้ปิดแท็บ/ตัดการเชื่อมต่อกลางทาง → enqueue จะ throw "Controller is already closed"
+    // ทำให้งานที่สำเร็จถูก log เป็นล้มเหลว → หลังตัดแล้วไม่ส่งต่อ ปล่อยให้ log ตามจริง
+    let closed = false;
     const stream = new ReadableStream({
+      cancel() { closed = true; },
       async start(controller) {
         const enc = new TextEncoder();
-        const send = (obj: unknown) => controller.enqueue(enc.encode(`data: ${JSON.stringify(obj)}\n\n`));
+        const send = (obj: unknown) => {
+          if (closed) return;
+          try { controller.enqueue(enc.encode(`data: ${JSON.stringify(obj)}\n\n`)); } catch { closed = true; }
+        };
         try {
           const out = await callAIStream({
             system,
@@ -1013,7 +1020,7 @@ const app = new Elysia()
           }).catch(() => {});
           send({ type: 'error', ok: false, error: e.message, ms: Date.now() - t0 });
         } finally {
-          controller.close();
+          if (!closed) try { controller.close(); } catch { /* ปิดไปแล้ว */ }
         }
       },
     });
