@@ -39,7 +39,9 @@ export function merge(g: Glossary, d: Delta): string[] {
     if (!cur && !c.th) continue;
     if (c.th && HAN.test(c.th)) continue; // ชื่อไทยที่ยังมีอักษรจีนปน = โมเดลแปลไม่จบ ห้ามเข้าคลัง
     if (!cur) added.push(`${c.th} (${zh}${c.gender ? ', ' + c.gender : ''})`);
-    const clean = Object.fromEntries(Object.entries(c).filter(([k, v]) => k !== 'locked' && typeof v === 'string' && v.trim()));
+    // เพศ/สรรพนาม/คำเรียก ที่ตั้งไว้แล้วห้ามทับ — เคยถูกแต่ละบทเขียนทับไปมา (ฉัน↔ข้า, ท่านลอร์ด↔ลอร์ดผู้ทรงเกียรติ) จนคำแปลสลับทุกตอน
+    const STICKY = ['gender', 'self', 'called'];
+    const clean = Object.fromEntries(Object.entries(c).filter(([k, v]) => k !== 'locked' && typeof v === 'string' && v.trim() && !(STICKY.includes(k) && (cur as any)?.[k])));
     const next = { ...cur, ...clean } as Character;
     // ผู้หญิงห้ามถูกเรียก "นาย" — โมเดลเคยใส่ called: "คุณ/นาย" ให้ตัวละครหญิง แล้วทุกบทก็เรียกตามคลัง
     // (ตัดเฉพาะ "นาย"/"พวกนาย" เดี่ยวๆ — "เจ้านาย" "คุณนาย" ไม่เกี่ยว)
