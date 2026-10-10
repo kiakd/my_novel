@@ -772,6 +772,7 @@ ${err ? `<p class="err">${esc(err)}</p>` : ''}${authConfigured() ? '' : '<p clas
 const MODELS = [
   { id: 'deepseek-chat', ids: ['deepseek-chat', 'deepseek-flash'], name: 'Flash (V4.1)', note: 'เร็ว ถูก' },
   { id: 'deepseek-v4-pro', ids: ['deepseek-v4-pro'], name: 'Pro (V4)', note: 'แปลดีกว่า แพง ~3–4×' },
+  { id: 'gpt-5.6-luna', ids: ['gpt-5.6-luna'], name: 'GPT-5.6 Luna', note: 'OpenAI · ทดลอง' },
 ];
 const settingsFile = join(LIB, 'settings.json');
 const readSettings = (): { model: string } => {
@@ -782,18 +783,20 @@ const modelName = (id: string) => MODELS.find((m) => m.ids.includes(id))?.name ?
 const PRICES = {
   deepseek: { hit: 0.006, miss: 0.30, out: 1.20 },
   deepseekPro: { hit: 0.044, miss: 1.32, out: 3.96 },
-  luna: { hit: 0.01, miss: 0.10, out: 0.50 },
+  luna: { hit: 0.01, miss: 0.10, out: 0.50 }, // GPT-6 Luna (ไว้เทียบ "ถ้าใช้ Luna")
+  // GPT-5.6 Luna ณ 2026-10-11 (developers.openai.com/api/docs/models/gpt-5.6-luna) — ไม่มีช่วง peak ; ค่าเขียน cache 1.25× ไม่ได้นับ
+  luna56: { hit: 0.02, miss: 0.20, out: 1.20 },
 };
 type UsageRow = { t: string; book: string; ch: number; mode: string; stage: string; provider: string; model?: string; ms: number; hit: number; miss: number; out: number; err?: string };
-const dsPrice = (r: UsageRow) => (/pro/.test(r.model ?? '') ? PRICES.deepseekPro : PRICES.deepseek);
+const dsPrice = (r: UsageRow) => (r.provider === 'openai' ? PRICES.luna56 : /pro/.test(r.model ?? '') ? PRICES.deepseekPro : PRICES.deepseek);
 const isPeak = (t: Date) => { const d = t.getUTCDay(), h = t.getUTCHours(); return d >= 1 && d <= 5 && ((h >= 1 && h < 4) || (h >= 6 && h < 10)); };
 const costOf = (r: UsageRow, p: { hit: number; miss: number; out: number }, peakAware: boolean) =>
-  ((r.hit * p.hit + r.miss * p.miss + r.out * p.out) / 1e6) * (peakAware && !isPeak(new Date(r.t)) ? 0.5 : 1);
+  ((r.hit * p.hit + r.miss * p.miss + r.out * p.out) / 1e6) * (peakAware && r.provider !== 'openai' && !isPeak(new Date(r.t)) ? 0.5 : 1);
 
 function usagePage() {
   const f = join(LIB, 'usage.jsonl');
   const rows: UsageRow[] = existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter(Boolean).flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } }) : [];
-  const ok = rows.filter((r) => !r.err && r.provider === 'deepseek');
+  const ok = rows.filter((r) => !r.err && (r.provider === 'deepseek' || r.provider === 'openai'));
   type Agg = { calls: number; hit: number; miss: number; out: number; ds: number; luna: number; peak: number; chapters: Set<string> };
   const agg = (key: (r: UsageRow) => string) => {
     const m = new Map<string, Agg>();
@@ -802,7 +805,7 @@ function usagePage() {
       const a = m.get(k) ?? { calls: 0, hit: 0, miss: 0, out: 0, ds: 0, luna: 0, peak: 0, chapters: new Set<string>() };
       a.calls++; a.hit += r.hit; a.miss += r.miss; a.out += r.out;
       a.ds += costOf(r, dsPrice(r), true); a.luna += costOf(r, PRICES.luna, false);
-      if (isPeak(new Date(r.t))) a.peak += costOf(r, dsPrice(r), true);
+      if (r.provider !== 'openai' && isPeak(new Date(r.t))) a.peak += costOf(r, dsPrice(r), true);
       if (r.ch && (r.mode === 'new' || r.mode === 'retranslate' || r.mode === 'repolish')) a.chapters.add(`${r.book}/${r.ch}/${r.mode}`);
       m.set(k, a);
     }
@@ -811,7 +814,7 @@ function usagePage() {
   const usd = (v: number) => `$${v < 0.01 ? v.toFixed(4) : v.toFixed(2)}`;
   const kt = (v: number) => (v >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : `${Math.round(v / 1e3)}k`);
   const table = (title: string, data: [string, Agg][], label: (k: string) => string = (k) => k) => `<h3 class="uh">${title}</h3><div class="ut"><table>
-<tr><th></th><th>DeepSeek</th><th>ถ้าใช้ Luna</th><th>เรียก</th><th>cache hit</th><th>miss</th><th>ขาออก</th></tr>
+<tr><th></th><th>จ่ายจริง</th><th>ถ้าใช้ Luna</th><th>เรียก</th><th>cache hit</th><th>miss</th><th>ขาออก</th></tr>
 ${data.map(([k, a]) => `<tr><td>${esc(label(k))}</td><td>${usd(a.ds)}</td><td>${usd(a.luna)}</td><td>${a.calls}</td><td>${kt(a.hit)}</td><td>${kt(a.miss)}</td><td>${kt(a.out)}</td></tr>`).join('')}</table></div>`;
   const total = agg(() => 'รวม')[0]?.[1];
   const names = new Map(books().map((b) => [b.id, bookName(b.p, b.id)]));
@@ -822,7 +825,7 @@ ${data.map(([k, a]) => `<tr><td>${esc(label(k))}</td><td>${usd(a.ds)}</td><td>${
   const body = !total
     ? `<p class="empty">ยังไม่มีข้อมูล — เริ่มเก็บ log ตั้งแต่ 2026-10-04 ทุกครั้งที่แปล/เกลา/แก้ จะมาโผล่ที่นี่</p>`
     : `<div class="resume" style="margin-top:16px">รวม <b>${total.calls} คำขอ · ${chapters} ตอน</b> · ${rows[0].t.slice(0, 10)} ถึง ${rows.at(-1)!.t.slice(0, 10)}<br>
-DeepSeek (ประมาณ) <b>${usd(total.ds)}</b> · เฉลี่ย <b>${usd(total.ds / Math.max(1, chapters))}/ตอน</b><br>
+ค่าใช้จ่าย (ประมาณ) <b>${usd(total.ds)}</b> · เฉลี่ย <b>${usd(total.ds / Math.max(1, chapters))}/ตอน</b><br>
 จ่ายช่วง peak ราคาเต็ม ${usd(total.peak)} (${Math.round((total.peak / Math.max(total.ds, 1e-9)) * 100)}%) · ถ้าใช้ GPT-6 Luna ราว ${usd(total.luna)}<br>
 cache hit ${Math.round((total.hit / Math.max(1, total.hit + total.miss)) * 100)}% ของขาเข้า${errs ? ` · คำขอพัง ${errs} ครั้ง` : ''}</div>
 ${table('แยกตามโมเดล', agg((r) => r.model ?? '-'), (k) => MODELS.find((m) => m.ids.includes(k))?.name ?? k)}
@@ -830,7 +833,7 @@ ${table('แยกตามขั้น', agg((r) => r.stage), (k) => STAGE[k] ?
 ${table('แยกตามงาน', agg((r) => r.mode), (k) => MODE[k] ?? k)}
 ${table('แยกตามเรื่อง', agg((r) => r.book), (k) => names.get(k) ?? k)}
 ${table('รายวัน (เวลาไทย)', agg((r) => new Date(new Date(r.t).getTime() + 7 * 3600e3).toISOString().slice(0, 10)).sort((a, b) => b[0].localeCompare(a[0])))}
-<p class="meta">ราคาประมาณจาก token ใน log × ราคาต่อ 1M token ณ 2026-10-04 (DeepSeek Flash: hit $0.006 · miss $0.30 · out $1.20 / Pro: hit $0.044 · miss $1.32 · out $3.96 ช่วง peak, นอก peak ครึ่งราคา; GPT-6 Luna: cached $0.01 · in $0.10 · out $0.50) — ยอดจริงดูที่หน้า billing</p>`;
+<p class="meta">ราคาประมาณจาก token ใน log × ราคาต่อ 1M token ณ 2026-10-04 (DeepSeek Flash: hit $0.006 · miss $0.30 · out $1.20 / Pro: hit $0.044 · miss $1.32 · out $3.96 ช่วง peak, นอก peak ครึ่งราคา; GPT-5.6 Luna: cached $0.02 · in $0.20 · out $1.20 ไม่มี peak; คอลัมน์ "ถ้าใช้ Luna" = GPT-6 Luna: cached $0.01 · in $0.10 · out $0.50) — ยอดจริงดูที่หน้า billing</p>`;
   return page('ค่าใช้จ่าย AI', `<header class="top"><div class="wrap"><a class="ib" href="/" aria-label="ชั้นหนังสือ">‹</a><h1>📊 ค่าใช้จ่าย AI</h1>${gearBtn}</div></header>
 <main class="wrap" style="padding-bottom:40px">${body}</main><div class="sheet" id="sheet"></div>`);
 }

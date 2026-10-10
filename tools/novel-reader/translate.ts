@@ -10,6 +10,7 @@
 //   node translate.ts --translator <ชื่อ> --book 90442   ผูกนักแปลประจำแนว (translators/<ชื่อ>/) กับเรื่อง — จำไว้ ครั้งต่อไปไม่ต้องใส่
 //   node translate.ts --url <ลิงก์> --model deepseek-v4-pro [--thinking low|high|max]   เลือกรุ่น (ค่าเริ่มต้นปิดการคิด)
 //   node translate.ts --provider ollama [--model <ชื่อ>] [--ollama-url <url>]   ใช้โมเดล local ผ่าน Ollama แทน DeepSeek
+//   node translate.ts --model gpt-5.6-luna ...   ใช้ OpenAI (OPENAI_API_KEY ใน .env) — รุ่น gpt-* เลือก provider openai ให้เอง
 //
 // stdout = สรุปสั้น (สำหรับ skill) — เนื้อหาคำแปลอยู่ใน library/<book>/chapters/*.md และ reader.html
 import { CdpPage, listTabs, responsive, type Page } from './cdp-page.ts';
@@ -40,28 +41,33 @@ const HTTP = (opt('--fetch') ?? process.env.NR_FETCH ?? (process.platform === 'w
 const CHUNK = 6000;
 
 // ---------- env (ใช้ key เดียวกับ backend) ----------
+// .env ข้างไฟล์นี้ก่อน (OPENAI_API_KEY ฯลฯ — ตอนรันจาก command line ตรงๆ ไม่ผ่าน server.ts) แล้วค่อย novel/.env
 function loadEnv() {
-  const p = join(ROOT, '../../novel/.env');
-  if (!existsSync(p)) return;
-  for (const line of readFileSync(p, 'utf8').split(/\r?\n/)) {
-    const m = line.match(/^([A-Z_]+)=(.*)$/);
-    if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+  for (const p of [join(ROOT, '.env'), join(ROOT, '../../novel/.env')]) {
+    if (!existsSync(p)) continue;
+    for (const line of readFileSync(p, 'utf8').split(/\r?\n/)) {
+      const m = line.match(/^([A-Z_]+)=(.*)$/);
+      if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+    }
   }
 }
 loadEnv();
 // --provider ollama → ใช้โมเดล local ผ่าน Ollama (ฟรี แต่ช้ากว่า/คุณภาพต่ำกว่า DeepSeek)
+// --provider openai (หรือเลือกรุ่น gpt-* เช่น gpt-5.6-luna) → OpenAI ใช้ OPENAI_API_KEY
 // DeepSeek เงินหมด (402) → สลับไป Ollama อัตโนมัติ (ปิดด้วย --no-fallback)
-let PROVIDER = opt('--provider') ?? process.env.NR_PROVIDER ?? 'deepseek';
 const OLLAMA_URL = (opt('--ollama-url') ?? process.env.OLLAMA_URL ?? 'http://localhost:11434').replace(/\/+$/, '');
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? 'gemma4-e4b-uncensored:latest';
-const KEY = process.env.DEEPSEEK_API_KEY;
 // รุ่นที่ใช้: --model > library/settings.json (ตั้งจากหน้าเว็บ ⚙ → โมเดล AI) > DEEPSEEK_MODEL ใน .env
 const SETTINGS = (() => { try { return JSON.parse(readFileSync(join(LIB, 'settings.json'), 'utf8')) as { model?: string }; } catch { return {}; } })();
-let MODEL = opt('--model') ?? (PROVIDER === 'ollama' ? OLLAMA_MODEL : SETTINGS.model ?? process.env.DEEPSEEK_MODEL ?? 'deepseek-chat');
+const PROVIDER_ARG = opt('--provider') ?? process.env.NR_PROVIDER;
+let MODEL = opt('--model') ?? (PROVIDER_ARG === 'ollama' ? OLLAMA_MODEL : SETTINGS.model ?? process.env.DEEPSEEK_MODEL ?? 'deepseek-chat');
+let PROVIDER = PROVIDER_ARG ?? (/^gpt-/.test(MODEL) ? 'openai' : 'deepseek');
+const KEY = PROVIDER === 'openai' ? process.env.OPENAI_API_KEY : process.env.DEEPSEEK_API_KEY;
 const THINKING = opt('--thinking'); // ไม่ใส่ = ปิดการคิด (เร็ว/ถูก เหมือน deepseek-chat)
 if (THINKING && !['low', 'high', 'max'].includes(THINKING)) fail('--thinking ต้องเป็น low|high|max');
-if (PROVIDER !== 'deepseek' && PROVIDER !== 'ollama') fail(`ไม่รู้จัก --provider ${PROVIDER} (deepseek|ollama)`);
+if (!['deepseek', 'openai', 'ollama'].includes(PROVIDER)) fail(`ไม่รู้จัก --provider ${PROVIDER} (deepseek|openai|ollama)`);
 if (PROVIDER === 'deepseek' && !KEY) fail('ไม่พบ DEEPSEEK_API_KEY ใน novel/.env');
+if (PROVIDER === 'openai' && !KEY) fail('ไม่พบ OPENAI_API_KEY ใน .env');
 
 function fail(msg: string): never { console.log('ERROR: ' + msg); process.exit(1); }
 
@@ -181,14 +187,18 @@ async function chat(system: string, user: string, temperature = 0.7, stage = 'ot
     const t0 = Date.now();
     try {
       if (PROVIDER === 'ollama') { const r = await ollamaChat(system, user, temperature); logUsage(stage, Date.now() - t0); return r; }
-      const res = await fetch('https://api.deepseek.com/v1/chat/completions', {
+      const openai = PROVIDER === 'openai';
+      const res = await fetch(openai ? 'https://api.openai.com/v1/chat/completions' : 'https://api.deepseek.com/v1/chat/completions', {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${KEY}` },
         // V4.x "คิดก่อนตอบ" เมื่อเรียกชื่อรุ่นตรงๆ (deepseek-flash/deepseek-v4-pro) — ความคิดนับเป็น token ขาออก
         // และเคยกิน max_tokens หมดจนคำแปลว่าง → ปิดไว้ (deepseek-chat ปิดอยู่แล้ว) เปิดด้วย --thinking low|high|max
+        // OpenAI GPT-5.x: reasoning_effort none = ไม่คิด (ส่ง temperature ได้เฉพาะตอนไม่คิด) ; cache ส่วนหัว prompt ให้เองเมื่อยาว ≥1024 token
         body: JSON.stringify({
-          model: MODEL, temperature, messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-          ...(THINKING ? { reasoning_effort: THINKING, max_tokens: 32000 } : { thinking: { type: 'disabled' }, max_tokens: 8000 }),
+          model: MODEL, messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+          ...(openai
+            ? THINKING ? { reasoning_effort: THINKING === 'max' ? 'xhigh' : THINKING, max_completion_tokens: 32000 } : { temperature, reasoning_effort: 'none', max_completion_tokens: 8000 }
+            : { temperature, ...(THINKING ? { reasoning_effort: THINKING, max_tokens: 32000 } : { thinking: { type: 'disabled' }, max_tokens: 8000 }) }),
         }),
       });
       if (res.status === 402 && !flag('--no-fallback')) {
@@ -203,6 +213,11 @@ async function chat(system: string, user: string, temperature = 0.7, stage = 'ot
       }
       if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
       const j = await res.json();
+      // OpenAI นับ cache แยกใน prompt_tokens_details → แปลงเป็นรูปแบบ DeepSeek (hit/miss) ให้ log/สรุปใช้ชุดเดียวกัน
+      if (openai && j.usage) {
+        const hit = j.usage.prompt_tokens_details?.cached_tokens ?? 0;
+        j.usage = { ...j.usage, prompt_cache_hit_tokens: hit, prompt_cache_miss_tokens: (j.usage.prompt_tokens ?? 0) - hit };
+      }
       logUsage(stage, Date.now() - t0, j.usage);
       // นับ token จริงที่ DeepSeek คิดเงิน (cache hit = ส่วนหัว prompt ที่ซ้ำ คิดถูกกว่ามาก)
       USAGE.calls++;
