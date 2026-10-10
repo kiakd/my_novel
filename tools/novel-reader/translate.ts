@@ -605,7 +605,8 @@ async function pronounPass(body: string, source: string, g: Glossary): Promise<{
   const rules = rulesFrom(g);
   const cands = candidates(body, source, rules);
   if (!cands.length) return { body, fixed: 0 };
-  const who = rules.map((r) => `${r.zh} (${r.th})`).join(', ');
+  // เฉพาะตัวที่อยู่ในบทนี้ (กฎลงท้ายตามเพศทำให้รายการรวมเกือบทุกตัวในคลัง)
+  const who = rules.filter((r) => source.includes(r.zh) || body.includes(r.th)).map((r) => `${r.zh} (${r.th})`).join(', ');
   const user = `ตัวละครที่ต้องตรวจ: ${who}\n\n${cands.map((c, k) => `[${k}] คำแปล: ${c.th}\nต้นฉบับรอบๆ (บรรทัดที่ตรงกันมี >>>):\n${c.ctx}`).join('\n\n')}`;
   const out = await chat(`ระบุ "ผู้พูด" ของบทพูดในแต่ละข้อ จากต้นฉบับจีน (ดูบรรทัดที่มี >>> และบริบทรอบๆ — คำบรรยายชื่อผู้พูดอาจอยู่ก่อนหรือหลังบทพูด, บทพูดหลายย่อหน้าติดกันมักเป็นคนเดิม)
 ตอบ JSON อย่างเดียว: {"speakers":[{"i":0,"zh":"ชื่อจีนของผู้พูดจากรายการ หรือ other ถ้าไม่ใช่คนในรายการ/ไม่แน่ใจ"}]}`, user, 0, 'pronouns').catch(() => '');

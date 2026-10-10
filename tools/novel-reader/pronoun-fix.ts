@@ -5,7 +5,15 @@
 //     (บท 134 ของ 45305: ตัวเอกพูด ข้า 6 บรรทัด สลับกับ "หลัวเฟิง" ที่พูด ข้า ได้ถูกต้อง)
 import type { Glossary } from './glossary.ts';
 
-export type Rule = { zh: string; th: string; want: string; forbid: string[] };
+// want/forbid = คำแทนตัว ; endings = คำลงท้ายผิดเพศ → คำที่ถูก (เช่น ไป๋หยุน หญิง: ขอรับ → เจ้าค่ะ)
+export type Rule = { zh: string; th: string; want: string; forbid: string[]; endings?: Record<string, string> };
+
+// คำลงท้ายผิดเพศ — จับเฉพาะท้ายคำ (หลังจากนั้นไม่ใช่อักษรไทย) กัน "ขอรับรางวัล" "คะแนน"
+// ไป๋หยุน (หญิง, self ลงท้าย เจ้าค่ะ) เคยได้ "ขอรับ" 6 ครั้งในตอนเดียว เพราะโค้ดบังคับแค่คำแทนตัว
+const END_AT = '(?![\\u0E00-\\u0E7F])';
+const TO_FEMALE: Record<string, string> = { 'ขอรับ': 'เจ้าค่ะ', 'ครับ': 'ค่ะ' };
+const TO_MALE: Record<string, string> = { 'เจ้าค่ะ': 'ขอรับ', 'เจ้าคะ': 'ขอรับ', 'ค่ะ': 'ครับ', 'คะ': 'ครับ' };
+const endRe = (e: string) => new RegExp(`${e === 'ค่ะ' || e === 'คะ' ? '(?<!เจ้า)' : ''}${e}${END_AT}`, 'g');
 
 const PRONOUNS = ['ข้าน้อย', 'ข้า', 'ผม', 'ฉัน', 'หนู'];
 // คำที่ขึ้นต้นเหมือนคำแทนตัวแต่ไม่ใช่: ข้าง ข้าม ข้าว ข้าศึก ข้าราชการ ข้าทาส ข้าหลวง / ผมขาว เส้นผม
@@ -28,13 +36,15 @@ const IMPLIED: Record<string, string[]> = {
 export function rulesFrom(g: Glossary): Rule[] {
   const out: Rule[] = [];
   for (const [zh, c] of Object.entries(g.characters)) {
+    if (!c.th) continue;
     const self = c.self ?? '';
-    const want = PRONOUNS.find((p) => self.trimStart().startsWith(p));
-    if (!want || !c.th) continue;
+    const want = PRONOUNS.find((p) => self.trimStart().startsWith(p)) ?? '';
     const m = self.match(/ห้าม(?:ใช้)?\s*([^)·]+)/);
     const explicit = m ? m[1].split(/[\/,\s]+/).map((s) => s.trim()) : [];
-    const forbid = [...new Set([...explicit, ...IMPLIED[want]])].filter((s) => PRONOUNS.includes(s) && s !== want);
-    if (forbid.length) out.push({ zh, th: c.th, want, forbid });
+    const forbid = want ? [...new Set([...explicit, ...IMPLIED[want]])].filter((s) => PRONOUNS.includes(s) && s !== want) : [];
+    // ลงท้ายตามเพศ (ไม่ต้องมี self) — ระดับภาษา (เจ้าค่ะ↔ค่ะ) ไม่บังคับ เพราะบางตัวสลับใช้ได้
+    const endings = c.gender === 'หญิง' ? TO_FEMALE : c.gender === 'ชาย' ? TO_MALE : undefined;
+    if (forbid.length || endings) out.push({ zh, th: c.th, want, forbid, ...(endings ? { endings } : {}) });
   }
   return out;
 }
@@ -58,7 +68,7 @@ export function candidates(body: string, source: string, rules: Rule[]): Candida
     const near = src.slice(Math.max(0, k - 8), k + 3).join('');
     const nearTh = idx.slice(Math.max(0, k - 8), k + 3).map((j) => lines[j]).join('');
     const quoted = [...lines[i].matchAll(QUOTED)].map((m) => m[2]).join(' ');
-    const hit = rules.some((r) => (near.includes(r.zh) || nearTh.includes(r.th)) && r.forbid.some((f) => new RegExp(TOKEN[f].source).test(quoted)));
+    const hit = rules.some((r) => (near.includes(r.zh) || nearTh.includes(r.th)) && (r.forbid.some((f) => new RegExp(TOKEN[f].source).test(quoted)) || Object.keys(r.endings ?? {}).some((e) => endRe(e).test(quoted))));
     if (hit) out.push({ line: i, th: lines[i], ctx: src.slice(Math.max(0, k - 4), k + 2).map((s, j) => (Math.max(0, k - 4) + j === k ? `>>> ${s}` : s)).join('\n') });
   });
   return out.slice(0, 40);
@@ -69,6 +79,8 @@ export function applyRule(line: string, rule: Rule): string {
   return line.replace(QUOTED, (_, a: string, inner: string, b: string) => {
     let s = inner;
     for (const f of rule.forbid) s = s.replace(TOKEN[f], rule.want);
+    // ยาวก่อน (เจ้าค่ะ ก่อน ค่ะ) ; endRe ของ ค่ะ/คะ ไม่จับที่อยู่หลัง เจ้า อยู่แล้ว
+    for (const [e, to] of Object.entries(rule.endings ?? {}).sort((x, y) => y[0].length - x[0].length)) s = s.replace(endRe(e), to);
     return a + s + b;
   });
 }
