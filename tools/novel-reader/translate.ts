@@ -19,6 +19,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, statSy
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { createHash } from 'node:crypto';
 import { siteFor, SITES, type Chapter } from './sites.ts';
 import { emptyGlossary, merge, pronounRules, relevant, type Delta, type Glossary } from './glossary.ts';
 import { applyRule, candidates, mechanicalFixes, normalizeZhNumbers, rulesFrom } from './pronoun-fix.ts';
@@ -181,6 +182,24 @@ function logUsage(stage: string, ms: number, u?: { prompt_cache_hit_tokens?: num
   try { mkdirSync(LIB, { recursive: true }); appendFileSync(USAGE_LOG, JSON.stringify(row) + '\n'); } catch {}
 }
 
+// บันทึก prompt + คำตอบเต็มของทุกคำขอ ไว้จูน prompt: library/<เรื่อง>/trace/ch<N>.jsonl (ปิดด้วย NR_TRACE=0)
+// system prompt ยาวและซ้ำทุกคำขอ → เก็บครั้งเดียวที่ library/_prompts/<hash>.txt แล้วอ้างด้วย hash
+// finish = เหตุที่โมเดลหยุด ("length" = ชน max_tokens คำตอบถูกตัด)
+function trace(stage: string, system: string, user: string, out: string, meta: Record<string, unknown>) {
+  if (process.env.NR_TRACE === '0') return;
+  try {
+    const c = ctxNow();
+    const sys = createHash('sha1').update(system).digest('hex').slice(0, 12);
+    const pDir = join(LIB, '_prompts');
+    mkdirSync(pDir, { recursive: true });
+    const pFile = join(pDir, `${sys}.txt`);
+    if (!existsSync(pFile)) writeFileSync(pFile, system);
+    const dir = join(bookDir(c.book || '_misc'), 'trace');
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(join(dir, `ch${c.ch || 0}.jsonl`), JSON.stringify({ t: new Date().toISOString(), mode: c.mode, stage, provider: PROVIDER, model: MODEL, sys, ...meta, user, out }) + '\n');
+  } catch {}
+}
+
 // stage = ขั้นที่เรียก (translate / translate-retry / polish / fix-lines / fix-words / fix-para) — ไว้แยกค่าใช้จ่ายใน log
 async function chat(system: string, user: string, temperature = 0.7, stage = 'other'): Promise<string> {
   for (let attempt = 1; ; attempt++) {
@@ -219,6 +238,7 @@ async function chat(system: string, user: string, temperature = 0.7, stage = 'ot
         j.usage = { ...j.usage, prompt_cache_hit_tokens: hit, prompt_cache_miss_tokens: (j.usage.prompt_tokens ?? 0) - hit };
       }
       logUsage(stage, Date.now() - t0, j.usage);
+      trace(stage, system, user, j.choices?.[0]?.message?.content ?? '', { temperature, ms: Date.now() - t0, attempt, finish: j.choices?.[0]?.finish_reason, usage: j.usage });
       // นับ token จริงที่ DeepSeek คิดเงิน (cache hit = ส่วนหัว prompt ที่ซ้ำ คิดถูกกว่ามาก)
       USAGE.calls++;
       USAGE.hit += j.usage?.prompt_cache_hit_tokens ?? 0;
