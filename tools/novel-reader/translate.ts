@@ -418,7 +418,8 @@ async function idiomPass(body: string, source: string, g: Glossary, notes: strin
   const out = await chat(IDIOM_SYSTEM, `GLOSSARY terms:\n${JSON.stringify(terms)}\n\nต้นฉบับ:\n${source.replaceAll('<!-- chunk -->', '')}\n\nคำแปล:\n${body.replaceAll('<!-- chunk -->', '')}`, 0.2, 'idioms').catch(() => '');
   let r: { notes?: { zh?: string; th?: string; note?: string }[]; terms?: { zh?: string; th?: string }[]; replace?: { from?: string; to?: string; all?: boolean }[] } = {};
   try { r = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1)); } catch { return { body, notes, added: 0, fixed: 0 }; }
-  const thai = (s?: string) => (s ?? '').trim() && !CJK.test(s!) && !RUDE.test(s!) ? s!.trim() : '';
+  // คำอังกฤษห้ามเข้ามาทาง replace ด้วย — รอบนี้รันหลัง fixCJK จึงไม่มีอะไรจับอีก (เคยได้ "โจวโจวsucked ลิ้น", "Cost")
+  const thai = (s?: string) => (s ?? '').trim() && !CJK.test(s!) && !RUDE.test(s!) && !/[A-Za-z]{3,}/.test(s!) ? s!.trim() : '';
   let fixed = 0;
   for (const x of r.replace ?? []) {
     const from = (x.from ?? '').trim(), to = thai(x.to);
