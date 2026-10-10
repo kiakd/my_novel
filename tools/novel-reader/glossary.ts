@@ -15,22 +15,28 @@ export type Character = {
 export type Glossary = {
   characters: Record<string, Character>; // key = ชื่อจีน
   terms: Record<string, string>; // สถานที่/องค์กร/คำเฉพาะ จีน → ไทย
+  // หลักสรรพนามประจำเรื่อง (แก้มือ) — ใช้กับตัวที่ยังไม่มี self: ตัวใหม่ ตัวประกอบไร้ชื่อ กลุ่มทหาร
+  // เช่น "ลูกน้องชายของตัวเอก: ข้า · ขอรับ · เรียกตัวเอกว่า ท่านลอร์ด"
+  pronouns?: string[];
 };
 
 export const emptyGlossary = (): Glossary => ({ characters: {}, terms: {} });
 
-// ส่งเฉพาะรายการที่ปรากฏในข้อความ → prompt สั้น เร็ว ประหยัด
+// ส่งเฉพาะรายการที่ปรากฏในข้อความ → prompt สั้น เร็ว ประหยัด (หลักสรรพนามประจำเรื่องส่งเสมอ)
 export function relevant(g: Glossary, text: string): Glossary {
   const pick = <T>(rec: Record<string, T>) =>
     Object.fromEntries(Object.entries(rec).filter(([zh]) => text.includes(zh)));
-  return { characters: pick(g.characters), terms: pick(g.terms) };
+  return { characters: pick(g.characters), terms: pick(g.terms), ...(g.pronouns?.length ? { pronouns: g.pronouns } : {}) };
 }
 
 // สรรพนาม/คำลงท้ายที่ตั้งไว้ → รายการบังคับแยกไว้หัวข้อความ — ถ้าฝังอยู่แค่ใน JSON โมเดลจะลอยตามฉาก
 // (เรื่อง 45305: ตัวเอก self="ฉัน" แต่พอรอบข้างพูด ข้า กันหมด ก็ใช้ ข้า ตาม ราว 25 บรรทัดใน 10 ตอน)
+// ตัวรองที่ไม่มี self เคยผิดมากสุด (~1 จุด/ตอน แม้ใช้ Pro) → ส่งหลักประจำเรื่องให้เลือกตามบทบาทด้วย
 export function pronounRules(g: Glossary): string {
   const rows = Object.values(g.characters).filter((c) => c.th && c.self).map((c) => `- ${c.th}${c.gender ? ` (${c.gender})` : ''}: ${c.self}`);
-  return rows.length ? `คำแทนตัว/คำลงท้ายที่บังคับใช้ (สำคัญกว่าแนวเรื่อง ฉาก และสไตล์ — ห้ามเปลี่ยนแม้ตัวละครรอบข้างจะพูดแบบอื่น):\n${rows.join('\n')}\n\n` : '';
+  const defs = (g.pronouns ?? []).map((s) => `- ${s}`);
+  if (!rows.length && !defs.length) return '';
+  return `คำแทนตัว/คำลงท้ายที่บังคับใช้ (สำคัญกว่าแนวเรื่อง ฉาก และสไตล์ — ห้ามเปลี่ยนแม้ตัวละครรอบข้างจะพูดแบบอื่น):\n${rows.join('\n')}${defs.length ? `${rows.length ? '\n' : ''}ตัวละครที่ไม่มีชื่อในรายการ ให้เลือกตามบทบาท:\n${defs.join('\n')}` : ''}\nดูผู้พูดจากต้นฉบับทุกบรรทัด แล้วใช้คำแทนตัว/คำลงท้ายของคนนั้น\n\n`;
 }
 
 export type Delta ={ characters?: Record<string, Partial<Character>>; terms?: Record<string, string> };
