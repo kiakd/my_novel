@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { siteFor, SITES, type Chapter } from './sites.ts';
 import { emptyGlossary, merge, pronounRules, relevant, type Delta, type Glossary } from './glossary.ts';
+import { applyRule, candidates, mechanicalFixes, rulesFrom } from './pronoun-fix.ts';
 
 const ROOT = import.meta.dirname;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -99,10 +100,11 @@ function loadProfile(name: string): string {
   return `\n\n===== นักแปลประจำเรื่องนี้: ${name} (ถ้าขัดกับ GLOSSARY ให้ยึด GLOSSARY) =====\n${body}`;
 }
 
-const SYSTEM = `คุณคือนักแปลนิยายเว็บจีน→ไทยมืออาชีพ แปลให้อ่านลื่นเป็นธรรมชาติแบบนิยายแปลไทยคุณภาพดี ไม่แปลตรงตัวแข็งๆ
+const SYSTEM = `คุณคือนักแปลนิยายเว็บจีน→ไทยมืออาชีพ แปลให้ครบและตรงความหมายก่อน แล้วจึงเขียนให้ลื่นเป็นธรรมชาติแบบนิยายแปลไทยคุณภาพดี (ไม่ติดโครงประโยคจีน)
 กฎ:
 - ใช้ชื่อไทยตาม GLOSSARY เสมอ ห้ามเปลี่ยนการสะกด
-- ภาษาจีน 他/她 ออกเสียงเหมือนกัน — เลือกสรรพนามไทย (เขา/เธอ/นาง) และคำแทนตัว (ผม/ฉัน/ข้า/หนู…) ตามเพศ อายุ บริบท และช่อง self/called/speech ใน GLOSSARY
+- ภาษาจีน 他/她 ออกเสียงเหมือนกัน — เลือกสรรพนามไทย (เขา/เธอ/นาง) และคำแทนตัว (ผม/ฉัน/ข้า/หนู…) ตามรายการคำแทนตัวที่บังคับใช้และช่อง self/called/speech ใน GLOSSARY ก่อน ถ้าไม่มีจึงดูเพศ อายุ บริบท
+- ระวังความหมายกลับขั้ว: 难道…吗/不是…吗/岂/何必/何止 แปลให้ได้เจตนาเดียวกับต้นฉบับ ; ประโยคบอกเล่าห้ามกลายเป็นคำถาม และคำถามห้ามกลายเป็นบอกเล่า ; 不得不/非…不可 = ต้อง ; X还来不及 = มีแต่จะ X (ไม่ใช่ "X ไม่ทัน") ; 半跪 = คุกเข่าข้างเดียว
 - คำเรียกคู่สนทนา (你) เลือกตามเพศของ "คนที่ถูกพูดด้วย" ไม่ใช่ผู้พูด: พูดกับผู้ชาย → นาย/แก, พูดกับผู้หญิง → เธอ (ห้ามเรียกผู้หญิงว่า "นาย"), ผู้ใหญ่/ผู้อาวุโส → คุณ/ท่าน/คำเรียกญาติ — เช็คเพศจาก GLOSSARY ทุกครั้ง
 - 你 ในคำบรรยายที่หมายถึง "ใครก็ตาม/คนทั่วไป" (ไม่ได้พูดกับใคร) → ใช้ "ใคร" "คนเรา" หรือละไว้ ห้ามแปลเป็น แก/นาย/เธอ
 - ห้ามใช้ "กู" "มึง" เด็ดขาด แม้ต้นฉบับจะหยาบหรือสนิทกันมาก (老子/你丫/他妈的 ฯลฯ) → ใช้ ฉัน/นาย/แก/เธอ และแสดงความหยาบ/ความสนิทผ่านน้ำเสียงและคำลงท้ายแทน
@@ -112,7 +114,8 @@ const SYSTEM = `คุณคือนักแปลนิยายเว็บ�
 ${STYLE}
 - แปลครบทุกย่อหน้า ไม่ย่อ ไม่เพิ่มเนื้อหา คงการแบ่งย่อหน้าเดิม ไม่ใส่หมายเหตุผู้แปลอื่นนอกจากหมายเหตุสำนวนจีนตามข้อด้านล่าง
 - ในส่วน TRANSLATION ห้ามมีอักษรจีนแม้แต่ตัวเดียว และห้ามทับศัพท์อังกฤษ (breakthrough, deal ฯลฯ) ให้ใช้คำไทย ยกเว้นชื่อแบรนด์ ทุกคำต้องเป็นภาษาไทย (ชื่อ/สถานที่ถอดเสียงเป็นไทย)
-- สกุลเงินจีนคงเป็น "หยวน" เสมอ (元/块/块钱 = หยวน) และแปลงตัวเลขเป็นหลักไทยให้ถูก: 万=หมื่น, 十万=แสน, 百万=ล้าน เช่น 三十万=สามแสน, 六十多万=หกแสนกว่า, 两百万=สองล้าน ห้ามเขียน "หกสิบหมื่น"/"สามร้อยหมื่น" ห้ามแปลงเป็นบาทหรือสกุลอื่น
+- เงิน: 元/块/块钱 ที่เป็นหน่วยเงินจีน = หยวน ห้ามแปลงเป็นบาท ; เรื่องต่างโลกที่มีหน่วยเงินของตัวเอง (เหรียญทอง แกนกลางหมอก ฯลฯ) ใช้หน่วยของเรื่อง ; 元 ในคำอื่น (元素 纪元) ไม่ใช่เงิน
+- ตัวเลขทุกชนิด (ไม่ใช่แค่เงิน) แปลงหลักให้ถูก: 万=หมื่น, 十万=แสน, 百万=ล้าน, 千万=สิบล้าน, 亿=ร้อยล้าน, 十亿=พันล้าน, 百亿=หมื่นล้าน, 千亿=แสนล้าน เช่น 三十万=สามแสน, 8000万=80 ล้าน, 千亿分之一=หนึ่งในแสนล้าน ; ห้ามเขียน "หกสิบหมื่น"/"8000 หมื่น" ; 三成 = 30%
 - ชื่ออาหาร/ขนม/ของเฉพาะจีน: ใช้ชื่อที่คนไทยรู้จัก (เช่น 糖葫芦=ถังหูลู่, 淀粉肠=ไส้กรอกแป้งทอด, 臭豆腐=เต้าหู้เหม็น, 棉花糖=สายไหม) ถ้าไม่มีชื่อไทยให้ถอดเสียง + อธิบายสั้นในวงเล็บ ห้ามแปลตามตัวอักษรจนผิดความหมาย
 - แฟนฟิค/อ้างอิงงานดัง (แฮร์รี่ พอตเตอร์, วันพีซ, นารูโตะ ฯลฯ): ชื่อคน สถานที่ คาถา ศัพท์เฉพาะ ใช้ตามฉบับแปลไทยทางการที่คนไทยคุ้น (เช่น 霍格沃茨=ฮอกวอตส์, 邓布利多=ดัมเบิลดอร์, 斯内普=สเนป, 格兰芬多=กริฟฟินดอร์) ไม่ใช่ถอดเสียงจีน
 - ชื่อวิชา/สถานที่/สิ่งของในงานดังที่ฉบับไทยมีชื่อแปลแล้ว (เช่น 变形术=วิชาแปลงร่าง) ใช้ชื่อไทยนั้น ห้ามถอดเสียงอังกฤษ — ยกเว้นเมื่อต้นฉบับยกคำอังกฤษ/ละตินมาเป็น "คำร่ายคาถา" หรืออธิบายการออกเสียง ให้คงคำร่ายแบบถอดเสียง/ตัวอังกฤษไว้
@@ -226,7 +229,7 @@ const OTHER = /[Ѐ-ӿ؀-ۿ぀-ゟ가-힯]+|[ァ-ヺ]{2,}/; // ไม่นับ
 const OTHER_G = new RegExp(OTHER.source, 'g');
 
 // DeepSeek ชอบหลุดคำจีนสั้นๆ ปนในคำแปล → ส่งเฉพาะบรรทัดที่ยังมีจีนกลับไปเกลาใหม่ (สูงสุด 2 รอบ)
-const FIX_SYSTEM = `คุณคือบรรณาธิการนิยายแปลไทย บรรทัดคำแปลต่อไปนี้ยังมีคำภาษาจีน/ภาษาอังกฤษ/ภาษาอื่น (เช่น รัสเซีย) หลงเหลือ หรือใช้ กู/มึง (ห้ามใช้ — เปลี่ยนเป็น ฉัน และเรียกคนฟังตามเพศ: ผู้ชาย=นาย ผู้หญิง=เธอ)
+const FIX_SYSTEM = `คุณคือบรรณาธิการนิยายแปลไทย บรรทัดคำแปลต่อไปนี้ยังมีคำภาษาจีน/ภาษาอังกฤษ/ภาษาอื่น (เช่น รัสเซีย) หลงเหลือ หรือใช้ กู/มึง (ห้ามใช้ — เปลี่ยนเป็นคำแทนตัวตามรายการบังคับของผู้พูด ไม่มีในรายการจึงใช้ ฉัน และเรียกคนฟังตามเพศ: ผู้ชาย=นาย ผู้หญิง=เธอ)
 ให้เขียนแต่ละบรรทัดใหม่เป็นภาษาไทยล้วน สำนวนนิยายลื่นไหล คงความหมายและชื่อตัวละครเดิม ใช้ต้นฉบับจีนเป็นบริบท
 ชื่อ ศัพท์ และคำแทนตัว/คำลงท้ายที่ให้มา ต้องใช้ตรงตัวเหมือนส่วนอื่นของบท
 ห้ามมีอักษรจีน อักษรต่างชาติอื่น หรือคำอังกฤษ (ยกเว้นชื่อแบรนด์) เครื่องหมายหมายเหตุ [^1] [^2] ในบรรทัดให้คงไว้ตำแหน่งเดิม ตอบเป็นบรรทัดรูปแบบ [เลข] ข้อความ ตามเลขเดิม ครบทุกบรรทัด ไม่ต้องอธิบาย`;
@@ -289,16 +292,21 @@ async function fixCJK(th: string, source: string, g: Glossary): Promise<string> 
 
 // รอบเกลาสำนวน: บรรณาธิการอ่านร่างเทียบต้นฉบับ แล้วเขียนให้เป็นนิยายไทยลื่นๆ (ปิดด้วย --no-polish)
 const POLISH_SYSTEM = `คุณคือบรรณาธิการนิยายแปลจีน→ไทยมือทอง ได้รับต้นฉบับจีนและร่างคำแปล
-ให้เกลาร่างเป็นนิยายไทยที่อ่านลื่นเหมือนคนไทยเขียนเอง:
-- ตัดโครงประโยคจีนที่แข็ง คำซ้ำ คำเชื่อมเกินจำเป็น ใช้ลำดับคำและคำลงท้ายแบบไทย
+ให้เกลาร่างเป็นนิยายไทยที่อ่านลื่นเหมือนคนไทยเขียนเอง โดยไม่เปลี่ยนเนื้อความ
+งานหลัก: ลำดับคำ คำเชื่อม คำสร้อย/คำลงท้าย จังหวะประโยค และแก้โครงประโยคจีนที่แข็ง (ดูคลังความรู้ด้านล่าง)
+ห้ามเปลี่ยนจากร่าง (ถ้าร่างผิดเทียบต้นฉบับ ให้แก้ตามต้นฉบับ ไม่ใช่ตามความชอบ):
+  · ความหมายและขั้วของประโยค — บอกเล่า/คำถาม/ปฏิเสธ ต้องตรงต้นฉบับ ห้ามเติม "?" หรือ "หรือเปล่า" ให้ประโยคบอกเล่า
+  · ตัวเลขและหน่วย
+  · คำแทนตัว/คำลงท้ายตามรายการที่บังคับใช้ และศัพท์ GLOSSARY
+  · จำนวนย่อหน้า (ห้ามแยก/รวมย่อหน้า) และห้ามเติมรายละเอียด/อารมณ์ที่ต้นฉบับไม่มี
+- ตัดคำซ้ำ คำเชื่อมเกินจำเป็น ใช้ลำดับคำและคำลงท้ายแบบไทย
 - บทพูดต้องฟังเป็นธรรมชาติ ตรงบุคลิก อายุ ความสนิท ของผู้พูด (ดูช่อง self/called/speech)
 - ชื่อวิชา/สถานที่ในงานดังใช้ชื่อฉบับแปลไทย (ดู GLOSSARY) แต่ถ้าเป็นคำร่ายคาถาหรือการสอนออกเสียง ให้คงคำร่ายไว้
 - เทียบต้นฉบับ: ชื่ออาหาร/ขนม/สิ่งของเฉพาะจีน ต้องเป็นชื่อที่คนไทยรู้จักหรือถอดเสียง+อธิบายสั้น; สำนวนจีนต้องแปลตามความหมาย ไม่ใช่ตามตัวอักษร — ยกเว้นสำนวนที่มีเครื่องหมายหมายเหตุ [^1] [^2] ต่อท้าย: คงภาพแบบจีนและเครื่องหมายไว้ตำแหน่งเดิม ห้ามลบ ห้ามเปลี่ยนเลข ห้ามเพิ่มเครื่องหมายใหม่
 - คำเรียกคู่สนทนา (你) เลือกตามเพศของ "คนที่ถูกพูดด้วย" ไม่ใช่ผู้พูด: พูดกับผู้ชาย → นาย/แก, พูดกับผู้หญิง → เธอ (ห้ามเรียกผู้หญิงว่า "นาย"), ผู้ใหญ่/ผู้อาวุโส → คุณ/ท่าน/คำเรียกญาติ — เช็คเพศจาก GLOSSARY ทุกครั้ง; 你 ในคำบรรยายที่หมายถึงคนทั่วไป → "ใคร"/ละไว้
 - ห้ามใช้ "กู" "มึง" เด็ดขาด แม้ต้นฉบับจะหยาบหรือสนิทกันมาก (老子/你丫/他妈的 ฯลฯ) → ใช้ ฉัน/นาย/แก/เธอ และแสดงความหยาบ/ความสนิทผ่านน้ำเสียงและคำลงท้ายแทน
-- สกุลเงินคงเป็น "หยวน" ห้ามเปลี่ยนเป็นบาท และตัวเลขต้องเป็นหลักไทยที่ถูก (六十万=หกแสน ไม่ใช่ หกสิบหมื่น)
-- สรรพนาม/คำแทนตัวต้องตรงเพศและบริบท ชื่อตาม GLOSSARY เป๊ะ
-- เทียบต้นฉบับ: แก้จุดที่แปลผิดความหมาย ห้ามตัด ห้ามเพิ่มเนื้อหา คงจำนวนย่อหน้า
+- เงินจีนคงเป็น "หยวน" ห้ามเปลี่ยนเป็นบาท ; ตัวเลขต้องเป็นหลักไทยที่ถูก (六十万=หกแสน, 8000万=80 ล้าน)
+- สรรพนาม/คำแทนตัวตามรายการบังคับก่อน ไม่มีจึงดูเพศ ชื่อตาม GLOSSARY เป๊ะ
 - ภาษาไทยล้วน ห้ามมีอักษรจีน
 ตอบเฉพาะคำแปลที่เกลาแล้ว ไม่ต้องมีหัวข้อหรือคำอธิบาย
 
@@ -325,14 +333,19 @@ export function insane(th: string, source: string): string | null {
 async function polish(draft: string, source: string, g: Glossary, hasTitle = false): Promise<string> {
   const note = hasTitle ? 'บรรทัดแรกคือชื่อบท — คงไว้เป็นบรรทัดแรกบรรทัดเดียว (เกลาถ้อยคำได้)\n\n' : '';
   const rel = relevant(g, source);
-  const out = await chat(POLISH_SYSTEM + PROFILE, `${note}${pronounRules(rel)}GLOSSARY:\n${JSON.stringify(rel)}\n\nต้นฉบับ:\n${source}\n\nร่างคำแปล:\n${draft}`, 0.6, 'polish');
+  const out = await chat(POLISH_SYSTEM + PROFILE, `${note}${pronounRules(rel)}GLOSSARY:\n${JSON.stringify(rel)}\n\nต้นฉบับ:\n${source}\n\nร่างคำแปล:\n${draft}`, 0.45, 'polish');
   let th = out.trim().replace(/^=== TRANSLATION ===\s*/, '');
   // เครื่องหมายหมายเหตุสำนวน [^n]: ตัดตัวที่เกลาเพิ่มเอง; ทำตัวเดิมหาย → ใช้ร่างเดิม (หมายเหตุท้ายบทจะไม่มีที่อ้าง)
   const had = new Set(draft.match(/\[\^\d+\]/g) ?? []);
   th = th.replace(/\[\^\d+\]/g, (m) => (had.has(m) ? m : ''));
   const kept = [...had].every((m) => th.includes(m));
   // เกลาแล้วผิดรูป/สั้นลงมาก → ใช้ร่างเดิม
-  return kept && th.length > draft.length * 0.7 && !insane(th, source) ? th : draft;
+  if (!(kept && th.length > draft.length * 0.7 && !insane(th, source))) return draft;
+  // ตัวกันความหมาย (โค้ดล้วน): เกลาแล้วมีคำถามเพิ่มเกินต้นฉบับ (ประโยคบอกเล่ากลายเป็นคำถาม) หรือศัพท์หลุดคลังเพิ่ม → ใช้ร่าง
+  const q = (s: string) => (s.match(/[?？]/g) ?? []).length;
+  if (q(th) > q(draft) && q(th) > q(source)) return draft;
+  if (missingTerms(rel.terms, source, th).length > missingTerms(rel.terms, source, draft).length) return draft;
+  return th;
 }
 
 // ท้ายชิ้นก่อนหน้า (ต้นฉบับ) — ให้แต่ละชิ้นรู้ว่าเล่าต่อจากอะไร รอยต่อระหว่างชิ้นจะได้ไม่ขาดห้วน แต่ยังแปลขนานได้
@@ -377,7 +390,7 @@ async function translateChunk(text: string, g: Glossary, title: string, prev?: s
   let gl = '{}';
   let notes = '';
   for (let attempt = 1; attempt <= 3; attempt++) {
-    ({ th, gl, notes } = parseAnswer(await chat(SYSTEM + PROFILE, user, attempt === 1 ? 0.7 : 0.5, attempt === 1 ? 'translate' : 'translate-retry')));
+    ({ th, gl, notes } = parseAnswer(await chat(SYSTEM + PROFILE, user, attempt === 1 ? 0.5 : 0.4, attempt === 1 ? 'translate' : 'translate-retry')));
     const bad = insane(th.trim(), text);
     if (!bad) break;
     console.error(`แปลผิดรูป (${bad}) — ลองใหม่ ${attempt}/3`);
@@ -406,7 +419,9 @@ const parseNoteLines = (tail: string) => [...tail.matchAll(/^\s*\[\^\d+\]:\s*(.+
 // รอบหมายเหตุสำนวน (หลังเกลา): ขั้นแปลเคยถูกสั่งให้ใส่ [^n] เอง แต่โมเดลตอบ NOTES ว่างแทบทุกครั้ง
 // → แยกเป็นงานเดียวโฟกัส: หาสำนวน/คำเปรียบที่คนไทยไม่เข้าใจ + คำสำคัญที่ต้องแปลให้เหมือนกันทุกตอน + แก้ความหมายผิดชัดๆ
 // โปรแกรมแทรก [^n] เองตามข้อความที่โมเดลบอก (ไม่พึ่งให้โมเดลเขียนเครื่องหมายเอง)
-const IDIOM_SYSTEM = `คุณคือบรรณาธิการนิยายแปลจีน→ไทย ตรวจคำแปลเทียบต้นฉบับเฉพาะเรื่อง "สำนวน คำเปรียบ คำแสลง ศัพท์เฉพาะ"
+const IDIOM_SYSTEM = `คุณคือบรรณาธิการนิยายแปลจีน→ไทย ตรวจคำแปลเทียบต้นฉบับเรื่อง "ความหมาย สำนวน คำเปรียบ คำแสลง ศัพท์เฉพาะ คำแทนตัว"
+ก่อนตอบ ให้ไล่ทุกประโยคต้นฉบับที่มี 不/没/别/难道/岂/何必/何止/吗/？ และทุกตัวเลข/หน่วย (万 亿 成) ว่าคำแปลตรงขั้ว (บอกเล่า↔คำถาม, ปฏิเสธ↔ยืนยัน) และตัวเลขถูก ถ้าผิดให้ใส่ใน replace (ก)
+ถ้าคำแปลแปลตามตัวอักษรจนคนไทยงง แต่มีคำไทยธรรมดาสื่อความได้ (เช่น 高兴还来不及 → "ดีใจจะแย่อยู่แล้ว", 半跪 → "คุกเข่าข้างหนึ่ง") ให้แก้ใน replace ไม่ใช่ใส่ notes
 ตอบ JSON อย่างเดียว:
 {"notes":[{"zh":"","th":"","note":""}],"terms":[{"zh":"","th":""}],"replace":[{"from":"","to":"","why":""}]}
 - notes: สำนวน/คำเปรียบ/成语/คำแสลงเน็ตจีน/การอ้างอิงวัฒนธรรมจีน ที่คำแปลคงภาพแบบจีนไว้ จนคนไทยอ่านแล้วอาจไม่เข้าใจ (เช่น "แสงจันทร์สีขาว" จาก 白月光, "ปากยื่นจนแขวนขวดน้ำส้มได้" จาก 嘴撅得能挂醋瓶子, "เลี้ยงเป็นภรรยาเด็ก" จาก 童养媳)
@@ -438,7 +453,10 @@ export function missingTerms(terms: Record<string, string>, source: string, body
 async function idiomPass(body: string, source: string, g: Glossary, notes: string[]): Promise<{ body: string; notes: string[]; added: number; fixed: number }> {
   const rel = relevant(g, source);
   const terms = rel.terms;
-  const miss = missingTerms(terms, source.replaceAll('<!-- chunk -->', ''), body);
+  // หน่วยเลขใหญ่ที่เขียนเป็นคำ (ไม่มีเลขอารบิกนำหน้า) ตรวจแบบเดียวกับศัพท์ — 千亿分之一 เคยออกมาเป็น "หนึ่งในพันล้าน" (ที่ถูก: แสนล้าน)
+  const BIG: Record<string, string> = { 千亿: 'แสนล้าน', 百亿: 'หมื่นล้าน', 十亿: 'พันล้าน', 千万: 'สิบล้าน' };
+  const bigTerms = Object.fromEntries(Object.entries(BIG).filter(([zh]) => new RegExp(`(?<![\\d.])${zh}`).test(source)));
+  const miss = missingTerms({ ...terms, ...bigTerms }, source.replaceAll('<!-- chunk -->', ''), body);
   const missNote = miss.length ? `ศัพท์ที่ต้นฉบับมี แต่คำแปลยังไม่ใช้คำตาม GLOSSARY — หาคำที่แปลแทนไว้ แล้วใส่ใน replace ให้เป็นคำนี้ ("all":true ถ้าโผล่หลายที่):\n${miss.map(([zh, th]) => `- ${zh} = ${th}`).join('\n')}\n\n` : '';
   const out = await chat(IDIOM_SYSTEM, `${pronounRules(rel)}${missNote}GLOSSARY terms:\n${JSON.stringify(terms)}\n\nต้นฉบับ:\n${source.replaceAll('<!-- chunk -->', '')}\n\nคำแปล:\n${body.replaceAll('<!-- chunk -->', '')}`, 0.2, 'idioms').catch(() => '');
   let r: { notes?: { zh?: string; th?: string; note?: string }[]; terms?: { zh?: string; th?: string }[]; replace?: { from?: string; to?: string; all?: boolean }[] } = {};
@@ -469,7 +487,7 @@ async function idiomPass(body: string, source: string, g: Glossary, notes: strin
     g.terms[zh] = th;
   }
   let added = 0;
-  for (const n of (r.notes ?? []).slice(0, Math.max(0, 4 - notes.length))) {
+  for (const n of (r.notes ?? []).slice(0, Math.max(0, 3 - notes.length))) {
     const th = (n.th ?? '').trim(), note = thai(n.note)?.replace(/\s*\n\s*/g, ' ');
     if (!th || !note || th.length < 2 || META_NOTE.test(note)) continue;
     const i = body.indexOf(th);
@@ -480,6 +498,37 @@ async function idiomPass(body: string, source: string, g: Glossary, notes: strin
     added++;
   }
   return { body, notes, added, fixed };
+}
+
+// รอบคำแทนตัวต้องห้าม: โปรแกรมคัดบรรทัดที่บทพูดมีคำต้องห้ามของตัวละครใน GLOSSARY (เช่น ตัวเอก "ห้ามใช้ ข้า")
+// โมเดลแค่ระบุผู้พูดจากต้นฉบับ — การแก้ทำด้วยโปรแกรม (แทนเฉพาะคำแทนตัวในเครื่องหมายคำพูด) จึงไม่มีทางไปแก้อย่างอื่น
+// เรียกเฉพาะบทที่มีบรรทัดต้องสงสัย (~5 บรรทัด/บท → คำขอเล็ก)
+async function pronounPass(body: string, source: string, g: Glossary): Promise<{ body: string; fixed: number }> {
+  const rules = rulesFrom(g);
+  const cands = candidates(body, source, rules);
+  if (!cands.length) return { body, fixed: 0 };
+  const who = rules.map((r) => `${r.zh} (${r.th})`).join(', ');
+  const user = `ตัวละครที่ต้องตรวจ: ${who}\n\n${cands.map((c, k) => `[${k}] คำแปล: ${c.th}\nต้นฉบับรอบๆ (บรรทัดที่ตรงกันมี >>>):\n${c.ctx}`).join('\n\n')}`;
+  const out = await chat(`ระบุ "ผู้พูด" ของบทพูดในแต่ละข้อ จากต้นฉบับจีน (ดูบรรทัดที่มี >>> และบริบทรอบๆ — คำบรรยายชื่อผู้พูดอาจอยู่ก่อนหรือหลังบทพูด, บทพูดหลายย่อหน้าติดกันมักเป็นคนเดิม)
+ตอบ JSON อย่างเดียว: {"speakers":[{"i":0,"zh":"ชื่อจีนของผู้พูดจากรายการ หรือ other ถ้าไม่ใช่คนในรายการ/ไม่แน่ใจ"}]}`, user, 0, 'pronouns').catch(() => '');
+  let r: { speakers?: { i?: number; zh?: string }[] } = {};
+  try { r = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1)); } catch { return { body, fixed: 0 }; }
+  const lines = body.split('\n');
+  let fixed = 0;
+  for (const s of r.speakers ?? []) {
+    const c = cands[s.i ?? -1], rule = rules.find((x) => x.zh === s.zh);
+    if (!c || !rule) continue;
+    const next = applyRule(lines[c.line], rule);
+    if (next !== lines[c.line]) { lines[c.line] = next; fixed++; }
+  }
+  return { body: lines.join('\n'), fixed };
+}
+
+// ขั้นสุดท้ายก่อนเขียนไฟล์: แก้เชิงกล + คำแทนตัวต้องห้าม
+async function finishBody(body: string, source: string, g: Glossary): Promise<{ body: string; fixed: number }> {
+  const m = mechanicalFixes(body);
+  const p = await pronounPass(m.body, source, g);
+  return { body: p.body, fixed: m.fixed + p.fixed };
 }
 
 // เว็บต้นทางชอบขึ้นบรรทัดใหม่กลางประโยค (ลงท้าย ，/、) → ต่อกลับเป็นย่อหน้าเดียว ไม่งั้นคำแปลขาดเป็นท่อนๆ
@@ -656,7 +705,8 @@ function buildReader(id: string, prog: Progress) {
 // รายงานอย่างเดียว: กู/มึง (ต้องดูเพศคนฟังก่อนเลือก นาย/เธอ)
 const NUM = 'หนึ่ง|สอง|สาม|สี่|ห้า|หก|เจ็ด|แปด|เก้า';
 const SAFE_FIXES: [RegExp, (...m: string[]) => string][] = [
-  [/(?<!พระ)บาท(?!หลวง|า)/g, () => 'หยวน'],
+  // เฉพาะ "บาท" ที่เป็นหน่วยเงิน (ตามหลังตัวเลข/คำบอกจำนวน) — แบบเดิมจับทุกที่ ทำให้ ฝ่าบาท→ฝ่าหยวน, บทบาท→บทหยวน
+  [new RegExp(`([\\d๐-๙]|${NUM}|สิบ|ร้อย|พัน|หมื่น|แสน|ล้าน)(\\s?)บาท(?!หลวง)`, 'g'), (_, n, sp) => `${n}${sp}หยวน`],
   [new RegExp(`(${NUM})สิบ(กว่า)?หมื่น`, 'g'), (_, d, k) => `${d}แสน${k ?? ''}`],
   [/(?<![ก-ฮ])สิบ(กว่า)?หมื่น/g, (_, k) => `หนึ่งแสน${k ?? ''}`],
   [new RegExp(`(${NUM})ร้อย(กว่า)?หมื่น`, 'g'), (_, d, k) => `${d}ล้าน${k ?? ''}`],
@@ -808,8 +858,9 @@ if (flag('--repolish') || flag('--notes')) {
     const out = polishToo ? await Promise.all(th.map(async (c, k) => fixCJK(await polish(c, zh[k], g), zh[k], g))) : th;
     const same = out.every((c, k) => c === th[k]);
     const ip = await idiomPass(out.join(CHUNK_MARK), zh.join(CHUNK_MARK), g, parseNoteLines(notesTail));
-    writeFileSync(file, `${head}\n\n${ip.body}\n${notesBlock(ip.notes)}`);
-    const extra = `หมายเหตุ +${ip.added}${ip.fixed ? ` · แก้ ${ip.fixed} จุด` : ''}`;
+    const fin = await finishBody(ip.body, zh.join(CHUNK_MARK), g);
+    writeFileSync(file, `${head}\n\n${fin.body}\n${notesBlock(ip.notes)}`);
+    const extra = `หมายเหตุ +${ip.added}${ip.fixed + fin.fixed ? ` · แก้ ${ip.fixed + fin.fixed} จุด` : ''}`;
     lines.push(polishToo ? `✓ เกลาใหม่ บทที่ ${n}: ${head.replace(/^#\s*/, '')}${same ? ' (คงเดิม — ผลเกลาผิดรูป)' : ''} · ${extra}` : `✓ บทที่ ${n}: ${extra}`);
   }
   writeJson(gPath, g); // รอบหมายเหตุอาจเพิ่มคำสำคัญประจำเรื่อง
@@ -1028,7 +1079,8 @@ for (let i = 0; i < N; i++) {
   }));
   // รอบหมายเหตุสำนวน + คำสำคัญประจำเรื่อง (ปิดด้วย --no-notes)
   const ip = flag('--no-notes') ? { body: bodies.join(CHUNK_MARK), notes, added: 0, fixed: 0 } : await idiomPass(bodies.join(CHUNK_MARK), pieces.join(CHUNK_MARK), g, notes);
-  writeFileSync(`${base}.md`, `# ${titleTh}\n\n${ip.body}\n${notesBlock(ip.notes)}`);
+  const fin = await finishBody(ip.body, pieces.join(CHUNK_MARK), g);
+  writeFileSync(`${base}.md`, `# ${mechanicalFixes(titleTh).body}\n\n${fin.body}\n${notesBlock(ip.notes)}`);
   writeFileSync(`${base}.zh.md`, `# ${ch.title}\n\n${pieces.join(CHUNK_MARK)}\n`); // ต้นฉบับ — แสดงคู่ใน reader
   // แปลบทเก่าซ้ำ (--url) ต้องไม่ย้อนจุด --continue กลับไป
   if (prog.order.indexOf(ch.chapterId) === prog.order.length - 1) {
