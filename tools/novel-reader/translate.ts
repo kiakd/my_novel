@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { siteFor, SITES, type Chapter } from './sites.ts';
 import { emptyGlossary, merge, pronounRules, relevant, type Delta, type Glossary } from './glossary.ts';
-import { applyRule, candidates, mechanicalFixes, rulesFrom } from './pronoun-fix.ts';
+import { applyRule, candidates, mechanicalFixes, normalizeZhNumbers, rulesFrom } from './pronoun-fix.ts';
 
 const ROOT = import.meta.dirname;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -335,6 +335,7 @@ export function insane(th: string, source: string): string | null {
 }
 
 async function polish(draft: string, source: string, g: Glossary, hasTitle = false): Promise<string> {
+  source = normalizeZhNumbers(source);
   const note = hasTitle ? 'บรรทัดแรกคือชื่อบท — คงไว้เป็นบรรทัดแรกบรรทัดเดียว (เกลาถ้อยคำได้)\n\n' : '';
   const rel = relevant(g, source);
   const out = await chat(POLISH_SYSTEM + PROFILE, `${note}${pronounRules(rel)}GLOSSARY:\n${JSON.stringify(rel)}\n\nต้นฉบับ:\n${source}\n\nร่างคำแปล:\n${draft}`, 0.45, 'polish');
@@ -387,6 +388,7 @@ function parseNotes(t: string): Map<number, string> {
 }
 
 async function translateChunk(text: string, g: Glossary, title: string, prev?: string, hasTitle = false): Promise<{ th: string; delta: Delta; notes: Map<number, string> }> {
+  text = normalizeZhNumbers(text); // 8000万 → 80,000,000 ก่อนแปล (โมเดลแปลงหลักพลาดบ่อย) — ไฟล์ .zh.md ที่บันทึกยังเป็นต้นฉบับเดิม
   const ctx = relevant(g, text + title);
   const before = tailOf(prev);
   const user = `${pronounRules(ctx)}GLOSSARY ปัจจุบัน:\n${JSON.stringify(ctx)}\n\nบท: ${title}\n\n${hasTitle ? TITLE_NOTE + '\n\n' : ''}${before ? `ช่วงก่อนหน้า (บริบทเท่านั้น ห้ามแปลซ้ำ — ต้นฉบับด้านล่างเล่าต่อจากตรงนี้ ให้ประโยคแรกรับช่วงต่อได้ลื่น ไม่ขึ้นต้นเหมือนเริ่มฉากใหม่):\n${before}\n\n` : ''}ต้นฉบับ:\n${text}`;
@@ -455,6 +457,7 @@ export function missingTerms(terms: Record<string, string>, source: string, body
 }
 
 async function idiomPass(body: string, source: string, g: Glossary, notes: string[]): Promise<{ body: string; notes: string[]; added: number; fixed: number }> {
+  source = normalizeZhNumbers(source);
   const rel = relevant(g, source);
   const terms = rel.terms;
   // หน่วยเลขใหญ่ที่เขียนเป็นคำ (ไม่มีเลขอารบิกนำหน้า) ตรวจแบบเดียวกับศัพท์ — 千亿分之一 เคยออกมาเป็น "หนึ่งในพันล้าน" (ที่ถูก: แสนล้าน)

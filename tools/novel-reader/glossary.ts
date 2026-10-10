@@ -33,10 +33,12 @@ export function relevant(g: Glossary, text: string): Glossary {
 // (เรื่อง 45305: ตัวเอก self="ฉัน" แต่พอรอบข้างพูด ข้า กันหมด ก็ใช้ ข้า ตาม ราว 25 บรรทัดใน 10 ตอน)
 // ตัวรองที่ไม่มี self เคยผิดมากสุด (~1 จุด/ตอน แม้ใช้ Pro) → ส่งหลักประจำเรื่องให้เลือกตามบทบาทด้วย
 export function pronounRules(g: Glossary): string {
-  const rows = Object.values(g.characters).filter((c) => c.th && c.self).map((c) => `- ${c.th}${c.gender ? ` (${c.gender})` : ''}: ${c.self}`);
+  // ส่งคำบรรยาย (called ที่บอก "บรรยายใช้ …") ด้วย — เคยได้คำบรรยายเรียกตัวเอกว่า "ฉัน" เพราะรายการบอกแค่ self "ฉัน (ทั้งเรื่อง)"
+  const narr = (c: { called?: string }) => c.called?.match(/บรรยาย(?:ใช้)?\s*([^·(]+)/)?.[1].trim();
+  const rows = Object.values(g.characters).filter((c) => c.th && c.self).map((c) => `- ${c.th}${c.gender ? ` (${c.gender})` : ''}: ${c.self}${narr(c) ? ` · คำบรรยายเรียก ${narr(c)}` : ''}`);
   const defs = (g.pronouns ?? []).map((s) => `- ${s}`);
   if (!rows.length && !defs.length) return '';
-  return `คำแทนตัว/คำลงท้ายที่บังคับใช้ (สำคัญกว่าแนวเรื่อง ฉาก และสไตล์ — ห้ามเปลี่ยนแม้ตัวละครรอบข้างจะพูดแบบอื่น):\n${rows.join('\n')}${defs.length ? `${rows.length ? '\n' : ''}ตัวละครที่ไม่มีชื่อในรายการ ให้เลือกตามบทบาท:\n${defs.join('\n')}` : ''}\nดูผู้พูดจากต้นฉบับทุกบรรทัด แล้วใช้คำแทนตัว/คำลงท้ายของคนนั้น\n\n`;
+  return `คำแทนตัว/คำลงท้ายที่บังคับใช้ในบทพูดและความคิด (สำคัญกว่าแนวเรื่อง ฉาก และสไตล์ — ห้ามเปลี่ยนแม้ตัวละครรอบข้างจะพูดแบบอื่น ; คำบรรยายยังเป็นบุรุษที่ 3 เสมอ: เขา/เธอ/นาง หรือชื่อ):\n${rows.join('\n')}${defs.length ? `${rows.length ? '\n' : ''}ตัวละครที่ไม่มีชื่อในรายการ ให้เลือกตามบทบาท:\n${defs.join('\n')}` : ''}\nดูผู้พูดจากต้นฉบับทุกบรรทัด แล้วใช้คำแทนตัว/คำลงท้ายของคนนั้น\n\n`;
 }
 
 export type Delta ={ characters?: Record<string, Partial<Character>>; terms?: Record<string, string> };
