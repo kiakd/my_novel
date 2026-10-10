@@ -430,7 +430,8 @@ export function missingTerms(terms: Record<string, string>, source: string, body
   // ค่าในคลังที่มีตัวเลือก "วัสดุยา/สมุนไพร" → เจอตัวใดตัวหนึ่งก็นับว่าใช้ตามคลังแล้ว
   const used = (th: string) => th.split('/').map((s) => s.trim()).filter((s) => s.length >= 2).some((s) => body.includes(s));
   return Object.entries(terms).map(([zh, th]) => [zh, bare(th)] as [string, string])
-    .filter(([zh, th]) => zh.length >= 2 && th.length >= 2 && source.includes(zh) && !used(th) && standalone(zh))
+    // คำจีน 2 ตัว (专属 英雄 唯一 刷新) มักเป็นคำทั่วไปที่ความหมายเปลี่ยนตามบริบท — บังคับแล้วเคยได้ "เฉพาะบุคคล" ในที่ที่ควรเป็น "เฉพาะดินแดน"
+    .filter(([zh, th]) => zh.length >= 3 && th.length >= 2 && source.includes(zh) && !used(th) && standalone(zh))
     .slice(0, 30);
 }
 
