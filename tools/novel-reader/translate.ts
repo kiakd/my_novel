@@ -39,7 +39,9 @@ const PORT = opt('--port') ?? '9222';
 const HTTP = (opt('--fetch') ?? process.env.NR_FETCH ?? (process.platform === 'win32' ? 'chrome' : 'http')) === 'http';
 // แปลทั้งบทในคำขอเดียว (ได้ภาพรวมทั้งฉากก่อน แล้วค่อยเกลาทั้งบท) — บทจริงยาวสุด ~3.7k ตัวจีน
 // คำแปลไทยของบท 2k ตัวจีนราว 3k token ยังห่าง max_tokens 8000 ; เกินเพดานนี้ค่อยหั่น (กันชนเพดาน output)
-const CHUNK = 6000;
+// ขนาดชิ้นเป้าหมาย (อักษรจีน) — บทหนึ่ง ~2,500–3,500 ตัว → 2 ชิ้นแปลร่างขนานกัน (ร่าง ~30 วิ → ~15–18 วิ)
+// ชิ้นเล็กลง = เห็นบริบทน้อยลง (ชิ้นหลังเห็นแค่ท้ายชิ้นก่อน) ; ปรับได้ด้วย --chunk <จำนวน> (6000 = แบบเดิม ทั้งบทชิ้นเดียว)
+const CHUNK = Number(opt('--chunk') ?? process.env.NR_CHUNK ?? 2000);
 
 // ---------- env (ใช้ key เดียวกับ backend) ----------
 // .env ข้างไฟล์นี้ก่อน (OPENAI_API_KEY ฯลฯ — ตอนรันจาก command line ตรงๆ ไม่ผ่าน server.ts) แล้วค่อย novel/.env
@@ -351,7 +353,8 @@ const POLISH_SYSTEM = `คุณคือบรรณาธิการนิย
 - เงินจีนคงเป็น "หยวน" ห้ามเปลี่ยนเป็นบาท ; ตัวเลขต้องเป็นหลักไทยที่ถูก (六十万=หกแสน, 8000万=80 ล้าน)
 - สรรพนาม/คำแทนตัวตามรายการบังคับก่อน ไม่มีจึงดูเพศ ชื่อตาม GLOSSARY เป๊ะ
 - ภาษาไทยล้วน ห้ามมีอักษรจีน
-ตอบเฉพาะคำแปลที่เกลาแล้ว ไม่ต้องมีหัวข้อหรือคำอธิบาย
+รูปแบบคำตอบ: ร่างมีเลขย่อหน้า ⟦n⟧ — ตอบเฉพาะย่อหน้าที่แก้ บรรทัดละย่อหน้า ขึ้นต้นด้วยเลขเดิม ตามด้วยย่อหน้านั้นทั้งย่อหน้าที่เกลาแล้ว (เช่น ⟦12⟧ …)
+ย่อหน้าที่ดีอยู่แล้วไม่ต้องส่ง ; ถ้าไม่มีย่อหน้าไหนต้องแก้ ตอบว่า ไม่มีแก้ ; ไม่ต้องมีหัวข้อหรือคำอธิบาย
 
 ===== คลังความรู้สำนวน (ใช้ประกอบการเกลา — เลือกใช้ให้เข้ากับฉาก ไม่ต้องใส่ทุกข้อ) =====
 ${KNOWLEDGE}`;
@@ -375,26 +378,61 @@ export function insane(th: string, source: string): string | null {
 
 async function polish(draft: string, source: string, g: Glossary, hasTitle = false): Promise<string> {
   source = normalizeZhNumbers(source);
-  const note = hasTitle ? 'บรรทัดแรกคือชื่อบท — คงไว้เป็นบรรทัดแรกบรรทัดเดียว (เกลาถ้อยคำได้)\n\n' : '';
+  const note = hasTitle ? 'ย่อหน้า ⟦1⟧ คือชื่อบท — คงเป็นชื่อบทบรรทัดเดียว (เกลาถ้อยคำได้)\n\n' : '';
   const rel = relevant(g, source);
-  const out = await chat(POLISH_SYSTEM + PROFILE, `${note}${pronounRules(rel)}GLOSSARY:\n${JSON.stringify(rel)}\n\nต้นฉบับ:\n${source}\n\nร่างคำแปล:\n${draft}`, 0.45, 'polish');
-  let th = out.trim().replace(/^=== TRANSLATION ===\s*/, '');
-  // เครื่องหมายหมายเหตุสำนวน [^n]: ตัดตัวที่เกลาเพิ่มเอง; ทำตัวเดิมหาย → ใช้ร่างเดิม (หมายเหตุท้ายบทจะไม่มีที่อ้าง)
-  const had = new Set(draft.match(/\[\^\d+\]/g) ?? []);
-  th = th.replace(/\[\^\d+\]/g, (m) => (had.has(m) ? m : ''));
-  const kept = [...had].every((m) => th.includes(m));
-  // เกลาแล้วผิดรูป/สั้นลงมาก → ใช้ร่างเดิม
-  if (!(kept && th.length > draft.length * 0.7 && !insane(th, source))) return draft;
-  // ตัวกันความหมาย (โค้ดล้วน): เกลาแล้วมีคำถามเพิ่มเกินต้นฉบับ (ประโยคบอกเล่ากลายเป็นคำถาม) หรือศัพท์หลุดคลังเพิ่ม → ใช้ร่าง
+  // ส่งเฉพาะย่อหน้าที่แก้ (เดิมเขียนใหม่ทั้งบท ~3,200 token ขาออก ≈ 20 วิ) — ย่อหน้าที่ไม่ส่งมาคงตามร่าง
+  // ต้นฉบับมีเลขเดียวกับร่างเมื่อย่อหน้าเท่ากัน → โมเดลเทียบได้ทีละย่อหน้า
+  const dParas = paraLines(draft);
+  const aligned = paraLines(source).length === dParas.length;
+  const out = await chat(POLISH_SYSTEM + PROFILE, `${note}${pronounRules(rel)}GLOSSARY:\n${JSON.stringify(rel)}\n\nต้นฉบับ${aligned ? ' (เลขย่อหน้าตรงกับร่าง)' : ''}:\n${aligned ? numberParas(source) : source}\n\nร่างคำแปล:\n${numberParas(draft)}`, 0.45, 'polish');
+  const edits = parseNumbered(out.trim().replace(/^=== TRANSLATION ===\s*/, ''), dParas.length).got;
+  const srcParas = paraLines(source);
   const q = (s: string) => (s.match(/[?？]/g) ?? []).length;
-  if (q(th) > q(draft) && q(th) > q(source)) return draft;
+  const paras = dParas.map((d, i) => {
+    const e = edits.get(i + 1)?.trim();
+    if (!e || e === d) return d;
+    // เครื่องหมายหมายเหตุ [^n]: ต้องอยู่ครบ ห้ามเพิ่ม ; สั้นลงมาก/ผิดรูป → ใช้ร่าง
+    const had = d.match(/\[\^\d+\]/g) ?? [];
+    if (!had.every((m) => e.includes(m)) || (e.match(/\[\^\d+\]/g) ?? []).length > had.length) return d;
+    if (e.length < d.length * 0.6 || e.length > d.length * 2 + 40 || /[一-鿿]/.test(e)) return d;
+    // ตัวกันความหมาย: ย่อหน้าบอกเล่ากลายเป็นคำถาม (เทียบต้นฉบับย่อหน้าเดียวกันเมื่อเรียงตรง)
+    if (q(e) > q(d) && (!aligned || q(e) > q(srcParas[i] ?? ''))) return d;
+    return e;
+  });
+  const th = paras.join('\n\n');
+  if (insane(th, source)) return draft;
   if (missingTerms(rel.terms, source, th).length > missingTerms(rel.terms, source, draft).length) return draft;
   return th;
 }
 
+// ---------- เลขย่อหน้า ⟦n⟧ ----------
+// ส่งต้นฉบับ/ร่างแบบมีเลขย่อหน้า แล้วบังคับให้ตอบเลขเดิม: โมเดลรวมย่อหน้าบ่อย (GPT-5.6 Luna ~2 จุด/ตอน, เคย 98/109 ย่อหน้า)
+// พอจำนวนย่อหน้าไม่ตรง ตัวแก้สรรพนาม/การจับคู่ต้นฉบับในหน้าอ่านใช้ไม่ได้ทั้งบท
+const PARA_TAG = /^\s*⟦(\d+)⟧\s?/;
+const paraLines = (t: string) => t.split('\n').map((l) => l.trim()).filter(Boolean);
+export const numberParas = (t: string) => paraLines(t).map((l, i) => `⟦${i + 1}⟧ ${l}`).join('\n\n');
+// คืนย่อหน้าตามเลข (บรรทัดไม่มีเลขต่อท้ายย่อหน้าก่อนหน้า) ; ok = ครบ 1..n ไม่มีเกิน
+export function parseNumbered(t: string, n: number): { paras: string[]; ok: boolean; got: Map<number, string> } {
+  const got = new Map<number, string>();
+  let cur = 0;
+  let lead = ''; // ข้อความก่อนเลขแรก — โมเดลมักเขียนชื่อบท (⟦1⟧) โดยไม่ใส่เลข
+  for (const line of t.split('\n')) {
+    const m = line.match(PARA_TAG);
+    if (m) { cur = Number(m[1]); got.set(cur, ((got.get(cur) ?? '') + ' ' + line.replace(PARA_TAG, '')).trim()); }
+    else if (line.trim() && cur) got.set(cur, `${got.get(cur)} ${line.trim()}`);
+    else if (line.trim()) lead = `${lead} ${line.trim()}`.trim();
+  }
+  if (lead && !got.has(1) && got.size) got.set(1, lead);
+  const paras = Array.from({ length: n }, (_, i) => got.get(i + 1) ?? '');
+  const ok = paras.every(Boolean) && [...got.keys()].every((k) => k >= 1 && k <= n);
+  return { paras, ok, got };
+}
+const stripTags = (t: string) => t.split('\n').map((l) => l.replace(PARA_TAG, '')).join('\n');
+
 // ท้ายชิ้นก่อนหน้า (ต้นฉบับ) — ให้แต่ละชิ้นรู้ว่าเล่าต่อจากอะไร รอยต่อระหว่างชิ้นจะได้ไม่ขาดห้วน แต่ยังแปลขนานได้
 const tailOf = (prev?: string) => (prev ? prev.split('\n').filter((l) => l.trim()).slice(-3).join('\n').slice(-400) : '');
 
+const NUM_NOTE = 'ต้นฉบับมีเลขย่อหน้า ⟦n⟧ — ในส่วน TRANSLATION ให้ขึ้นต้นทุกย่อหน้าด้วยเลขเดียวกับต้นฉบับ ย่อหน้าละเลข ครบทุกเลขตามลำดับ (ห้ามรวม แยก หรือข้ามย่อหน้า แม้ย่อหน้าจะสั้นมาก)';
 const TITLE_NOTE = 'บรรทัดแรกของต้นฉบับคือชื่อบท — ให้บรรทัดแรกของคำแปลเป็นชื่อบทที่แปลแล้ว (บรรทัดเดียว) แล้วจึงตามด้วยเนื้อหา';
 
 // แยกคำแปล/GLOSSARY จากคำตอบ ; โมเดลลืม marker บ้าง → ตัดบรรทัด === ออกแล้วใช้คำแปลได้เลย (ข้ามคลังส่วนนี้)
@@ -431,12 +469,18 @@ async function translateChunk(text: string, g: Glossary, title: string, prev?: s
   text = normalizeZhNumbers(text); // 8000万 → 80,000,000 ก่อนแปล (โมเดลแปลงหลักพลาดบ่อย) — ไฟล์ .zh.md ที่บันทึกยังเป็นต้นฉบับเดิม
   const ctx = relevant(g, text + title);
   const before = tailOf(prev);
-  const user = `${pronounRules(ctx)}GLOSSARY ปัจจุบัน:\n${JSON.stringify(ctx)}\n\nบท: ${title}\n\n${hasTitle ? TITLE_NOTE + '\n\n' : ''}${before ? `ช่วงก่อนหน้า (บริบทเท่านั้น ห้ามแปลซ้ำ — ต้นฉบับด้านล่างเล่าต่อจากตรงนี้ ให้ประโยคแรกรับช่วงต่อได้ลื่น ไม่ขึ้นต้นเหมือนเริ่มฉากใหม่):\n${before}\n\n` : ''}ต้นฉบับ:\n${text}`;
+  const user = `${pronounRules(ctx)}GLOSSARY ปัจจุบัน:\n${JSON.stringify(ctx)}\n\nบท: ${title}\n\n${hasTitle ? TITLE_NOTE + '\n\n' : ''}${before ? `ช่วงก่อนหน้า (บริบทเท่านั้น ห้ามแปลซ้ำ — ต้นฉบับด้านล่างเล่าต่อจากตรงนี้ ให้ประโยคแรกรับช่วงต่อได้ลื่น ไม่ขึ้นต้นเหมือนเริ่มฉากใหม่):\n${before}\n\n` : ''}${NUM_NOTE}\n\nต้นฉบับ:\n${numberParas(text)}`;
+  const nSrc = paraLines(text).length;
   let th = '';
   let gl = '{}';
   let notes = '';
   for (let attempt = 1; attempt <= 3; attempt++) {
     ({ th, gl, notes } = parseAnswer(await chat(SYSTEM + PROFILE, user, attempt === 1 ? 0.5 : 0.4, attempt === 1 ? 'translate' : 'translate-retry')));
+    // เลขย่อหน้าครบ → ย่อหน้าละบรรทัดตรงต้นฉบับ ; ไม่ครบ (รวม/ข้าม) → ตัดเลขทิ้งใช้ตามที่ได้
+    // (ไม่ขอแปลใหม่: ทดสอบแล้วโมเดลรวมย่อหน้าเดิมซ้ำทุกครั้ง เสียเวลาเปล่า ~40 วิ/ครั้ง)
+    const num = parseNumbered(th, nSrc);
+    if (num.ok) th = num.paras.join('\n\n');
+    else { th = stripTags(th); console.error(`ย่อหน้าไม่ครบ (${num.got.size}/${nSrc}) — ใช้แบบไม่มีเลข`); }
     const bad = insane(th.trim(), text);
     if (!bad) break;
     console.error(`แปลผิดรูป (${bad}) — ลองใหม่ ${attempt}/3`);
@@ -594,11 +638,15 @@ function joinBroken(paras: string[]): string[] {
   return out;
 }
 
+// แบ่งเท่าๆ กัน (เดิมตัดแบบเติมจนเต็ม → บท 2,000 ตัวได้ชิ้น 1,800+200 ซึ่งไม่ช่วยให้เร็วขึ้น)
 function chunk(paras: string[]): string[] {
+  const total = paras.reduce((n, p) => n + p.length, 0);
+  const k = Math.max(1, Math.ceil(total / CHUNK));
+  const size = total / k;
   const out: string[] = [];
   let cur = '';
   for (const p of paras) {
-    if (cur && cur.length + p.length > CHUNK) { out.push(cur); cur = ''; }
+    if (cur && out.length < k - 1 && cur.length + p.length / 2 > size) { out.push(cur); cur = ''; }
     cur += (cur ? '\n\n' : '') + p;
   }
   if (cur) out.push(cur);
