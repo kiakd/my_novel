@@ -17,6 +17,7 @@ import { HttpPage } from './http-page.ts';
 import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { siteFor, SITES, type Chapter } from './sites.ts';
 import { emptyGlossary, merge, pronounRules, relevant, type Delta, type Glossary } from './glossary.ts';
 import { applyRule, candidates, mechanicalFixes, normalizeZhNumbers, rulesFrom } from './pronoun-fix.ts';
@@ -162,10 +163,13 @@ const USAGE = { calls: 0, hit: 0, miss: 0, out: 0 };
 // บันทึกทุกคำขอ AI ลง library/usage.jsonl ไว้วิเคราะห์ว่าเงินไปหมดที่ขั้นไหน (ดูสรุปที่ /usage ในเว็บ)
 // CTX = งานที่กำลังทำ: mode new|retranslate|repolish|check|fix, ch = เลขตอน
 const CTX = { book: '', ch: 0, mode: '' };
+// แปลแบบสายพาน: ขั้นเกลาของบท N รันพร้อมร่างของบท N+1 → เก็บ CTX แยกต่อบท ไม่งั้น log ติดเลขตอนผิด
+const CTX_ALS = new AsyncLocalStorage<typeof CTX>();
+const ctxNow = () => CTX_ALS.getStore() ?? CTX;
 const USAGE_LOG = join(LIB, 'usage.jsonl');
 function logUsage(stage: string, ms: number, u?: { prompt_cache_hit_tokens?: number; prompt_cache_miss_tokens?: number; prompt_tokens?: number; completion_tokens?: number }, err?: string) {
   const row = {
-    t: new Date().toISOString(), book: CTX.book, ch: CTX.ch, mode: CTX.mode || 'other', stage, provider: PROVIDER, model: MODEL, ms,
+    t: new Date().toISOString(), book: ctxNow().book, ch: ctxNow().ch, mode: ctxNow().mode || 'other', stage, provider: PROVIDER, model: MODEL, ms,
     hit: u?.prompt_cache_hit_tokens ?? 0, miss: u?.prompt_cache_miss_tokens ?? u?.prompt_tokens ?? 0, out: u?.completion_tokens ?? 0, ...(err ? { err } : {}),
   };
   try { mkdirSync(LIB, { recursive: true }); appendFileSync(USAGE_LOG, JSON.stringify(row) + '\n'); } catch {}
@@ -387,7 +391,8 @@ function parseNotes(t: string): Map<number, string> {
   return map;
 }
 
-async function translateChunk(text: string, g: Glossary, title: string, prev?: string, hasTitle = false): Promise<{ th: string; delta: Delta; notes: Map<number, string> }> {
+// polishToo=false: คืนแค่ร่าง (ผ่าน fixCJK) — ผู้เรียกเกลาเองทีหลังด้วย polishChunk (สายพานในลูปแปลบทใหม่)
+async function translateChunk(text: string, g: Glossary, title: string, prev?: string, hasTitle = false, polishToo = true): Promise<{ th: string; delta: Delta; notes: Map<number, string> }> {
   text = normalizeZhNumbers(text); // 8000万 → 80,000,000 ก่อนแปล (โมเดลแปลงหลักพลาดบ่อย) — ไฟล์ .zh.md ที่บันทึกยังเป็นต้นฉบับเดิม
   const ctx = relevant(g, text + title);
   const before = tailOf(prev);
@@ -407,8 +412,13 @@ async function translateChunk(text: string, g: Glossary, title: string, prev?: s
   if (process.env.NR_DEBUG) appendFileSync(join(ROOT, 'glossary-debug.log'), gl + '\n----\n');
   if (process.env.NR_DEBUG_RAW) appendFileSync(process.env.NR_DEBUG_RAW, `===== TH\n${th}\n===== NOTES\n${notes}\n`);
   const draft = await fixCJK(th.trim(), text, g);
-  const final = flag('--no-polish') ? draft : await fixCJK(await polish(draft, text, g, hasTitle), text, g);
+  const final = polishToo ? await polishChunk(draft, text, g, hasTitle) : draft;
   return { th: final.replaceAll('บทหยวน', 'บทบาท'), delta, notes: parseNotes(notes) }; // 起着…作用 เคยหลุดเป็น "บทหยวน"
+}
+async function polishChunk(draft: string, text: string, g: Glossary, hasTitle = false): Promise<string> {
+  if (flag('--no-polish')) return draft;
+  const src = normalizeZhNumbers(text);
+  return (await fixCJK(await polish(draft, src, g, hasTitle), src, g)).replaceAll('บทหยวน', 'บทบาท');
 }
 
 const CHUNK_MARK = '\n\n<!-- chunk -->\n\n';
@@ -1038,6 +1048,7 @@ const done: string[] = [];
 let ch: Chapter = await extractChapter(page);
 let bookId = ch.bookId;
 
+let tail: Promise<void> = Promise.resolve();
 for (let i = 0; i < N; i++) {
   if (!ch.paragraphs.length) fail(`ดึงเนื้อหาบทไม่ได้: ${page.url()}`);
   const dir = bookDir(ch.bookId);
@@ -1051,60 +1062,95 @@ for (let i = 0; i < N; i++) {
   const prog = readJson<Progress>(pPath, { bookTitle: ch.bookTitle, order: [] });
   prog.bookTitle ||= ch.bookTitle;
   const known = prog.order.indexOf(ch.chapterId);
-  Object.assign(CTX, { book: ch.bookId, ch: known >= 0 ? known + 1 : prog.order.length + 1, mode: known >= 0 ? 'retranslate' : 'new' });
+  const ctx = { book: ch.bookId, ch: known >= 0 ? known + 1 : prog.order.length + 1, mode: known >= 0 ? 'retranslate' : 'new' };
+  Object.assign(CTX, ctx);
   const chapterUrl = page.url(); // เก็บไว้ก่อน prefetch พาแท็บไปบทถัดไป
+  const cur = ch;
 
   // prefetch: ขณะแปลบทนี้ ให้แท็บไปโหลดบทถัดไปรอเลย
   const hasNext = i + 1 < N && ch.nextUrl;
   const nav = hasNext ? page.goto(ch.nextUrl!, { waitUntil: 'domcontentloaded' }).then(() => waitContent(page)) : null;
 
-  // แปลทุกชิ้นขนานกัน (ใช้ glossary snapshot เดียวกัน) แล้วค่อย merge
-  const pieces = chunk(joinBroken(ch.paragraphs));
-  // ชื่อบทไปเป็นบรรทัดแรกของชิ้นแรก (ไม่แยกคำขอ) → ปกติทั้งบทคือ 1 คำขอแปล + 1 คำขอเกลา
-  const results = await Promise.all(pieces.map((p, i) => translateChunk(i === 0 ? `${ch.title}\n\n${p}` : p, g, ch.title, i > 0 ? pieces[i - 1] : undefined, i === 0)));
-  const [first, ...rest] = results[0].th.split('\n');
-  let titleTh = first.trim();
-  // ชื่อบทไทยบางเรื่องยาวเกิน 80 ตัว (มีวงเล็บท้าย "(ขอสมัครสมาชิก)") — เคยตกไปทางแปลชื่อแยก แต่บรรทัดชื่อบทยังค้างในเนื้อ → หัวบทซ้ำ
-  const looksTitle = /^(บทที่|ตอนที่)\s*\d+/.test(titleTh);
-  if (titleTh && (titleTh.length <= 80 || looksTitle) && !/[一-鿿]/.test(titleTh)) results[0].th = rest.join('\n').trim();
-  else {
-    titleTh = (await translateChunk(ch.title, g, ch.title)).th.split('\n')[0]; // โมเดลไม่ได้แยกชื่อบทไว้บรรทัดแรก → แปลชื่อแยก
-    if (looksTitle) results[0].th = rest.join('\n').trim(); // บรรทัดแรกเป็นชื่อบท (มีอักษรจีนปน) → ทิ้ง ไม่ให้ซ้ำกับหัวบท
-  }
-  for (const r of results) newChars.push(...merge(g, r.delta));
+  // สายพาน 2 ขั้น: ร่าง (+ merge ตัวละครใหม่เข้าคลัง) ต้องเสร็จก่อนร่างบทถัดไป
+  // ส่วนเกลา/สำนวน/สรรพนาม (~ครึ่งเวลาต่อบท) รันซ้อนกับร่างบทถัดไป — เร็วขึ้นเกือบเท่าตัว ค่าใช้จ่ายเท่าเดิม
+  const draftPart = await CTX_ALS.run(ctx, async () => {
+    // แปลทุกชิ้นขนานกัน (ใช้ glossary snapshot เดียวกัน) แล้วค่อย merge
+    const pieces = chunk(joinBroken(cur.paragraphs));
+    const srcOf = (k: number) => (k === 0 ? `${cur.title}\n\n${pieces[0]}` : pieces[k]);
+    // ชื่อบทไปเป็นบรรทัดแรกของชิ้นแรก (ไม่แยกคำขอ) → ปกติทั้งบทคือ 1 คำขอแปล + 1 คำขอเกลา
+    const results = await Promise.all(pieces.map((_, k) => translateChunk(srcOf(k), g, cur.title, k > 0 ? pieces[k - 1] : undefined, k === 0, false)));
+    const [first, ...rest] = results[0].th.split('\n');
+    let titleTh = first.trim();
+    // ชื่อบทไทยบางเรื่องยาวเกิน 80 ตัว (มีวงเล็บท้าย "(ขอสมัครสมาชิก)") — เคยตกไปทางแปลชื่อแยก แต่บรรทัดชื่อบทยังค้างในเนื้อ → หัวบทซ้ำ
+    const looksTitle = /^(บทที่|ตอนที่)\s*\d+/.test(titleTh);
+    // ชื่อบทดี → คงไว้ในร่างให้ขั้นเกลา (hasTitle) แล้วค่อยตัดออกหลังเกลา เหมือนเดิมที่เกลาทั้งชื่อ+เนื้อ
+    let titleInDraft = false;
+    if (titleTh && (titleTh.length <= 80 || looksTitle) && !/[一-鿿]/.test(titleTh)) titleInDraft = true;
+    else {
+      titleTh = (await translateChunk(cur.title, g, cur.title)).th.split('\n')[0]; // โมเดลไม่ได้แยกชื่อบทไว้บรรทัดแรก → แปลชื่อแยก
+      if (looksTitle) results[0].th = rest.join('\n').trim(); // บรรทัดแรกเป็นชื่อบท (มีอักษรจีนปน) → ทิ้ง ไม่ให้ซ้ำกับหัวบท
+    }
+    for (const r of results) newChars.push(...merge(g, r.delta));
+    return { pieces, srcOf, results, titleTh, titleInDraft };
+  });
 
-  if (!prog.order.includes(ch.chapterId)) prog.order.push(ch.chapterId);
-  // ตั้งชื่อตามลำดับบท: chapter1.md, chapter2.md, …
-  const base = join(dir, 'chapters', `chapter${prog.order.indexOf(ch.chapterId) + 1}`);
-  // เลขหมายเหตุของแต่ละก้อนเริ่ม 1 → เรียงเลขใหม่ต่อกันทั้งบท; เครื่องหมายที่ไม่มีคำอธิบายตัดทิ้ง
-  const notes: string[] = [];
-  const bodies = results.map((r) => r.th.replace(/\[\^(\d+)\]/g, (_, d) => {
-    const t = r.notes.get(Number(d));
-    if (!t) return '';
-    notes.push(`[^${notes.length + 1}]: ${t}`);
-    return `[^${notes.length}]`;
-  }));
-  // รอบหมายเหตุสำนวน + คำสำคัญประจำเรื่อง (ปิดด้วย --no-notes)
-  const ip = flag('--no-notes') ? { body: bodies.join(CHUNK_MARK), notes, added: 0, fixed: 0 } : await idiomPass(bodies.join(CHUNK_MARK), pieces.join(CHUNK_MARK), g, notes);
-  const fin = await finishBody(ip.body, pieces.join(CHUNK_MARK), g);
-  writeFileSync(`${base}.md`, `# ${mechanicalFixes(titleTh).body}\n\n${fin.body}\n${notesBlock(ip.notes)}`);
-  writeFileSync(`${base}.zh.md`, `# ${ch.title}\n\n${pieces.join(CHUNK_MARK)}\n`); // ต้นฉบับ — แสดงคู่ใน reader
-  // แปลบทเก่าซ้ำ (--url) ต้องไม่ย้อนจุด --continue กลับไป
-  if (prog.order.indexOf(ch.chapterId) === prog.order.length - 1) {
-    prog.lastUrl = chapterUrl;
-    prog.nextUrl = ch.nextUrl;
-  }
+  // ลำดับบท + คลัง บันทึกทันที (บทถัดไปอ่านจากไฟล์) ; lastUrl/nextUrl รอจนบทนี้เขียนไฟล์เสร็จ
+  if (!prog.order.includes(cur.chapterId)) prog.order.push(cur.chapterId);
+  const num = prog.order.indexOf(cur.chapterId) + 1;
+  const isLast = num === prog.order.length; // ดูตอนนี้ — ตอนเกลาเสร็จ บทถัดไปต่อท้าย order ไปแล้ว
   writeJson(gPath, g);
   writeJson(pPath, prog);
-  buildReader(ch.bookId, prog);
-  lines.push(`✓ บทที่ ${prog.order.indexOf(ch.chapterId) + 1}: ${titleTh}`);
-  done.push(ch.chapterId);
-  bookId = ch.bookId;
+
+  await tail; // ค้างเกลาได้ทีละ 1 บท → ไฟล์และ progress เขียนตามลำดับบท
+  tail = CTX_ALS.run(ctx, async () => {
+    const { pieces, srcOf, results, titleInDraft } = draftPart;
+    let titleTh = draftPart.titleTh;
+    const polished = await Promise.all(results.map((r, k) => polishChunk(r.th, srcOf(k), g, k === 0 && titleInDraft)));
+    polished.forEach((t, k) => (results[k].th = t));
+    if (titleInDraft) {
+      const [first, ...rest] = results[0].th.split('\n');
+      const t = first.trim();
+      // ชื่อบทที่เกลาแล้ว (เกณฑ์เดียวกับข้างบน) ; ถ้าขั้นเกลาทำบรรทัดชื่อหาย ห้ามตัดเนื้อบรรทัดแรกทิ้ง
+      if (t && (t.length <= 80 || /^(บทที่|ตอนที่)\s*\d+/.test(t)) && !/[一-鿿]/.test(t)) { titleTh = t; results[0].th = rest.join('\n').trim(); }
+      else if (/^(บทที่|ตอนที่)\s*\d+/.test(t) || t === titleTh) results[0].th = rest.join('\n').trim();
+    }
+    // ตั้งชื่อตามลำดับบท: chapter1.md, chapter2.md, …
+    const base = join(dir, 'chapters', `chapter${num}`);
+    // เลขหมายเหตุของแต่ละก้อนเริ่ม 1 → เรียงเลขใหม่ต่อกันทั้งบท; เครื่องหมายที่ไม่มีคำอธิบายตัดทิ้ง
+    const notes: string[] = [];
+    const bodies = results.map((r) => r.th.replace(/\[\^(\d+)\]/g, (_, d) => {
+      const t = r.notes.get(Number(d));
+      if (!t) return '';
+      notes.push(`[^${notes.length + 1}]: ${t}`);
+      return `[^${notes.length}]`;
+    }));
+    // รอบหมายเหตุสำนวน + คำสำคัญประจำเรื่อง (ปิดด้วย --no-notes)
+    const ip = flag('--no-notes') ? { body: bodies.join(CHUNK_MARK), notes, added: 0, fixed: 0 } : await idiomPass(bodies.join(CHUNK_MARK), pieces.join(CHUNK_MARK), g, notes);
+    const fin = await finishBody(ip.body, pieces.join(CHUNK_MARK), g);
+    writeFileSync(`${base}.md`, `# ${mechanicalFixes(titleTh).body}\n\n${fin.body}\n${notesBlock(ip.notes)}`);
+    writeFileSync(`${base}.zh.md`, `# ${cur.title}\n\n${pieces.join(CHUNK_MARK)}\n`); // ต้นฉบับ — แสดงคู่ใน reader
+    // idiomPass อาจเพิ่มศัพท์ลงคลัง → อ่านไฟล์ล่าสุด (บทถัดไปอาจ merge ไปแล้ว) แล้วเติมเฉพาะคำที่ยังไม่มี
+    const latest = readJson<Glossary>(gPath, emptyGlossary());
+    for (const [zh, th] of Object.entries(g.terms)) if (!latest.terms[zh]) latest.terms[zh] = th;
+    writeJson(gPath, latest);
+    const p2 = readJson<Progress>(pPath, prog);
+    // แปลบทเก่าซ้ำ (--url) ต้องไม่ย้อนจุด --continue กลับไป
+    if (isLast) {
+      p2.lastUrl = chapterUrl;
+      p2.nextUrl = cur.nextUrl;
+    }
+    writeJson(pPath, p2);
+    buildReader(cur.bookId, p2);
+    lines.push(`✓ บทที่ ${num}: ${titleTh}`);
+    done.push(cur.chapterId);
+  });
+  bookId = cur.bookId;
 
   if (!hasNext) break;
   await nav;
   ch = await extractChapter(page);
 }
+await tail;
 
 const report = await checkBook(bookId, done); // ตรวจเฉพาะบทที่เพิ่งแปลรอบนี้
 const g = readJson<Glossary>(join(bookDir(bookId), 'glossary.json'), emptyGlossary());
