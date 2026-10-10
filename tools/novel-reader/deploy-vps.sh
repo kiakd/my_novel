@@ -39,7 +39,7 @@ DIR=$1
 export PATH=/opt/node/bin:$PATH
 cd "$DIR"
 old=$(sha1sum package.json 2>/dev/null | cut -d' ' -f1 || true)
-for f in .incoming/*.ts .incoming/package.json; do cp "$f" .; done
+for f in .incoming/*.ts .incoming/package.json .incoming/senses.json; do [ -f "$f" ] && cp "$f" .; done
 for d in style translators; do rm -rf "$d" && mv ".incoming/$d" .; done
 if [ -d .incoming/library ]; then
   # สลับทั้งก้อน แต่เก็บกุญแจ session ของ VPS ไว้ (ไม่งั้นทุกคนหลุดล็อกอิน)
