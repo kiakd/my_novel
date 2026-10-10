@@ -18,7 +18,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, statSy
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { siteFor, SITES, type Chapter } from './sites.ts';
-import { emptyGlossary, merge, relevant, type Delta, type Glossary } from './glossary.ts';
+import { emptyGlossary, merge, pronounRules, relevant, type Delta, type Glossary } from './glossary.ts';
 
 const ROOT = import.meta.dirname;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -320,7 +320,8 @@ export function insane(th: string, source: string): string | null {
 
 async function polish(draft: string, source: string, g: Glossary, hasTitle = false): Promise<string> {
   const note = hasTitle ? 'บรรทัดแรกคือชื่อบท — คงไว้เป็นบรรทัดแรกบรรทัดเดียว (เกลาถ้อยคำได้)\n\n' : '';
-  const out = await chat(POLISH_SYSTEM + PROFILE, `${note}GLOSSARY:\n${JSON.stringify(relevant(g, source))}\n\nต้นฉบับ:\n${source}\n\nร่างคำแปล:\n${draft}`, 0.6, 'polish');
+  const rel = relevant(g, source);
+  const out = await chat(POLISH_SYSTEM + PROFILE, `${note}${pronounRules(rel)}GLOSSARY:\n${JSON.stringify(rel)}\n\nต้นฉบับ:\n${source}\n\nร่างคำแปล:\n${draft}`, 0.6, 'polish');
   let th = out.trim().replace(/^=== TRANSLATION ===\s*/, '');
   // เครื่องหมายหมายเหตุสำนวน [^n]: ตัดตัวที่เกลาเพิ่มเอง; ทำตัวเดิมหาย → ใช้ร่างเดิม (หมายเหตุท้ายบทจะไม่มีที่อ้าง)
   const had = new Set(draft.match(/\[\^\d+\]/g) ?? []);
@@ -367,7 +368,7 @@ function parseNotes(t: string): Map<number, string> {
 async function translateChunk(text: string, g: Glossary, title: string, prev?: string, hasTitle = false): Promise<{ th: string; delta: Delta; notes: Map<number, string> }> {
   const ctx = relevant(g, text + title);
   const before = tailOf(prev);
-  const user = `GLOSSARY ปัจจุบัน:\n${JSON.stringify(ctx)}\n\nบท: ${title}\n\n${hasTitle ? TITLE_NOTE + '\n\n' : ''}${before ? `ช่วงก่อนหน้า (บริบทเท่านั้น ห้ามแปลซ้ำ — ต้นฉบับด้านล่างเล่าต่อจากตรงนี้ ให้ประโยคแรกรับช่วงต่อได้ลื่น ไม่ขึ้นต้นเหมือนเริ่มฉากใหม่):\n${before}\n\n` : ''}ต้นฉบับ:\n${text}`;
+  const user = `${pronounRules(ctx)}GLOSSARY ปัจจุบัน:\n${JSON.stringify(ctx)}\n\nบท: ${title}\n\n${hasTitle ? TITLE_NOTE + '\n\n' : ''}${before ? `ช่วงก่อนหน้า (บริบทเท่านั้น ห้ามแปลซ้ำ — ต้นฉบับด้านล่างเล่าต่อจากตรงนี้ ให้ประโยคแรกรับช่วงต่อได้ลื่น ไม่ขึ้นต้นเหมือนเริ่มฉากใหม่):\n${before}\n\n` : ''}ต้นฉบับ:\n${text}`;
   let th = '';
   let gl = '{}';
   let notes = '';
@@ -822,7 +823,8 @@ if (opt('--fix')) {
     return `### ย่อหน้า ${p}\nย่อหน้าก่อน: ${flat[p - 2]?.l ?? '-'}\nย่อหน้านี้: ${x.l}\nย่อหน้าถัดไป: ${flat[p]?.l ?? '-'}\nต้นฉบับ: ${src}\nผู้อ่านบอกว่า: ${note?.trim() || '(ไม่ได้ระบุ — หาจุดผิด/แข็งเอง)'}`;
   });
   if (!blocks.length) fail('ไม่พบย่อหน้าที่เลือก');
-  const user = `GLOSSARY:\n${JSON.stringify(relevant(g, srcs.join('\n') + items.map((it) => flat[it.p - 1].l).join('\n')))}\n\n${blocks.join('\n\n')}`;
+  const rel = relevant(g, srcs.join('\n') + items.map((it) => flat[it.p - 1].l).join('\n'));
+  const user = `${pronounRules(rel)}GLOSSARY:\n${JSON.stringify(rel)}\n\n${blocks.join('\n\n')}`;
   let fixes: { p: number; th: string; why?: string }[] = [];
   for (let attempt = 1; attempt <= 2 && !fixes.length; attempt++) {
     const out = await chat(FIX_PARA_SYSTEM + PROFILE, user, 0.4, 'fix-para');
