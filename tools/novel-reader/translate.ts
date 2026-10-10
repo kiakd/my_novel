@@ -427,8 +427,10 @@ export function missingTerms(terms: Record<string, string>, source: string, body
   // ไม่งั้นโมเดลจะ "แก้" คำยาวที่ถูกอยู่แล้วให้พัง (คลังมีคู่สั้น/ยาวที่ตั้งใจให้ต่างกันหลายสิบคู่)
   const keys = Object.keys(terms).sort((a, b) => b.length - a.length);
   const standalone = (zh: string) => keys.filter((k) => k.length > zh.length && k.includes(zh)).reduce((s, k) => s.split(k).join('\u0000'), source).includes(zh);
+  // ค่าในคลังที่มีตัวเลือก "วัสดุยา/สมุนไพร" → เจอตัวใดตัวหนึ่งก็นับว่าใช้ตามคลังแล้ว
+  const used = (th: string) => th.split('/').map((s) => s.trim()).filter((s) => s.length >= 2).some((s) => body.includes(s));
   return Object.entries(terms).map(([zh, th]) => [zh, bare(th)] as [string, string])
-    .filter(([zh, th]) => zh.length >= 2 && th.length >= 2 && source.includes(zh) && !body.includes(th) && standalone(zh))
+    .filter(([zh, th]) => zh.length >= 2 && th.length >= 2 && source.includes(zh) && !used(th) && standalone(zh))
     .slice(0, 30);
 }
 
