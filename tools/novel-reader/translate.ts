@@ -120,7 +120,7 @@ ${STYLE}
   (1) มีสำนวนไทยน้ำหนักเท่ากันที่คนไทยใช้จริง (一箭双雕=ยิงปืนนัดเดียวได้นกสองตัว, 引狼入室=ชักศึกเข้าบ้าน) → ใช้สำนวนไทย ไม่มีหมายเหตุ
   (2) สำนวนที่มีภาพเปรียบ/ที่มาเฉพาะแบบจีน ไม่มีสำนวนไทยตรงกัน (井底之蛙, 画蛇添足, 卧薪尝胆, 塞翁失马) → คงภาพแบบจีนไว้ แปลเป็นถ้อยคำไทยสละสลวย (เช่น "กบในก้นบ่อ" "วาดงูเติมขา") แล้วต่อท้ายสำนวนทันทีด้วยเครื่องหมาย [^1] [^2] … และอธิบายความหมายในส่วน NOTES
   (3) คำสี่พยางค์ที่ใช้เป็นคำบรรยายธรรมดา (一模一样, 莫名其妙, 目瞪口呆) และมุกอินเทอร์เน็ต/คำแสลงสมัยใหม่ → แปลตามความหมายเป็นไทยธรรมดา ไม่มีหมายเหตุ
-  ใส่หมายเหตุเฉพาะจุดที่ผู้อ่านไทยไม่เข้าใจจริงๆ ไม่เกินราว 6 จุดต่อคำขอ เลขเริ่มที่ 1 ทุกคำขอ
+  ใส่หมายเหตุเฉพาะจุดที่ผู้อ่านไทยไม่เข้าใจจริงๆ ไม่เกินราว 3 จุดต่อคำขอ (ห้ามอธิบายคำอุทาน คำเลียนเสียง ชื่อเฉพาะ ศัพท์ระบบ) เลขเริ่มที่ 1 ทุกคำขอ
 - เขียนแบบนิยายไทย: บทพูดในเครื่องหมาย "..." บรรยายกระชับ ไม่ติดโครงประโยคจีน
 
 รูปแบบคำตอบ (ต้องตรงเป๊ะ):
@@ -411,17 +411,33 @@ const IDIOM_SYSTEM = `คุณคือบรรณาธิการนิย�
 {"notes":[{"zh":"","th":"","note":""}],"terms":[{"zh":"","th":""}],"replace":[{"from":"","to":"","why":""}]}
 - notes: สำนวน/คำเปรียบ/成语/คำแสลงเน็ตจีน/การอ้างอิงวัฒนธรรมจีน ที่คำแปลคงภาพแบบจีนไว้ จนคนไทยอ่านแล้วอาจไม่เข้าใจ (เช่น "แสงจันทร์สีขาว" จาก 白月光, "ปากยื่นจนแขวนขวดน้ำส้มได้" จาก 嘴撅得能挂醋瓶子, "เลี้ยงเป็นภรรยาเด็ก" จาก 童养媳)
   th = ข้อความที่ปรากฏในคำแปล "ตรงตัวอักษรทุกตัว" (คัดลอกมา 2–15 คำ) ; note = อธิบายความหมาย/ที่มาสั้นๆ 1–2 ประโยค ภาษาไทยล้วน
-  ไม่ต้องใส่คำที่ไทยเข้าใจอยู่แล้ว หรือที่แปลเป็นความหมายไทยไปแล้ว ; บทละไม่เกิน 6 ข้อ เลือกที่ช่วยคนอ่านที่สุด
+  ไม่ต้องใส่คำที่ไทยเข้าใจอยู่แล้ว หรือที่แปลเป็นความหมายไทยไปแล้ว ห้ามอธิบายคำอุทาน คำเลียนเสียง คำพื้นฐาน ชื่อเฉพาะ ศัพท์ระบบเกม/แผงสถานะ ; บทละไม่เกิน 3 ข้อ (ไม่มีก็ได้) เลือกเฉพาะที่คนไทยอ่านแล้วไม่เข้าใจจริงๆ
 - terms: คำสำคัญที่วนซ้ำในเรื่องและควรแปลเหมือนกันทุกตอน (คำเปรียบประจำเรื่อง ชื่อเรียกเฉพาะ) ที่ GLOSSARY ยังไม่มี ; th = คำแปลที่ควรใช้ตลอดเรื่อง
 - replace: แก้เฉพาะ (ก) จุดที่ "ผิดความหมายชัดเจน" เทียบต้นฉบับ (เช่น 衣冠禽兽 แปลเป็น "หน้าตัวเมีย") หรือ (ข) คำใน GLOSSARY terms ที่คำแปลใช้คำอื่น → ใส่ "all":true เพื่อแทนทุกที่ ; from = ข้อความในคำแปลตรงตัวทุกตัวอักษร ; to = ข้อความแทน
   หรือ (ค) บทพูด/ความคิดที่คำแทนตัวหรือคำลงท้ายไม่ตรงกับ "ผู้พูดจริง" ตามต้นฉบับ (เทียบรายการคำแทนตัวที่บังคับใช้ และเพศผู้พูด เช่น ผู้ชายลงท้าย เจ้าค่ะ, ลูกน้องใช้ ข้าน้อย ทั้งที่รายการกำหนด ข้า) → from = ทั้งประโยคพูดนั้นตรงตัว (ยาวพอไม่ซ้ำที่อื่น) ; to = ประโยคเดิมที่แก้เฉพาะคำแทนตัว/คำลงท้าย
   ห้ามแก้ตามรสนิยม ห้ามตัดคำ/ชื่อยี่ห้อ ห้ามแก้จุดที่ความหมายถูกอยู่แล้ว ; ถ้าแก้คำหนึ่งที่โผล่หลายที่ ต้อง "all":true ให้สม่ำเสมอ
 ห้ามมีอักษรจีนใน th/note/to ; ไม่มีให้ใส่ [] ; ห้ามใช้ กู/มึง`;
 
+// ศัพท์ใน GLOSSARY ที่ต้นฉบับมี แต่คำแปลยังไม่มีคำไทยที่กำหนด (= โมเดลใช้คำอื่นแทน) — ตรวจด้วยโปรแกรม ไม่ต้องให้โมเดลหาเอง
+// (เรื่อง 45305 ใช้ Pro แล้วยังหลุด ~3 คำ/ตอน เช่น 炼金科技 มีในคลังแต่แปลเป็นคำอื่น 5 ครั้งในบทเดียว)
+export function missingTerms(terms: Record<string, string>, source: string, body: string): [string, string][] {
+  // วงเล็บอธิบายในคลัง ("หนึ่งเค่อ (15 นาที)") ไม่ต้องอยู่ในคำแปล — เทียบเฉพาะตัวคำ
+  const bare = (th: string) => th.replace(/\s*\([^)]*\)\s*/g, '').trim();
+  // นับเฉพาะจุดที่คำสั้นอยู่เดี่ยวๆ — 区域 ใน 区域令 แปลตามคำยาว ("ป้ายภูมิภาค" ไม่มีคำว่า "เขต") ห้ามนับว่าหลุด
+  // ไม่งั้นโมเดลจะ "แก้" คำยาวที่ถูกอยู่แล้วให้พัง (คลังมีคู่สั้น/ยาวที่ตั้งใจให้ต่างกันหลายสิบคู่)
+  const keys = Object.keys(terms).sort((a, b) => b.length - a.length);
+  const standalone = (zh: string) => keys.filter((k) => k.length > zh.length && k.includes(zh)).reduce((s, k) => s.split(k).join('\u0000'), source).includes(zh);
+  return Object.entries(terms).map(([zh, th]) => [zh, bare(th)] as [string, string])
+    .filter(([zh, th]) => zh.length >= 2 && th.length >= 2 && source.includes(zh) && !body.includes(th) && standalone(zh))
+    .slice(0, 30);
+}
+
 async function idiomPass(body: string, source: string, g: Glossary, notes: string[]): Promise<{ body: string; notes: string[]; added: number; fixed: number }> {
   const rel = relevant(g, source);
   const terms = rel.terms;
-  const out = await chat(IDIOM_SYSTEM, `${pronounRules(rel)}GLOSSARY terms:\n${JSON.stringify(terms)}\n\nต้นฉบับ:\n${source.replaceAll('<!-- chunk -->', '')}\n\nคำแปล:\n${body.replaceAll('<!-- chunk -->', '')}`, 0.2, 'idioms').catch(() => '');
+  const miss = missingTerms(terms, source.replaceAll('<!-- chunk -->', ''), body);
+  const missNote = miss.length ? `ศัพท์ที่ต้นฉบับมี แต่คำแปลยังไม่ใช้คำตาม GLOSSARY — หาคำที่แปลแทนไว้ แล้วใส่ใน replace ให้เป็นคำนี้ ("all":true ถ้าโผล่หลายที่):\n${miss.map(([zh, th]) => `- ${zh} = ${th}`).join('\n')}\n\n` : '';
+  const out = await chat(IDIOM_SYSTEM, `${pronounRules(rel)}${missNote}GLOSSARY terms:\n${JSON.stringify(terms)}\n\nต้นฉบับ:\n${source.replaceAll('<!-- chunk -->', '')}\n\nคำแปล:\n${body.replaceAll('<!-- chunk -->', '')}`, 0.2, 'idioms').catch(() => '');
   let r: { notes?: { zh?: string; th?: string; note?: string }[]; terms?: { zh?: string; th?: string }[]; replace?: { from?: string; to?: string; all?: boolean }[] } = {};
   try { r = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1)); } catch { return { body, notes, added: 0, fixed: 0 }; }
   // คำอังกฤษห้ามเข้ามาทาง replace ด้วย — รอบนี้รันหลัง fixCJK จึงไม่มีอะไรจับอีก (เคยได้ "โจวโจวsucked ลิ้น", "Cost")
@@ -431,7 +447,14 @@ async function idiomPass(body: string, source: string, g: Glossary, notes: strin
     const from = (x.from ?? '').trim(), to = thai(x.to);
     // แทนเฉพาะข้อความที่เจอครั้งเดียว — เคยลอง "แทนทุกที่" เพื่อให้คำสม่ำเสมอ แล้วไปตัดนามสกุลชื่อเล่นตัวละครทิ้งทั้งบท
     // ความสม่ำเสมอของคำให้ได้จาก GLOSSARY ในการแปลรอบหน้าแทน
-    if (from && to && from !== to && from.length >= 2 && body.split(from).length === 2) { body = body.replace(from, () => to); fixed++; }
+    if (from && to && from !== to && from.length >= 2 && body.split(from).length === 2) { body = body.replace(from, () => to); fixed++; continue; }
+    // แทนทุกที่ได้เฉพาะการแก้ศัพท์ที่ตรวจเจอว่าหลุดคลัง: ผลต้องมีคำไทยในคลังจริง และคำเดิมต้องไม่อยู่ในชื่อตัวละคร (กันตัดนามสกุลแบบเดิม)
+    const names = Object.values(g.characters).map((c) => c.th);
+    if (x.all && from && to && from !== to && from.length >= 3 && miss.some(([, th]) => to.includes(th) && !from.includes(th))
+      && !names.some((n) => n.includes(from)) && body.includes(from)) {
+      fixed += body.split(from).length - 1;
+      body = body.split(from).join(to);
+    }
   }
   // คำสำคัญประจำเรื่องเข้า GLOSSARY ได้เฉพาะสำนวน/คำเปรียบที่ใส่หมายเหตุในบทนี้ และโผล่ ≥2 ครั้ง (เช่น 白月光)
   // — กันชื่อเล่น/คำครั้งเดียวหลุดเข้าคลัง แล้วไปบังคับคำแปลผิดๆ ทั้งเรื่อง
@@ -443,7 +466,7 @@ async function idiomPass(body: string, source: string, g: Glossary, notes: strin
     g.terms[zh] = th;
   }
   let added = 0;
-  for (const n of (r.notes ?? []).slice(0, Math.max(0, 8 - notes.length))) {
+  for (const n of (r.notes ?? []).slice(0, Math.max(0, 4 - notes.length))) {
     const th = (n.th ?? '').trim(), note = thai(n.note)?.replace(/\s*\n\s*/g, ' ');
     if (!th || !note || th.length < 2 || META_NOTE.test(note)) continue;
     const i = body.indexOf(th);
