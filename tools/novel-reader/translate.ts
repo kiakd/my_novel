@@ -228,6 +228,7 @@ const OTHER_G = new RegExp(OTHER.source, 'g');
 // DeepSeek ชอบหลุดคำจีนสั้นๆ ปนในคำแปล → ส่งเฉพาะบรรทัดที่ยังมีจีนกลับไปเกลาใหม่ (สูงสุด 2 รอบ)
 const FIX_SYSTEM = `คุณคือบรรณาธิการนิยายแปลไทย บรรทัดคำแปลต่อไปนี้ยังมีคำภาษาจีน/ภาษาอังกฤษ/ภาษาอื่น (เช่น รัสเซีย) หลงเหลือ หรือใช้ กู/มึง (ห้ามใช้ — เปลี่ยนเป็น ฉัน และเรียกคนฟังตามเพศ: ผู้ชาย=นาย ผู้หญิง=เธอ)
 ให้เขียนแต่ละบรรทัดใหม่เป็นภาษาไทยล้วน สำนวนนิยายลื่นไหล คงความหมายและชื่อตัวละครเดิม ใช้ต้นฉบับจีนเป็นบริบท
+ชื่อ ศัพท์ และคำแทนตัว/คำลงท้ายที่ให้มา ต้องใช้ตรงตัวเหมือนส่วนอื่นของบท
 ห้ามมีอักษรจีน อักษรต่างชาติอื่น หรือคำอังกฤษ (ยกเว้นชื่อแบรนด์) เครื่องหมายหมายเหตุ [^1] [^2] ในบรรทัดให้คงไว้ตำแหน่งเดิม ตอบเป็นบรรทัดรูปแบบ [เลข] ข้อความ ตามเลขเดิม ครบทุกบรรทัด ไม่ต้องอธิบาย`;
 
 // ส่งเฉพาะย่อหน้าต้นฉบับที่เกี่ยวกับบรรทัดที่ต้องแก้ แทนต้นฉบับทั้งชิ้น (ประหยัด token):
@@ -259,8 +260,11 @@ async function fixCJK(th: string, source: string, g: Glossary): Promise<string> 
       for (const w of l.match(OTHER_G) ?? []) FIXLOG.eng.add(w);
       if (RUDE.test(l)) FIXLOG.rude++;
     }
-    const names = Object.entries(relevant(g, source).characters).map(([zh, c]) => `${zh}=${c.th}`).join(', ');
-    const out = await chat(FIX_SYSTEM, `ชื่อ: ${names || '-'}\n\nต้นฉบับ (เฉพาะช่วงที่เกี่ยวข้อง):\n${sourceContext(source, lines.length, bad)}\n\nบรรทัดที่ต้องแก้:\n${bad.map(([i, l]) => `[${i}] ${l}`).join('\n')}`, 0.3, 'fix-lines');
+    // ต้องส่งศัพท์ + สรรพนามบังคับด้วย — บางทีร่างหลุดจีนครึ่งบท แล้วรอบนี้แปลใหม่ทั้งครึ่ง (บท 119 ของ 45305: ส่งแค่ชื่อ → ศัพท์เพี้ยน/ตัวเอกกลับไปใช้ ข้า)
+    const rel = relevant(g, source);
+    const names = Object.entries(rel.characters).map(([zh, c]) => `${zh}=${c.th}`).join(', ');
+    const terms = Object.entries(rel.terms).map(([zh, th]) => `${zh}=${th}`).join(', ');
+    const out = await chat(FIX_SYSTEM, `${pronounRules(rel)}ชื่อ: ${names || '-'}\nศัพท์ (ใช้ตรงตัว): ${terms || '-'}\n\nต้นฉบับ (เฉพาะช่วงที่เกี่ยวข้อง):\n${sourceContext(source, lines.length, bad)}\n\nบรรทัดที่ต้องแก้:\n${bad.map(([i, l]) => `[${i}] ${l}`).join('\n')}`, 0.3, 'fix-lines');
     for (const m of out.matchAll(/^\[(\d+)\]\s*(.+)$/gm)) {
       const i = Number(m[1]);
       if (bad.some(([j]) => j === i) && m[2].trim()) lines[i] = m[2].trim();
