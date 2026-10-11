@@ -41,7 +41,9 @@ const HTTP = (opt('--fetch') ?? process.env.NR_FETCH ?? (process.platform === 'w
 // คำแปลไทยของบท 2k ตัวจีนราว 3k token ยังห่าง max_tokens 8000 ; เกินเพดานนี้ค่อยหั่น (กันชนเพดาน output)
 // ขนาดชิ้นเป้าหมาย (อักษรจีน) — บทหนึ่ง ~2,500–3,500 ตัว → 2 ชิ้นแปลร่างขนานกัน (ร่าง ~30 วิ → ~15–18 วิ)
 // ชิ้นเล็กลง = เห็นบริบทน้อยลง (ชิ้นหลังเห็นแค่ท้ายชิ้นก่อน) ; ปรับได้ด้วย --chunk <จำนวน> (6000 = แบบเดิม ทั้งบทชิ้นเดียว)
-const CHUNK = Number(opt('--chunk') ?? process.env.NR_CHUNK ?? 2000);
+// A/B บท 851–857 (ตรวจแบบปิดป้าย): 2 ชิ้น 46 จุดผิด vs ชิ้นเดียว 33 — ชิ้นหลังเห็นบริบทน้อย คำบรรยายหลุดเป็น "ฉัน" ; กลับมาใช้ชิ้นเดียว
+// (ความเร็วได้จาก --raw --workers แทน) ; ตั้ง 2000 ได้ถ้าแปลทีละบทและต้องการเร็ว
+const CHUNK = Number(opt('--chunk') ?? process.env.NR_CHUNK ?? 6000);
 
 // ---------- env (ใช้ key เดียวกับ backend) ----------
 // .env ข้างไฟล์นี้ก่อน (OPENAI_API_KEY ฯลฯ — ตอนรันจาก command line ตรงๆ ไม่ผ่าน server.ts) แล้วค่อย novel/.env
@@ -80,9 +82,12 @@ const bookDir = (id: string) => join(LIB, id);
 const readJson = <T>(p: string, d: T): T => (existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : d);
 // คลังความหมายคำกลาง (ทุกเรื่อง) — โตขึ้นจากผลตรวจ ; เรื่องไหนต่างก็ทับได้ที่ glossary.json → senses
 const SENSES = readJson<Record<string, string>>(join(ROOT, 'senses.json'), {});
+// เชิงอรรถต่อบท — ผู้ตรวจลบเชิงอรรถทิ้งราว 2 อัน/บท (เกือบทั้งหมดที่ใส่) → เหลือ 1 ; NR_MAX_NOTES ปรับได้
+const MAX_NOTES = Number(process.env.NR_MAX_NOTES ?? 1);
 // GLOSSARY ที่ส่งในคำขอ: NR_SLIM=1 ตัดช่องที่ซ้ำกับรายการสรรพนามบังคับ (self/called/pronouns) และช่องยาวที่ไม่ช่วยแปล (relations/locked)
 // trace 451–590: JSON คลังเฉลี่ย 3,100 ตัวอักษร/คำขอ — มากกว่าต้นฉบับ (1,500) ; pronouns 900 + self/called 280 ซ้ำกับ pronounRules
-const glossaryJson = (g: Glossary) => JSON.stringify(process.env.NR_SLIM === '1'
+// ค่าเริ่มต้น = แบบกระชับ (A/B: ไม่แย่ลง ถูกลง ~10%) ; NR_SLIM=0 = ส่งเต็มแบบเดิม
+const glossaryJson = (g: Glossary) => JSON.stringify(process.env.NR_SLIM !== '0'
   ? { characters: Object.fromEntries(Object.entries(g.characters).map(([zh, c]) => [zh, { th: c.th, ...(c.gender ? { gender: c.gender } : {}), ...(c.role ? { role: c.role } : {}), ...(c.speech ? { speech: c.speech } : {}) }])), terms: g.terms }
   : g);
 const writeJson = (p: string, v: unknown) => writeFileSync(p, JSON.stringify(v, null, 2));
@@ -536,7 +541,7 @@ const IDIOM_SYSTEM = `คุณคือบรรณาธิการนิย�
 {"notes":[{"zh":"","th":"","note":""}],"terms":[{"zh":"","th":""}],"replace":[{"from":"","to":"","why":""}]}
 - notes: สำนวน/คำเปรียบ/成语/คำแสลงเน็ตจีน/การอ้างอิงวัฒนธรรมจีน ที่คำแปลคงภาพแบบจีนไว้ จนคนไทยอ่านแล้วอาจไม่เข้าใจ (เช่น "แสงจันทร์สีขาว" จาก 白月光, "ปากยื่นจนแขวนขวดน้ำส้มได้" จาก 嘴撅得能挂醋瓶子, "เลี้ยงเป็นภรรยาเด็ก" จาก 童养媳)
   th = ข้อความที่ปรากฏในคำแปล "ตรงตัวอักษรทุกตัว" (คัดลอกมา 2–15 คำ) ; note = อธิบายความหมาย/ที่มาสั้นๆ 1–2 ประโยค ภาษาไทยล้วน
-  ไม่ต้องใส่คำที่ไทยเข้าใจอยู่แล้ว หรือที่แปลเป็นความหมายไทยไปแล้ว ห้ามอธิบายคำอุทาน คำเลียนเสียง คำพื้นฐาน ชื่อเฉพาะ ศัพท์ระบบเกม/แผงสถานะ ; บทละไม่เกิน 3 ข้อ (ไม่มีก็ได้) เลือกเฉพาะที่คนไทยอ่านแล้วไม่เข้าใจจริงๆ
+  ไม่ต้องใส่คำที่ไทยเข้าใจอยู่แล้ว หรือที่แปลเป็นความหมายไทยไปแล้ว ห้ามอธิบายคำอุทาน คำเลียนเสียง คำพื้นฐาน ชื่อเฉพาะ ศัพท์ระบบเกม/แผงสถานะ ; บทละไม่เกิน ${MAX_NOTES} ข้อ (ไม่มีก็ได้ — ไม่ใส่ดีกว่าใส่ข้อที่ไม่จำเป็น) เลือกเฉพาะที่คนไทยอ่านแล้วไม่เข้าใจจริงๆ
 - terms: คำสำคัญที่วนซ้ำในเรื่องและควรแปลเหมือนกันทุกตอน (คำเปรียบประจำเรื่อง ชื่อเรียกเฉพาะ) ที่ GLOSSARY ยังไม่มี ; th = คำแปลที่ควรใช้ตลอดเรื่อง
 - replace: แก้เฉพาะ (ก) จุดที่ "ผิดความหมายชัดเจน" เทียบต้นฉบับ (เช่น 衣冠禽兽 แปลเป็น "หน้าตัวเมีย") หรือ (ข) คำใน GLOSSARY terms ที่คำแปลใช้คำอื่น → ใส่ "all":true เพื่อแทนทุกที่ ; from = ข้อความในคำแปลตรงตัวทุกตัวอักษร ; to = ข้อความแทน
   หรือ (ค) บทพูด/ความคิดที่คำแทนตัวหรือคำลงท้ายไม่ตรงกับ "ผู้พูดจริง" ตามต้นฉบับ (เทียบรายการคำแทนตัวที่บังคับใช้ และเพศผู้พูด เช่น ผู้ชายลงท้าย เจ้าค่ะ, ลูกน้องใช้ ข้าน้อย ทั้งที่รายการกำหนด ข้า) → from = ทั้งประโยคพูดนั้นตรงตัว (ยาวพอไม่ซ้ำที่อื่น) ; to = ประโยคเดิมที่แก้เฉพาะคำแทนตัว/คำลงท้าย
@@ -598,7 +603,7 @@ async function idiomPass(body: string, source: string, g: Glossary, notes: strin
     g.terms[zh] = th;
   }
   let added = 0;
-  for (const n of (r.notes ?? []).slice(0, Math.max(0, 3 - notes.length))) {
+  for (const n of (r.notes ?? []).slice(0, Math.max(0, MAX_NOTES - notes.length))) {
     const th = (n.th ?? '').trim(), note = thai(n.note)?.replace(/\s*\n\s*/g, ' ');
     if (!th || !note || th.length < 2 || META_NOTE.test(note)) continue;
     const i = body.indexOf(th);
@@ -822,7 +827,7 @@ async function finishChapter(draftPart: DraftPart, cur: { title: string }, g: Gl
   const notes: string[] = [];
   const bodies = results.map((r) => r.th.replace(/\[\^(\d+)\]/g, (_, d) => {
     const t = r.notes.get(Number(d));
-    if (!t) return '';
+    if (!t || notes.length >= MAX_NOTES) return '';
     notes.push(`[^${notes.length + 1}]: ${t}`);
     return `[^${notes.length}]`;
   }));
@@ -1183,7 +1188,9 @@ if (flag('--raw')) {
   const rawOf = (cid: string) => join(dir, 'raw', `${cid}.json`);
   const outOf = (n: number) => join(dir, 'chapters', `chapter${n}`);
   const todo = prog.order.map((cid, i) => ({ cid, n: i + 1 }))
-    .filter((x) => x.n >= lo && x.n <= hi && existsSync(rawOf(x.cid)) && (flag('--redo') || !existsSync(`${outOf(x.n)}.md`)));
+    .filter((x) => x.n >= lo && x.n <= hi && existsSync(rawOf(x.cid)) && (flag('--redo') || !existsSync(`${outOf(x.n)}.md`)))
+    // --only 451,455,460-470: เฉพาะบทที่ระบุ (แปลใหม่เฉพาะบทที่ได้จากชุดที่มีปัญหา)
+    .filter((x) => !opt('--only') || opt('--only')!.split(',').some((t) => { const [a, b] = t.split('-').map(Number); return x.n >= a && x.n <= (b || a); }));
   const W = Math.max(1, Number(opt('--workers') ?? 4));
   // แปลหลายช่วงคนละโปรเซสพร้อมกันได้ → คลังรวมสองทางทุกครั้งที่บันทึก (ไม่เขียนทับของโปรเซสอื่น)
   // ดิสก์มีแต่เรายังไม่มี → เติมให้เรา (เห็นชื่อที่อีกโปรเซสตั้งไว้) ; เรามีแต่ดิสก์ไม่มี → เติมลงดิสก์ ; มีทั้งคู่ → ยึดดิสก์ เติมเฉพาะช่องที่ว่าง
