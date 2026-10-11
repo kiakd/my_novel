@@ -5,6 +5,9 @@
 //   node extract-terms.ts --book 45305 [--batch 10] [--workers 4] [--apply]
 import { existsSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { spawn } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
 import { merge, type Glossary } from './glossary.ts';
 
 const argv = process.argv.slice(2);
@@ -95,9 +98,28 @@ const SYSTEM = `คุณเตรียมคลังคำสำหรับ�
 ตอบ JSON อย่างเดียว: {"items":[{"zh":"","th":"","kind":"person|term","gender":"ชาย|หญิง|","role":"","ch":<เลขบทที่เจอครั้งแรก>}]}`;
 
 const MODEL = opt('--model') ?? 'gpt-5.6-luna';
-const KEY = process.env.OPENAI_API_KEY ?? process.exit(console.error('ไม่พบ OPENAI_API_KEY') ?? 1);
+// --provider codex: ใช้ `codex exec` (แพ็กเกจ ChatGPT ในเครื่อง ไม่ใช้ API key)
+const CODEX = opt('--provider') === 'codex';
+const KEY = CODEX ? '' : process.env.OPENAI_API_KEY ?? process.exit(console.error('ไม่พบ OPENAI_API_KEY') ?? 1);
+let seq = 0;
+async function askCodex(user: string): Promise<string> {
+  const dir = join(tmpdir(), 'nr-codex'); mkdirSync(dir, { recursive: true });
+  const out = join(dir, `terms-${process.pid}-${++seq}.txt`);
+  const prompt = `ตอบเป็นข้อความ JSON อย่างเดียว ห้ามเรียกเครื่องมือหรือคำสั่งใดๆ\n\n===== SYSTEM =====\n${SYSTEM}\n\n===== USER =====\n${user}`;
+  await new Promise<void>((res) => {
+    const c = spawn(process.platform === 'win32' ? 'codex.cmd' : 'codex', ['exec', '--skip-git-repo-check', '--ephemeral', '--ignore-user-config', '--ignore-rules', '-s', 'read-only', '-m', MODEL, '-o', out, '-'], { cwd: dir, shell: process.platform === 'win32', windowsHide: true });
+    c.stdout.resume(); c.stderr.resume();
+    const t = setTimeout(() => c.kill(), 8 * 60_000);
+    c.on('close', () => { clearTimeout(t); res(); });
+    c.stdin.end(prompt);
+  });
+  const txt = existsSync(out) ? readFileSync(out, 'utf8') : '';
+  if (!txt.trim()) throw new Error('codex ไม่ตอบ');
+  return txt.slice(txt.indexOf('{'), txt.lastIndexOf('}') + 1);
+}
 const USAGE = { hit: 0, miss: 0, out: 0 };
 async function ask(user: string): Promise<string> {
+  if (CODEX) { for (let a = 1; ; a++) { try { return await askCodex(user); } catch (e) { if (a >= 3) throw e; await new Promise((r) => setTimeout(r, 5000 * a)); } } }
   for (let attempt = 1; ; attempt++) {
     try {
       const res = await fetch('https://api.openai.com/v1/chat/completions', {

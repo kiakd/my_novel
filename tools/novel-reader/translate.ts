@@ -17,6 +17,7 @@ import { CdpPage, listTabs, responsive, type Page } from './cdp-page.ts';
 import { HttpPage } from './http-page.ts';
 import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
@@ -67,10 +68,12 @@ const SETTINGS = (() => { try { return JSON.parse(readFileSync(join(LIB, 'settin
 const PROVIDER_ARG = opt('--provider') ?? process.env.NR_PROVIDER;
 let MODEL = opt('--model') ?? (PROVIDER_ARG === 'ollama' ? OLLAMA_MODEL : SETTINGS.model ?? process.env.DEEPSEEK_MODEL ?? 'deepseek-chat');
 let PROVIDER = PROVIDER_ARG ?? (/^gpt-/.test(MODEL) ? 'openai' : 'deepseek');
-const KEY = PROVIDER === 'openai' ? process.env.OPENAI_API_KEY : process.env.DEEPSEEK_API_KEY;
+// --provider codex → เรียก `codex exec` (แพ็กเกจ ChatGPT ที่ล็อกอินไว้ในเครื่อง ไม่เสียเงินต่อ token) ; รุ่นเริ่มต้น gpt-5.6-luna
+if (PROVIDER === 'codex' && !opt('--model')) MODEL = 'gpt-5.6-luna';
+const KEY = PROVIDER === 'openai' ? process.env.OPENAI_API_KEY : PROVIDER === 'codex' ? 'codex' : process.env.DEEPSEEK_API_KEY;
 const THINKING = opt('--thinking'); // ไม่ใส่ = ปิดการคิด (เร็ว/ถูก เหมือน deepseek-chat)
 if (THINKING && !['low', 'high', 'max'].includes(THINKING)) fail('--thinking ต้องเป็น low|high|max');
-if (!['deepseek', 'openai', 'ollama'].includes(PROVIDER)) fail(`ไม่รู้จัก --provider ${PROVIDER} (deepseek|openai|ollama)`);
+if (!['deepseek', 'openai', 'ollama', 'codex'].includes(PROVIDER)) fail(`ไม่รู้จัก --provider ${PROVIDER} (deepseek|openai|ollama|codex)`);
 if (PROVIDER === 'deepseek' && !KEY) fail('ไม่พบ DEEPSEEK_API_KEY ใน novel/.env');
 if (PROVIDER === 'openai' && !KEY) fail('ไม่พบ OPENAI_API_KEY ใน .env');
 
@@ -215,12 +218,49 @@ function trace(stage: string, system: string, user: string, out: string, meta: R
   } catch {}
 }
 
+// ---------- Codex CLI เป็นตัวแปล (ไม่ใช้ API key) ----------
+// วัดจริง: --ignore-user-config ตัด MCP ที่ตั้งไว้ในเครื่อง (ไม่งั้นรอ connect ~20 วิ/ครั้ง) → ค่าเปิด ~4 วิ, ร่างทั้งบท ~25 วิ
+// รันในโฟลเดอร์ว่าง + read-only — โมเดลไม่มีอะไรให้อ่าน/แก้ ตอบเป็นข้อความอย่างเดียว
+const CODEX_DIR = join(tmpdir(), 'nr-codex');
+let codexSeq = 0;
+async function codexChat(system: string, user: string): Promise<{ text: string; tokens: number }> {
+  mkdirSync(CODEX_DIR, { recursive: true });
+  const out = join(CODEX_DIR, `out-${process.pid}-${++codexSeq}.txt`);
+  const prompt = `ทำงานนี้โดยตอบเป็นข้อความเท่านั้น ห้ามเรียกเครื่องมือ ห้ามรันคำสั่ง ห้ามอ่านหรือแก้ไฟล์ — คำตอบทั้งหมดต้องเป็นผลลัพธ์ตามรูปแบบที่ SYSTEM กำหนด\n\n===== SYSTEM =====\n${system}\n\n===== USER =====\n${user}`;
+  const args = ['exec', '--skip-git-repo-check', '--ephemeral', '--ignore-user-config', '--ignore-rules', '-s', 'read-only', '-m', MODEL, '-o', out, '-'];
+  const { code, err } = await new Promise<{ code: number; err: string }>((res) => {
+    const c = spawn(process.platform === 'win32' ? 'codex.cmd' : 'codex', args, { cwd: CODEX_DIR, shell: process.platform === 'win32', windowsHide: true });
+    let err = '';
+    c.stdout.on('data', (d) => (err += d));
+    c.stderr.on('data', (d) => (err += d));
+    const kill = setTimeout(() => c.kill(), 8 * 60_000);
+    c.on('close', (code) => { clearTimeout(kill); res({ code: code ?? 1, err }); });
+    c.stdin.end(prompt);
+  });
+  const text = existsSync(out) ? readFileSync(out, 'utf8') : '';
+  try { if (existsSync(out)) writeFileSync(out, ''); } catch {}
+  if (!text.trim()) {
+    // โควตาแพ็กเกจหมด → รอแล้วลองใหม่ (ตัวลองซ้ำใน chat() ใช้ข้อความนี้)
+    if (/usage limit|rate limit|429|try again/i.test(err)) throw new Error(`CODEX_LIMIT ${err.slice(-300)}`);
+    throw new Error(`codex exit ${code}: ${err.slice(-300)}`);
+  }
+  const tokens = Number(err.match(/tokens used\s*\n?\s*([\d,]+)/)?.[1]?.replace(/,/g, '') ?? 0);
+  return { text, tokens };
+}
+
 // stage = ขั้นที่เรียก (translate / translate-retry / polish / fix-lines / fix-words / fix-para) — ไว้แยกค่าใช้จ่ายใน log
 async function chat(system: string, user: string, temperature = 0.7, stage = 'other'): Promise<string> {
   for (let attempt = 1; ; attempt++) {
     const t0 = Date.now();
     try {
       if (PROVIDER === 'ollama') { const r = await ollamaChat(system, user, temperature); logUsage(stage, Date.now() - t0); return r; }
+      if (PROVIDER === 'codex') {
+        const r = await codexChat(system, user);
+        logUsage(stage, Date.now() - t0, { prompt_tokens: r.tokens });
+        trace(stage, system, user, r.text, { ms: Date.now() - t0, attempt, tokens: r.tokens });
+        USAGE.calls++;
+        return r.text;
+      }
       const openai = PROVIDER === 'openai';
       const res = await fetch(openai ? 'https://api.openai.com/v1/chat/completions' : 'https://api.deepseek.com/v1/chat/completions', {
         method: 'POST',
@@ -269,6 +309,13 @@ async function chat(system: string, user: string, temperature = 0.7, stage = 'ot
       }
       // 429 (ชนเพดาน token/นาที ตอนแปลหลายบทพร้อมกัน) → รอนานขึ้นและลองหลายครั้งกว่า
       const limited = /HTTP 429/.test(String((e as Error).message));
+      // โควตา Codex (แพ็กเกจ) หมด → พัก 10 นาทีแล้วลองใหม่ (ได้ถึง ~5 ชม.)
+      if (/CODEX_LIMIT/.test(String((e as Error).message))) {
+        if (attempt >= 30) throw e;
+        console.error(`โควตา Codex เต็ม — พัก 10 นาที (${attempt}/30)`);
+        await sleep(10 * 60_000);
+        continue;
+      }
       if (attempt >= (limited ? 8 : 3)) throw e;
       await sleep(limited ? 8000 * attempt : 1500 * attempt);
     }
