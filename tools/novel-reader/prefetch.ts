@@ -31,10 +31,14 @@ const links: { cid: string; title: string }[] = await toc.evaluate((id: string) 
 links.sort((a, b) => Number(a.cid) - Number(b.cid));
 
 const prog = existsSync(join(DIR, 'progress.json')) ? JSON.parse(readFileSync(join(DIR, 'progress.json'), 'utf8')) : { order: [] };
+// --chapters a-b: ดึงบทที่แปลไปแล้วซ้ำ (เลขบทตาม progress.order) เพื่อแปลใหม่ — ไม่แตะ index.json
+const range = opt('--chapters')?.split('-').map(Number);
 const after = opt('--from') ?? prog.order.at(-1);
 const start = after ? links.findIndex((l) => Number(l.cid) > Number(after)) : 0;
-const todo = start < 0 ? [] : links.slice(start);
-writeFileSync(join(RAW, 'index.json'), JSON.stringify({ at: Date.now(), after, chapters: todo }, null, 1));
+const todo = range
+  ? (prog.order as string[]).slice(range[0] - 1, range[1]).map((cid) => ({ cid, title: links.find((l) => l.cid === cid)?.title ?? '' }))
+  : start < 0 ? [] : links.slice(start);
+if (!range) writeFileSync(join(RAW, 'index.json'), JSON.stringify({ at: Date.now(), after, chapters: todo }, null, 1));
 console.log(`สารบัญ ${links.length} บท · ต้องดึง ${todo.length} บท (หลังรหัส ${after ?? '-'})`);
 
 let done = 0, failed = 0;

@@ -80,6 +80,11 @@ const bookDir = (id: string) => join(LIB, id);
 const readJson = <T>(p: string, d: T): T => (existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : d);
 // คลังความหมายคำกลาง (ทุกเรื่อง) — โตขึ้นจากผลตรวจ ; เรื่องไหนต่างก็ทับได้ที่ glossary.json → senses
 const SENSES = readJson<Record<string, string>>(join(ROOT, 'senses.json'), {});
+// GLOSSARY ที่ส่งในคำขอ: NR_SLIM=1 ตัดช่องที่ซ้ำกับรายการสรรพนามบังคับ (self/called/pronouns) และช่องยาวที่ไม่ช่วยแปล (relations/locked)
+// trace 451–590: JSON คลังเฉลี่ย 3,100 ตัวอักษร/คำขอ — มากกว่าต้นฉบับ (1,500) ; pronouns 900 + self/called 280 ซ้ำกับ pronounRules
+const glossaryJson = (g: Glossary) => JSON.stringify(process.env.NR_SLIM === '1'
+  ? { characters: Object.fromEntries(Object.entries(g.characters).map(([zh, c]) => [zh, { th: c.th, ...(c.gender ? { gender: c.gender } : {}), ...(c.role ? { role: c.role } : {}), ...(c.speech ? { speech: c.speech } : {}) }])), terms: g.terms }
+  : g);
 const writeJson = (p: string, v: unknown) => writeFileSync(p, JSON.stringify(v, null, 2));
 
 function latestBook(): string | undefined {
@@ -394,7 +399,7 @@ async function polish(draft: string, source: string, g: Glossary, hasTitle = fal
   // ต้นฉบับมีเลขเดียวกับร่างเมื่อย่อหน้าเท่ากัน → โมเดลเทียบได้ทีละย่อหน้า
   const dParas = paraLines(draft);
   const aligned = paraLines(source).length === dParas.length;
-  const out = await chat(POLISH_SYSTEM + PROFILE, `${note}${pronounRules(rel)}GLOSSARY:\n${JSON.stringify(rel)}\n\nต้นฉบับ${aligned ? ' (เลขย่อหน้าตรงกับร่าง)' : ''}:\n${aligned ? numberParas(source) : source}\n\nร่างคำแปล:\n${numberParas(draft)}`, 0.45, 'polish');
+  const out = await chat(POLISH_SYSTEM + PROFILE, `${note}${pronounRules(rel)}GLOSSARY:\n${glossaryJson(rel)}\n\nต้นฉบับ${aligned ? ' (เลขย่อหน้าตรงกับร่าง)' : ''}:\n${aligned ? numberParas(source) : source}\n\nร่างคำแปล:\n${numberParas(draft)}`, 0.45, 'polish');
   const edits = parseNumbered(out.trim().replace(/^=== TRANSLATION ===\s*/, ''), dParas.length).got;
   const srcParas = paraLines(source);
   const q = (s: string) => (s.match(/[?？]/g) ?? []).length;
@@ -479,7 +484,7 @@ async function translateChunk(text: string, g: Glossary, title: string, prev?: s
   text = normalizeZhNumbers(text); // 8000万 → 80,000,000 ก่อนแปล (โมเดลแปลงหลักพลาดบ่อย) — ไฟล์ .zh.md ที่บันทึกยังเป็นต้นฉบับเดิม
   const ctx = relevant(g, text + title);
   const before = tailOf(prev);
-  const user = `${pronounRules(ctx)}GLOSSARY ปัจจุบัน:\n${JSON.stringify(ctx)}\n\n${sensesNote(SENSES, g, text)}บท: ${title}\n\n${hasTitle ? TITLE_NOTE + '\n\n' : ''}${before ? `ช่วงก่อนหน้า (บริบทเท่านั้น ห้ามแปลซ้ำ — ต้นฉบับด้านล่างเล่าต่อจากตรงนี้ ให้ประโยคแรกรับช่วงต่อได้ลื่น ไม่ขึ้นต้นเหมือนเริ่มฉากใหม่):\n${before}\n\n` : ''}${NUM_NOTE}\n\nต้นฉบับ:\n${numberParas(text)}`;
+  const user = `${pronounRules(ctx)}GLOSSARY ปัจจุบัน:\n${glossaryJson(ctx)}\n\n${sensesNote(SENSES, g, text)}บท: ${title}\n\n${hasTitle ? TITLE_NOTE + '\n\n' : ''}${before ? `ช่วงก่อนหน้า (บริบทเท่านั้น ห้ามแปลซ้ำ — ต้นฉบับด้านล่างเล่าต่อจากตรงนี้ ให้ประโยคแรกรับช่วงต่อได้ลื่น ไม่ขึ้นต้นเหมือนเริ่มฉากใหม่):\n${before}\n\n` : ''}${NUM_NOTE}\n\nต้นฉบับ:\n${numberParas(text)}`;
   const nSrc = paraLines(text).length;
   let th = '';
   let gl = '{}';
@@ -1180,6 +1185,16 @@ if (flag('--raw')) {
   const todo = prog.order.map((cid, i) => ({ cid, n: i + 1 }))
     .filter((x) => x.n >= lo && x.n <= hi && existsSync(rawOf(x.cid)) && (flag('--redo') || !existsSync(`${outOf(x.n)}.md`)));
   const W = Math.max(1, Number(opt('--workers') ?? 4));
+  // แปลหลายช่วงคนละโปรเซสพร้อมกันได้ → คลังรวมสองทางทุกครั้งที่บันทึก (ไม่เขียนทับของโปรเซสอื่น)
+  // ดิสก์มีแต่เรายังไม่มี → เติมให้เรา (เห็นชื่อที่อีกโปรเซสตั้งไว้) ; เรามีแต่ดิสก์ไม่มี → เติมลงดิสก์ ; มีทั้งคู่ → ยึดดิสก์ เติมเฉพาะช่องที่ว่าง
+  const syncG = () => {
+    const disk = readJson<Glossary>(gPath, emptyGlossary());
+    for (const [zh, c] of Object.entries(disk.characters)) g.characters[zh] = { ...g.characters[zh], ...c };
+    for (const [zh, c] of Object.entries(g.characters)) disk.characters[zh] = { ...c, ...disk.characters[zh] };
+    for (const [zh, t] of Object.entries(disk.terms)) g.terms[zh] = t;
+    for (const [zh, t] of Object.entries(g.terms)) if (!disk.terms[zh]) disk.terms[zh] = t;
+    writeJson(gPath, disk);
+  };
   console.log(`แปลจาก raw: ${todo.length} บท (${todo[0]?.n ?? '-'}–${todo.at(-1)?.n ?? '-'}) · ${W} บทพร้อมกัน · ${MODEL}`);
   let ok = 0, bad = 0;
   const queue = [...todo];
@@ -1190,9 +1205,9 @@ if (flag('--raw')) {
       const ctx = { book: id, ch: x.n, mode: 'raw' };
       try {
         const dp = await CTX_ALS.run(ctx, () => draftChapter(r, g));
-        writeJson(gPath, g); // ตัวละครใหม่เข้าคลังทันที — บทอื่นที่เริ่มร่างหลังจากนี้เห็นชื่อเดียวกัน
+        syncG(); // ตัวละครใหม่เข้าคลังทันที — บทอื่นที่เริ่มร่างหลังจากนี้เห็นชื่อเดียวกัน
         const titleTh = await CTX_ALS.run(ctx, () => finishChapter(dp, r, g, outOf(x.n)));
-        writeJson(gPath, g);
+        syncG();
         ok++;
         console.log(`✓ บทที่ ${x.n}: ${titleTh} (${ok}/${todo.length} · ${((Date.now() - t0) / 1000 / ok).toFixed(0)} วิ/บท เฉลี่ย)`);
       } catch (e) {
@@ -1202,6 +1217,9 @@ if (flag('--raw')) {
     }
   };
   await Promise.all(Array.from({ length: W }, worker));
+  syncG();
+  // สำรองคลังของรอบนี้ไว้ — ถ้าโปรเซสเก่าที่ยังเขียนทับทั้งไฟล์จบทีหลัง เอาไฟล์นี้มารวมซ้ำได้
+  writeJson(join(dir, 'raw', `glossary-${lo}-${hi}.json`), g);
   // จุดต่อ --continue = บทสุดท้ายที่ต่อเนื่องจากต้น (ไม่ข้ามรู)
   const p2 = readJson<Progress>(pPath, prog);
   let last = 0;

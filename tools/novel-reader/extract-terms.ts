@@ -20,6 +20,48 @@ const g: Glossary = JSON.parse(readFileSync(gPath, 'utf8'));
 
 type Cand = { zh: string; th: string; kind: 'person' | 'term'; gender?: string; role?: string; first: number; seen: number; alt?: string[] };
 
+// --harmonize: ตรวจรายการทั้งหมดรวดเดียว — คำกลุ่มเดียวกัน (ส่วนจีนซ้ำกัน) ต้องแปลส่วนนั้นเหมือนกัน, ชื่อไทยห้ามชนกับคนอื่น
+// (ชุดละ 10 บทแปลแยกกัน เคยได้ 夜罗刹 3 แบบ และ 无心 = "อู๋ซิน" ชนกับ 武辛)
+if (argv.includes('--harmonize')) {
+  const data = JSON.parse(readFileSync(OUT, 'utf8'));
+  const cands: Cand[] = data.items;
+  // ชื่อไทยชนกับคลังเดิม (คนละคำจีน) → ส่งไปให้แก้ด้วย
+  const thOwner = new Map<string, string>();
+  for (const [zh, c] of Object.entries(g.characters)) if (c.th) thOwner.set(c.th, zh);
+  for (const [zh, th] of Object.entries(g.terms)) if (!thOwner.has(th)) thOwner.set(th, zh);
+  const clash = cands.filter((c) => thOwner.has(c.th) && thOwner.get(c.th) !== c.zh).map((c) => `${c.zh}=${c.th} (ชนกับ ${thOwner.get(c.th)} ในคลังเดิม)`);
+  // คลังเดิมเฉพาะที่มีส่วนจีนร่วมกับคำใหม่ (≥2 ตัว) เป็นแบบอย่างที่ต้องตาม
+  const bigrams = new Set(cands.flatMap((c) => [...c.zh].slice(0, -1).map((_, i) => c.zh.slice(i, i + 2))));
+  const ref = Object.entries({ ...Object.fromEntries(Object.entries(g.characters).map(([z, c]) => [z, c.th])), ...g.terms })
+    .filter(([z]) => [...z].slice(0, -1).some((_, i) => bigrams.has(z.slice(i, i + 2)))).slice(0, 600);
+  const user = `คลังเดิม (ห้ามแก้ ใช้เป็นแบบ):\n${ref.map(([z, t]) => `${z}=${t}`).join('\n')}\n\nคำใหม่:\n${cands.map((c) => `${c.zh}=${c.th}${c.alt ? ` (เคยได้: ${c.alt.join(' / ')})` : ''}`).join('\n')}\n\nชื่อไทยที่ชนกัน:\n${clash.join('\n') || '-'}`;
+  const sys = `คุณตรวจความสม่ำเสมอของคลังคำแปลนิยายจีน→ไทย ก่อนเริ่มแปล
+ตรวจ "คำใหม่" ทุกคำ:
+1) คำที่มีส่วนจีนเดียวกัน (เช่น 夜罗刹 ใน 夜罗刹剑神, 夜罗刹真身) ต้องแปลส่วนนั้นเป็นคำไทยเดียวกัน — ถ้าคลังเดิมมีส่วนนั้นอยู่แล้วให้ตามคลังเดิม
+2) ชื่อไทยห้ามซ้ำกับชื่อของคำจีนอื่น (ถ้าชน ให้ถอดเสียงให้ต่างแต่ยังถูกหลักจีนกลาง เช่น 无心 = อู๋ซิน → อู๋ซินไร้ใจ ไม่ได้ ให้ใช้ถอดเสียงที่ต่าง เช่น อู๋ซิ่น)
+3) ถอดเสียงชื่อคนให้ถูกหลัก ; แปลศัพท์ให้เป็นภาษาไทยที่เป็นธรรมชาติ ไม่มีอักษรจีน/อังกฤษ
+ตอบ JSON อย่างเดียว เฉพาะคำใหม่ที่ต้องแก้: {"fix":{"<คำจีน>":"<คำแปลใหม่>"}}`;
+  const out = await (async () => {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+      body: JSON.stringify({ model: opt('--model') ?? 'gpt-5.6-luna', messages: [{ role: 'system', content: sys }, { role: 'user', content: user }], temperature: 0.1, reasoning_effort: 'none', max_completion_tokens: 16000, response_format: { type: 'json_object' } }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+    const j = await res.json();
+    console.log(`token เข้า ${j.usage?.prompt_tokens} ออก ${j.usage?.completion_tokens}`);
+    return j.choices[0].message.content as string;
+  })();
+  const fix: Record<string, string> = JSON.parse(out).fix ?? {};
+  let n = 0;
+  for (const c of cands) {
+    const t = fix[c.zh]?.trim();
+    if (t && t !== c.th && !/[一-鿿A-Za-z]/.test(t)) { console.log(`  ${c.zh}: ${c.th} → ${t}`); c.alt = [...new Set([...(c.alt ?? []), c.th])]; c.th = t; n++; }
+  }
+  writeFileSync(OUT, JSON.stringify({ ...data, harmonized: Date.now(), items: cands }, null, 1));
+  console.log(`ปรับ ${n} คำ · ชนกับคลังเดิม ${clash.length}`);
+  process.exit(0);
+}
+
 if (argv.includes('--apply')) {
   const cands: Cand[] = JSON.parse(readFileSync(OUT, 'utf8')).items;
   const before = { c: Object.keys(g.characters).length, t: Object.keys(g.terms).length };
@@ -33,10 +75,11 @@ if (argv.includes('--apply')) {
   process.exit(0);
 }
 
-const idx = JSON.parse(readFileSync(join(DIR, 'raw', 'index.json'), 'utf8'));
 const prog = JSON.parse(readFileSync(join(DIR, 'progress.json'), 'utf8'));
-const base = prog.order.length; // บทใน raw เริ่มต่อจากนี้
-const chapters = (idx.chapters as { cid: string }[]).map((c, i) => ({ n: base + i + 1, ...c })).filter((c) => existsSync(join(DIR, 'raw', `${c.cid}.json`)));
+// เลขบทตาม progress.order (แปลแบบ --raw ใส่รหัสบททั้งเรื่องไว้แล้ว)
+const chapters = (prog.order as string[]).map((cid, i) => ({ n: i + 1, cid })).filter((c) => existsSync(join(DIR, 'raw', `${c.cid}.json`)))
+  // --range a-b: เฉพาะช่วงที่จะแปลรอบนี้ (ไม่ต้องจ่ายค่าเก็บคำของบทที่ยังไม่แปล)
+  .filter((c) => { const [lo, hi] = (opt('--range') ?? '1-999999').split('-').map(Number); return c.n >= lo && c.n <= hi; });
 const batches: (typeof chapters)[] = [];
 for (let i = 0; i < chapters.length; i += BATCH) batches.push(chapters.slice(i, i + BATCH));
 
