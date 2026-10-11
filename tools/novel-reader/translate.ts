@@ -263,7 +263,7 @@ async function chat(system: string, user: string, temperature = 0.7, stage = 'ot
     } catch (e) {
       logUsage(stage, Date.now() - t0, undefined, String((e as Error).message ?? e).slice(0, 200));
       // เครดิตหมด → หยุดทั้งงาน (ลองซ้ำไม่มีประโยชน์) ; บทที่ค้างยังไม่ได้เขียนไฟล์ รันใหม่จะแปลต่อเอง
-      if (/insufficient_quota|billing_hard_limit|exceeded your current quota/.test(String((e as Error).message))) {
+      if (/insufficient_quota|no credits remaining|billing_hard_limit|exceeded your current quota|Insufficient Balance/.test(String((e as Error).message))) {
         console.error(`เครดิต ${PROVIDER} หมด — หยุดงาน (บทที่ยังไม่เสร็จจะแปลต่อเมื่อรันใหม่)`);
         process.exit(3);
       }
