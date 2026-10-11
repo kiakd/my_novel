@@ -34,7 +34,8 @@ for (let o = Object.getPrototypeOf(parseHTML('<div></div>').document.createEleme
   }
 }
 
-const GAP_MS = 3000;
+// เว้นจังหวะระหว่างคำขอ (ทั้งโปรเซส) — ดึงต้นฉบับทั้งเรื่องล่วงหน้า (prefetch.ts) ลดได้ด้วย NR_GAP_MS
+const GAP_MS = Number(process.env.NR_GAP_MS ?? 3000);
 const imp = new Impit({ browser: 'chrome', timeout: 30_000 });
 let last = 0;
 
