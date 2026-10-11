@@ -783,7 +783,8 @@ const modelName = (id: string) => MODELS.find((m) => m.ids.includes(id))?.name ?
 const PRICES = {
   deepseek: { hit: 0.006, miss: 0.30, out: 1.20 },
   deepseekPro: { hit: 0.044, miss: 1.32, out: 3.96 },
-  luna: { hit: 0.01, miss: 0.10, out: 0.50 }, // GPT-6 Luna (ไว้เทียบ "ถ้าใช้ Luna")
+  // คิดย้อนจากบิลจริง 2026-10-11 ($17.10 ↔ cache 16.3M · เข้า 23.8M · ออก 8.3M) — ราคาเดิม 0.01/0.10/0.50 ต่ำไป ~2.5 เท่า
+  luna: { hit: 0.025, miss: 0.25, out: 1.0 }, // GPT-6 Luna (ไว้เทียบ "ถ้าใช้ Luna")
   // GPT-5.6 Luna ณ 2026-10-11 (developers.openai.com/api/docs/models/gpt-5.6-luna) — ไม่มีช่วง peak ; ค่าเขียน cache 1.25× ไม่ได้นับ
   luna56: { hit: 0.02, miss: 0.20, out: 1.20 },
 };

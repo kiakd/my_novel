@@ -149,6 +149,6 @@ async function worker() {
 await Promise.all(Array.from({ length: WORKERS }, worker));
 const items = [...found.values()].sort((a, b) => a.first - b.first);
 writeFileSync(OUT, JSON.stringify({ at: Date.now(), model: MODEL, items }, null, 1));
-const cost = (USAGE.hit * 0.01 + USAGE.miss * 0.1 + USAGE.out * 0.5) / 1e6;
+const cost = (USAGE.hit * 0.025 + USAGE.miss * 0.25 + USAGE.out * 1.0) / 1e6; // ราคา Luna ประมาณจากบิลจริง (ดู server.ts PRICES)
 console.log(`เสร็จ: ${items.length} คำ (ตัวละคร ${items.filter((i) => i.kind === 'person').length}) · มีคำแปลหลายแบบ ${items.filter((i) => i.alt).length} · token เข้า ${USAGE.hit + USAGE.miss} (cache ${USAGE.hit}) ออก ${USAGE.out} ≈ $${cost.toFixed(3)}`);
 console.log(OUT);
