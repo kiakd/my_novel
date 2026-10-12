@@ -1282,7 +1282,8 @@ if (flag('--raw')) {
   if (lastRaw) {
     p2.lastUrl = lastRaw;
     const nextCid = p2.order[last];
-    p2.nextUrl = nextCid ? lastRaw.replace(/\/\d+(\/?)$/, `/${nextCid}$1`) : p2.nextUrl;
+    // แปลครบทุกบทในสารบัญแล้ว → ไม่มีจุดต่อ (เดิมค้างค่าเก่าไว้ เคยชี้กลับไปบท 1751 ทั้งที่แปลถึง 1779) ; --continue จะตามลิงก์ "บทถัดไป" จากบทล่าสุดเอง
+    p2.nextUrl = nextCid ? lastRaw.replace(/\/\d+(\/?)$/, `/${nextCid}$1`) : undefined;
   }
   writeJson(pPath, p2);
   buildReader(id, p2);
@@ -1311,6 +1312,14 @@ if (flag('--continue') && !target) {
   if (!next && book && !existsSync(join(bookDir(book), 'progress.json'))) {
     const site = SITES.find((s) => s.firstChapter && s.match(page.url())) ?? SITES.find((s) => s.firstChapter);
     next = (await site?.firstChapter?.(page, book)) ?? undefined;
+  }
+  // ไม่มีจุดต่อแต่มีบทล่าสุด (แปลครบสารบัญแล้ว) → เปิดบทล่าสุดแล้วตามลิงก์ "บทถัดไป" (ผู้แต่งลงบทใหม่แล้วหรือยัง)
+  const lastUrl = id && readJson<Progress>(join(bookDir(id), 'progress.json'), { bookTitle: '', order: [] }).lastUrl;
+  if (!next && lastUrl) {
+    await page.goto(lastUrl, { waitUntil: 'domcontentloaded' });
+    await waitContent(page);
+    next = (await extractChapter(page)).nextUrl ?? undefined;
+    if (!next) { console.log('ยังไม่มีบทใหม่ — แปลครบถึงบทล่าสุดแล้ว'); process.exit(0); }
   }
   if (!next) fail('ไม่มีบทถัดไปที่บันทึกไว้ — ใช้ --url <ลิงก์บทแรก> แทน');
   target = next;
